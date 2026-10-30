@@ -1,0 +1,608 @@
+{
+ "created": "2026-10-30T22:42:30.241Z",
+ "seeds": [
+  101,
+  102
+ ],
+ "jobs": 3,
+ "configs": [
+  "mid",
+  "highest",
+  "mid+shift",
+  "highest+shift"
+ ],
+ "summary": {
+  "A|mid": {
+   "raw": 0,
+   "conf": 0,
+   "lat": null,
+   "missedTargets": 4,
+   "ftPerMin": 0,
+   "fpPerMin": 0,
+   "ms": 53.90000000002328,
+   "skip": 0,
+   "rawFp": 0
+  },
+  "A|highest": {
+   "raw": 0,
+   "conf": 0,
+   "lat": null,
+   "missedTargets": 4,
+   "ftPerMin": 0,
+   "fpPerMin": 0,
+   "ms": 73.40000000002328,
+   "skip": 0,
+   "rawFp": 0
+  },
+  "A|mid+shift": {
+   "raw": 0,
+   "conf": 0,
+   "lat": null,
+   "missedTargets": 4,
+   "ftPerMin": 0,
+   "fpPerMin": 0,
+   "ms": 51.59999999997672,
+   "skip": 0,
+   "rawFp": 0
+  },
+  "A|highest+shift": {
+   "raw": 0,
+   "conf": 0,
+   "lat": null,
+   "missedTargets": 4,
+   "ftPerMin": 0,
+   "fpPerMin": 0,
+   "ms": 73.5,
+   "skip": 0,
+   "rawFp": 0
+  },
+  "B|mid": {
+   "raw": 0,
+   "conf": 0,
+   "lat": null,
+   "missedTargets": 4,
+   "ftPerMin": 0,
+   "fpPerMin": 0,
+   "ms": 56.90000000002328,
+   "skip": 0,
+   "rawFp": 0
+  },
+  "B|highest": {
+   "raw": 0.14285714285714285,
+   "conf": 0.0024630541871921183,
+   "lat": 40,
+   "missedTargets": 3,
+   "ftPerMin": 0,
+   "fpPerMin": 0,
+   "ms": 79,
+   "skip": 0,
+   "rawFp": 0
+  },
+  "B|mid+shift": {
+   "raw": 0,
+   "conf": 0,
+   "lat": null,
+   "missedTargets": 4,
+   "ftPerMin": 0,
+   "fpPerMin": 0,
+   "ms": 56.800000000046566,
+   "skip": 0,
+   "rawFp": 0
+  },
+  "B|highest+shift": {
+   "raw": 0.14285714285714285,
+   "conf": 0.0024630541871921183,
+   "lat": 40,
+   "missedTargets": 3,
+   "ftPerMin": 0,
+   "fpPerMin": 0,
+   "ms": 80.09999999997672,
+   "skip": 0,
+   "rawFp": 0
+  },
+  "C|mid": {
+   "raw": 0.09688581314878893,
+   "conf": 0.02249134948096886,
+   "lat": 135,
+   "missedTargets": 1,
+   "ftPerMin": 0,
+   "fpPerMin": 0,
+   "ms": 56.09999999997672,
+   "skip": 0,
+   "rawFp": 0
+  },
+  "C|highest": {
+   "raw": 0.736013986013986,
+   "conf": 0.7027972027972028,
+   "lat": 10,
+   "missedTargets": 0,
+   "ftPerMin": 0,
+   "fpPerMin": 0,
+   "ms": 77.5,
+   "skip": 0,
+   "rawFp": 0
+  },
+  "C|mid+shift": {
+   "raw": 0.09688581314878893,
+   "conf": 0.02249134948096886,
+   "lat": 135,
+   "missedTargets": 1,
+   "ftPerMin": 0,
+   "fpPerMin": 0,
+   "ms": 56.09999999997672,
+   "skip": 0,
+   "rawFp": 0
+  },
+  "C|highest+shift": {
+   "raw": 0.736013986013986,
+   "conf": 0.7027972027972028,
+   "lat": 10,
+   "missedTargets": 0,
+   "ftPerMin": 0,
+   "fpPerMin": 0,
+   "ms": 77.89999999990687,
+   "skip": 0,
+   "rawFp": 0
+  },
+  "C-h264|mid": {
+   "raw": 0.0328719723183391,
+   "conf": 0,
+   "lat": null,
+   "missedTargets": 4,
+   "ftPerMin": 0,
+   "fpPerMin": 0,
+   "ms": 58.39999999990687,
+   "skip": 0,
+   "rawFp": 0.0033783783783783786
+  },
+  "C-h264|highest": {
+   "raw": 0.36013986013986016,
+   "conf": 0.12237762237762238,
+   "lat": 115,
+   "missedTargets": 1,
+   "ftPerMin": 0,
+   "fpPerMin": 0,
+   "ms": 78.59999999997672,
+   "skip": 0,
+   "rawFp": 0.15845070422535212
+  },
+  "C-h264|mid+shift": {
+   "raw": 0.0328719723183391,
+   "conf": 0,
+   "lat": null,
+   "missedTargets": 4,
+   "ftPerMin": 0,
+   "fpPerMin": 0,
+   "ms": 57.300000000046566,
+   "skip": 0,
+   "rawFp": 0.0033783783783783786
+  },
+  "C-h264|highest+shift": {
+   "raw": 0.36013986013986016,
+   "conf": 0.12237762237762238,
+   "lat": 115,
+   "missedTargets": 1,
+   "ftPerMin": 0,
+   "fpPerMin": 0,
+   "ms": 80.69999999995343,
+   "skip": 0,
+   "rawFp": 0.15845070422535212
+  },
+  "D|mid": {
+   "raw": 0.828125,
+   "conf": 0.8072916666666666,
+   "lat": 4,
+   "missedTargets": 0,
+   "ftPerMin": 0,
+   "fpPerMin": 0,
+   "ms": 57.300000000046566,
+   "skip": 0,
+   "rawFp": 0
+  },
+  "D|highest": {
+   "raw": 0.9088541666666666,
+   "conf": 0.8776041666666666,
+   "lat": 7,
+   "missedTargets": 0,
+   "ftPerMin": 0,
+   "fpPerMin": 0,
+   "ms": 78.19999999995343,
+   "skip": 0,
+   "rawFp": 0
+  },
+  "D|mid+shift": {
+   "raw": 0.828125,
+   "conf": 0.8072916666666666,
+   "lat": 4,
+   "missedTargets": 0,
+   "ftPerMin": 0,
+   "fpPerMin": 0,
+   "ms": 56.700000000186265,
+   "skip": 0,
+   "rawFp": 0
+  },
+  "D|highest+shift": {
+   "raw": 0.9088541666666666,
+   "conf": 0.8776041666666666,
+   "lat": 7,
+   "missedTargets": 0,
+   "ftPerMin": 0,
+   "fpPerMin": 0,
+   "ms": 79.19999999995343,
+   "skip": 0,
+   "rawFp": 0
+  },
+  "E|mid": {
+   "raw": 0,
+   "conf": 0,
+   "lat": null,
+   "missedTargets": 4,
+   "ftPerMin": 0,
+   "fpPerMin": 0,
+   "ms": 53.199999999953434,
+   "skip": 0,
+   "rawFp": 0
+  },
+  "E|highest": {
+   "raw": 0.6186440677966102,
+   "conf": 0.5819209039548022,
+   "lat": 9,
+   "missedTargets": 0,
+   "ftPerMin": 0,
+   "fpPerMin": 0,
+   "ms": 74.5,
+   "skip": 0,
+   "rawFp": 0.007042253521126761
+  },
+  "E|mid+shift": {
+   "raw": 0,
+   "conf": 0,
+   "lat": null,
+   "missedTargets": 4,
+   "ftPerMin": 0,
+   "fpPerMin": 0,
+   "ms": 53.39999999990687,
+   "skip": 0,
+   "rawFp": 0
+  },
+  "E|highest+shift": {
+   "raw": 0.615819209039548,
+   "conf": 0.5790960451977402,
+   "lat": 9,
+   "missedTargets": 0,
+   "ftPerMin": 0,
+   "fpPerMin": 0,
+   "ms": 74,
+   "skip": 0,
+   "rawFp": 0.007042253521126761
+  },
+  "F|mid": {
+   "raw": null,
+   "conf": null,
+   "missedTargets": 0,
+   "ftPerMin": 3,
+   "fpPerMin": 3,
+   "ms": 56.300000000046566,
+   "skip": 0,
+   "rawFp": 0.09475806451612903
+  },
+  "F|highest": {
+   "raw": null,
+   "conf": null,
+   "missedTargets": 0,
+   "ftPerMin": 0,
+   "fpPerMin": 0,
+   "ms": 78.19999999995343,
+   "skip": 0,
+   "rawFp": 1.0578512396694215
+  },
+  "F|mid+shift": {
+   "raw": null,
+   "conf": null,
+   "missedTargets": 0,
+   "ftPerMin": 3,
+   "fpPerMin": 3,
+   "ms": 55.799999999813735,
+   "skip": 0,
+   "rawFp": 0.09475806451612903
+  },
+  "F|highest+shift": {
+   "raw": null,
+   "conf": null,
+   "missedTargets": 0,
+   "ftPerMin": 0,
+   "fpPerMin": 0,
+   "ms": 79.5,
+   "skip": 0,
+   "rawFp": 1.0578512396694215
+  },
+  "G|mid": {
+   "raw": null,
+   "conf": null,
+   "missedTargets": 0,
+   "ftPerMin": 0,
+   "fpPerMin": 0,
+   "ms": 57.0999999998603,
+   "skip": 0,
+   "rawFp": 0.010080645161290322
+  },
+  "G|highest": {
+   "raw": null,
+   "conf": null,
+   "missedTargets": 0,
+   "ftPerMin": 0,
+   "fpPerMin": 0,
+   "ms": 78.80000000004657,
+   "skip": 0,
+   "rawFp": 0.14669421487603307
+  },
+  "G|mid+shift": {
+   "raw": null,
+   "conf": null,
+   "missedTargets": 0,
+   "ftPerMin": 0,
+   "fpPerMin": 0,
+   "ms": 55.800000000046566,
+   "skip": 0,
+   "rawFp": 0.010080645161290322
+  },
+  "G|highest+shift": {
+   "raw": null,
+   "conf": null,
+   "missedTargets": 0,
+   "ftPerMin": 0,
+   "fpPerMin": 0,
+   "ms": 78.10000000009313,
+   "skip": 0,
+   "rawFp": 0.14669421487603307
+  },
+  "H|mid": {
+   "raw": null,
+   "conf": null,
+   "missedTargets": 0,
+   "ftPerMin": 12,
+   "fpPerMin": 30,
+   "ms": 56.800000000046566,
+   "skip": 0,
+   "rawFp": 0.10282258064516128
+  },
+  "H|highest": {
+   "raw": null,
+   "conf": null,
+   "missedTargets": 0,
+   "ftPerMin": 1449,
+   "fpPerMin": 23301,
+   "ms": 79.30000000004657,
+   "skip": 0,
+   "rawFp": 23.138429752066116
+  },
+  "H|mid+shift": {
+   "raw": null,
+   "conf": null,
+   "missedTargets": 0,
+   "ftPerMin": 0,
+   "fpPerMin": 0,
+   "ms": 56.39999999990687,
+   "skip": 0,
+   "rawFp": 0.040322580645161296
+  },
+  "H|highest+shift": {
+   "raw": null,
+   "conf": null,
+   "missedTargets": 0,
+   "ftPerMin": 897,
+   "fpPerMin": 8697,
+   "ms": 81,
+   "skip": 0,
+   "rawFp": 11.105371900826448
+  },
+  "I|mid": {
+   "raw": 0,
+   "conf": 0,
+   "lat": null,
+   "missedTargets": 4,
+   "ftPerMin": 15,
+   "fpPerMin": 35,
+   "ms": 55.699999999953434,
+   "skip": 0,
+   "rawFp": 0.17905405405405406
+  },
+  "I|highest": {
+   "raw": 0.285140562248996,
+   "conf": 0.08433734939759036,
+   "lat": 21,
+   "missedTargets": 0,
+   "ftPerMin": 2460,
+   "fpPerMin": 40965,
+   "ms": 80.5,
+   "skip": 0,
+   "rawFp": 40.66197183098592
+  },
+  "I|mid+shift": {
+   "raw": 0,
+   "conf": 0,
+   "lat": null,
+   "missedTargets": 4,
+   "ftPerMin": 0,
+   "fpPerMin": 0,
+   "ms": 56.199999999953434,
+   "skip": 0,
+   "rawFp": 0.10810810810810811
+  },
+  "I|highest+shift": {
+   "raw": 0.28112449799196787,
+   "conf": 0.08032128514056225,
+   "lat": 13,
+   "missedTargets": 1,
+   "ftPerMin": 1480,
+   "fpPerMin": 14870,
+   "ms": 83,
+   "skip": 0,
+   "rawFp": 19.172535211267608
+  },
+  "J|mid": {
+   "raw": null,
+   "conf": null,
+   "missedTargets": 0,
+   "ftPerMin": 0,
+   "fpPerMin": 0,
+   "ms": 55.799999999813735,
+   "skip": 0,
+   "rawFp": 0
+  },
+  "J|highest": {
+   "raw": null,
+   "conf": null,
+   "missedTargets": 0,
+   "ftPerMin": 0,
+   "fpPerMin": 0,
+   "ms": 76.5,
+   "skip": 0,
+   "rawFp": 0.002066115702479339
+  },
+  "J|mid+shift": {
+   "raw": null,
+   "conf": null,
+   "missedTargets": 0,
+   "ftPerMin": 0,
+   "fpPerMin": 0,
+   "ms": 55,
+   "skip": 0,
+   "rawFp": 0
+  },
+  "J-h264|mid": {
+   "raw": null,
+   "conf": null,
+   "missedTargets": 0,
+   "ftPerMin": 0,
+   "fpPerMin": 0,
+   "ms": 57,
+   "skip": 0,
+   "rawFp": 0
+  },
+  "J|highest+shift": {
+   "raw": null,
+   "conf": null,
+   "missedTargets": 0,
+   "ftPerMin": 0,
+   "fpPerMin": 0,
+   "ms": 75.0999999998603,
+   "skip": 0,
+   "rawFp": 0
+  },
+  "J-h264|highest": {
+   "raw": null,
+   "conf": null,
+   "missedTargets": 0,
+   "ftPerMin": 0,
+   "fpPerMin": 0,
+   "ms": 76,
+   "skip": 0,
+   "rawFp": 0.2396694214876033
+  },
+  "J-h264|mid+shift": {
+   "raw": null,
+   "conf": null,
+   "missedTargets": 0,
+   "ftPerMin": 0,
+   "fpPerMin": 0,
+   "ms": 56.9000000001397,
+   "skip": 0,
+   "rawFp": 0
+  },
+  "J-h264|highest+shift": {
+   "raw": null,
+   "conf": null,
+   "missedTargets": 0,
+   "ftPerMin": 0,
+   "fpPerMin": 0,
+   "ms": 76.60000000009313,
+   "skip": 0,
+   "rawFp": 0.23553719008264462
+  },
+  "G-h264|mid": {
+   "raw": null,
+   "conf": null,
+   "missedTargets": 0,
+   "ftPerMin": 3,
+   "fpPerMin": 9,
+   "ms": 56,
+   "skip": 0,
+   "rawFp": 0.12298387096774194
+  },
+  "G-h264|highest": {
+   "raw": null,
+   "conf": null,
+   "missedTargets": 0,
+   "ftPerMin": 12,
+   "fpPerMin": 21,
+   "ms": 79.5,
+   "skip": 0,
+   "rawFp": 1.378099173553719
+  },
+  "G-h264|mid+shift": {
+   "raw": null,
+   "conf": null,
+   "missedTargets": 0,
+   "ftPerMin": 3,
+   "fpPerMin": 9,
+   "ms": 56.0999999998603,
+   "skip": 0,
+   "rawFp": 0.12298387096774194
+  },
+  "G-h264|highest+shift": {
+   "raw": null,
+   "conf": null,
+   "missedTargets": 0,
+   "ftPerMin": 12,
+   "fpPerMin": 21,
+   "ms": 80.60000000009313,
+   "skip": 0,
+   "rawFp": 1.378099173553719
+  },
+  "K|mid": {
+   "raw": 0.020134228187919462,
+   "conf": 0,
+   "lat": null,
+   "missedTargets": 4,
+   "ftPerMin": 0,
+   "fpPerMin": 0,
+   "ms": 56.4000000001397,
+   "skip": 0,
+   "rawFp": 0
+  },
+  "K|highest": {
+   "raw": 0.21404109589041095,
+   "conf": 0.018835616438356163,
+   "lat": 104,
+   "missedTargets": 3,
+   "ftPerMin": 0,
+   "fpPerMin": 0,
+   "ms": 77.5,
+   "skip": 0,
+   "rawFp": 0
+  },
+  "K|mid+shift": {
+   "raw": 0.020134228187919462,
+   "conf": 0,
+   "lat": null,
+   "missedTargets": 4,
+   "ftPerMin": 0,
+   "fpPerMin": 0,
+   "ms": 56,
+   "skip": 0,
+   "rawFp": 0
+  },
+  "K|highest+shift": {
+   "raw": 0.21404109589041095,
+   "conf": 0.018835616438356163,
+   "lat": 104,
+   "missedTargets": 3,
+   "ftPerMin": 0,
+   "fpPerMin": 0,
+   "ms": 76.89999999990687,
+   "skip": 0,
+   "rawFp": 0
+  }
+ }
+}
