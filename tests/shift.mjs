@@ -75,7 +75,9 @@ try {
         const inc = [{ x: 0, y: 0.4, w: 0.7, h: 0.6 }];
         const full = await run(trees, { stride: 2, shiftCheck: true }), crop = await run(trees, { stride: 2, shiftCheck: true, include: inc });
         const cropOff = await run(trees, { stride: 2, include: inc });
-        ok('inside an inclusion zone it works the same', crop.confFp10s * 20 <= cropOff.confFp10s && crop.hit >= 0.9, { cropOff: cropOff.confFp10s, crop: crop.confFp10s, hit: crop.hit, full: full.confFp10s });
+        // (targets outside the zone can't be found: hit rates compared with the same zone, check off)
+        ok('inside an inclusion zone it works the same', crop.confFp10s * 20 <= cropOff.confFp10s && crop.hit >= cropOff.hit - 0.01,
+            { fp: [cropOff.confFp10s, crop.confFp10s], hit: [cropOff.hit, crop.hit], full: full.confFp10s });
         const blurOff = await run(trees, { stride: 2, blur: true }), blurOn = await run(trees, { stride: 2, blur: true, shiftCheck: true });
         ok('with blur on it works too', blurOn.confFp10s * 10 <= blurOff.confFp10s, [blurOff.confFp10s, blurOn.confFp10s]);
     }
