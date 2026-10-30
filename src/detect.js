@@ -39,6 +39,11 @@
 //     ordinary texture (edgeNoise × (3×3 spread − edgeKnee)): what is left of misalignment and
 //     resampling there grows with the edge, so a hard edge needs a larger difference to count,
 //     while textured ground keeps its sensitivity;
+//   - slivers along edges are dropped: when a straight edge turns a little, the stair-steps of
+//     its pixels slide along it fast, which looks like a thin object moving steadily. A
+//     candidate at least SLIVER_ELONGATION times longer than wide, lying along a strong, clean
+//     edge of the background (structure tensor of the warped neighbour: coherence ≥
+//     SLIVER_COHERENCE, edge within SLIVER_ANGLE of the candidate's long axis), is not an object;
 //   - candidates come in two strengths: strong (peak above `sigmas`) and weak (above sigmas −
 //     weakMargin). Only strong ones can start a track; weak ones can only continue a track that
 //     already exists (tracker.js), so a faint object, once found, is followed through frames
@@ -77,6 +82,10 @@ const NOISE_TILE = 32;         // px: tiles in which the adaptive mode measures 
 const SUM_NOISE = 0.61;        // σ of a k×k sum of R, per k, in units of σ of the plain difference
 const TOL_PER_ERR = 2;         // … plus this × the fit's 90th-percentile point error (px)
 const SHIFT_EXPLAINS = 0.35;   // adaptive shift check: explained if the shift leaves < this share
+const SLIVER_ELONGATION = 3;   // long axis / short axis of a candidate's pixels
+const SLIVER_COHERENCE = 0.6;  // (λ1 − λ2) / (λ1 + λ2) of the background's gradients: a clean edge
+const SLIVER_ANGLE = 25 * Math.PI / 180;
+const SLIVER_GRADIENT = 8;     // grey levels per px: weaker than this isn't an edge
 
 export const DETECT_DEFAULTS = {
     detectMode: 'robust',  // 'robust' (three frames, M3), 'adaptive' (three frames) or 'basic' (two)
@@ -330,6 +339,42 @@ export function createDetector(cv, options = {}) {
         return true;
     }
 
+    // Is candidate c (region px) a sliver along an edge of the background `w` (region-sized)?
+    function isSliver(c, r, w, mask) {
+        const x0 = c.x - r.x, y0 = c.y - r.y, x1 = x0 + c.w, y1 = y0 + c.h;
+        if (Math.max(c.w, c.h) < 4) return false;                       // too small to tell
+        const M = mask.data, W = r.w;
+        // the candidate's own shape: second moments of its pixels
+        let n = 0, sx = 0, sy = 0, sxx = 0, syy = 0, sxy = 0;
+        for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) {
+            if (!M[y * W + x]) continue;
+            n++; sx += x; sy += y; sxx += x * x; syy += y * y; sxy += x * y;
+        }
+        if (n < 3) return false;
+        const mx = sx / n, my = sy / n;
+        const a = sxx / n - mx * mx + 1 / 12, b = sxy / n - mx * my, d = syy / n - my * my + 1 / 12;
+        const tr = a + d, det = a * d - b * b, disc = Math.sqrt(Math.max(0, tr * tr / 4 - det));
+        const l1 = tr / 2 + disc, l2 = Math.max(1e-6, tr / 2 - disc);
+        if (Math.sqrt(l1 / l2) < SLIVER_ELONGATION) return false;
+        const axis = 0.5 * Math.atan2(2 * b, a - d);                    // long axis
+        // the background's gradients around it (structure tensor, box grown by 1)
+        const wd = w.data;
+        let gxx = 0, gyy = 0, gxy = 0, m = 0;
+        for (let y = Math.max(1, y0 - 1); y < Math.min(r.h - 1, y1 + 1); y++) {
+            for (let x = Math.max(1, x0 - 1); x < Math.min(r.w - 1, x1 + 1); x++) {
+                const gx = (wd[y * W + x + 1] - wd[y * W + x - 1]) / 2, gy = (wd[(y + 1) * W + x] - wd[(y - 1) * W + x]) / 2;
+                gxx += gx * gx; gyy += gy * gy; gxy += gx * gy; m++;
+            }
+        }
+        if (!m || Math.sqrt((gxx + gyy) / m) < SLIVER_GRADIENT) return false;
+        const coh = Math.sqrt((gxx - gyy) ** 2 + 4 * gxy * gxy) / (gxx + gyy);
+        if (coh < SLIVER_COHERENCE) return false;
+        const edge = 0.5 * Math.atan2(2 * gxy, gxx - gyy) + Math.PI / 2;  // along the edge
+        let diff = Math.abs(axis - edge) % Math.PI;
+        if (diff > Math.PI / 2) diff = Math.PI - diff;
+        return diff <= SLIVER_ANGLE;
+    }
+
     // Splits a region's candidates into kept and explained by a background shift.
     function shiftFilter(b, r, src, view, full, ns, thrAt) {
         if (!p.shiftCheck || !b.candidates.length) return { ...b, rejected: [] };
@@ -550,7 +595,12 @@ export function createDetector(cv, options = {}) {
                 for (let y = c.y - r.y; y < c.y - r.y + c.h; y++) for (let x = c.x - r.x; x < c.x - r.x + c.w; x++) peak = Math.max(peak, z[y * r.w + x]);
                 c.score = peak;
             }
+            // slivers along edges: dropped, shown with the shift-check rejects
+            const slivers = b.candidates.filter(c => isSliver(c, r, m.wPrev, m.mask));
+            if (slivers.length) b.candidates = b.candidates.filter(c => !slivers.includes(c));
             const f = shiftFilter(b, r, src, view, full, [m.wPrev, m.wNext], null);
+            f.rejected = [...(f.rejected || []), ...slivers];
+            f.slivers = slivers.length;
             return { ...f, candidates: f.candidates.filter(c => c.score >= p.sigmas),
                 weak: f.candidates.filter(c => c.score < p.sigmas).map(c => ({ ...c, weak: true })) };
         } finally {
@@ -591,6 +641,7 @@ export function createDetector(cv, options = {}) {
             out.candidates.push(...b.candidates);
             out.rejected.push(...b.rejected);
             if (b.weak) out.weak.push(...b.weak);
+            out.slivers = (out.slivers || 0) + (b.slivers || 0);
             out.components += b.components;
             out.noisy ||= b.noisy;
         }
