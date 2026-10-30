@@ -93,6 +93,8 @@ export const DETECT_DEFAULTS = {
     sigmas: 5,             // adaptive: threshold in units of the local noise
     minContrast: 4,        // adaptive: lowest threshold, grey levels
     weakMargin: 1.5,       // adaptive: weak candidates down to sigmas − this (0: none)
+    noiseFrom: 'sums',     // adaptive: noise of each k×k sum measured itself ('sums'), or scaled
+                           // from the plain difference ('plain')
     tolBase: 0.05,         // adaptive: px of misalignment always allowed
     edgeNoise: 0.06,       // adaptive: σ added per grey level of 3×3 spread beyond edgeKnee
     edgeKnee: 0,           // adaptive: grey levels of 3×3 spread that are just texture
@@ -509,6 +511,28 @@ export function createDetector(cv, options = {}) {
         cv.max(m.sig, m.sigFloor, m.sig);
     }
 
+    // Per NOISE_TILE tile, the RMS of S (CV_32F, region-sized) with values above 3.5× a first RMS
+    // left out (targets, edges), as a region-sized map in `out`, at least `floor`.
+    function tileRms(S, r, out, floor) {
+        const tx = Math.max(1, Math.round(r.w / NOISE_TILE)), ty = Math.max(1, Math.round(r.h / NOISE_TILE));
+        const d = S.data32F, sig = new Array(tx * ty);
+        for (let j = 0; j < ty; j++) {
+            const y0 = Math.floor(j * r.h / ty), y1 = Math.floor((j + 1) * r.h / ty);
+            for (let i = 0; i < tx; i++) {
+                const x0 = Math.floor(i * r.w / tx), x1 = Math.floor((i + 1) * r.w / tx);
+                let s2 = 0, n = 0;
+                for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) { const v = d[y * r.w + x]; s2 += v * v; n++; }
+                const cap = 3.5 * Math.sqrt(s2 / n), cap2 = cap * cap;
+                let t2 = 0, m = 0;
+                for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) { const v = d[y * r.w + x]; if (v * v <= cap2) { t2 += v * v; m++; } }
+                sig[j * tx + i] = Math.max(floor, m ? Math.sqrt(t2 / m) : floor);
+            }
+        }
+        const t = cv.matFromArray(ty, tx, cv.CV_32F, sig);
+        cv.resize(t, out, new cv.Size(r.w, r.h), 0, 0, cv.INTER_LINEAR);
+        t.delete();
+    }
+
     // The adaptive detector on region r (see the top of the file).
     function detectAdaptive(prev, cur, next, Hprev, Hnext, off, r, fitErr) {
         const { view, full, T } = regionOf(cur, r);
@@ -549,15 +573,18 @@ export function createDetector(cv, options = {}) {
             } finally {
                 none.delete();
             }
-            // edges: σ² += (edgeNoise × (spread − edgeKnee)⁺)²
+            // edges: σ² += (edgeNoise × (spread − edgeKnee)⁺)², kept squared in m.spread2
             const { edgeNoise, edgeKnee } = p;
+            const sums = p.noiseFrom === 'sums';
             if (edgeNoise > 0) {
                 m.spread.convertTo(m.spread2, cv.CV_32F, edgeNoise, -edgeNoise * edgeKnee);
                 cv.threshold(m.spread2, m.spread2, 0, 0, cv.THRESH_TOZERO);
                 cv.multiply(m.spread2, m.spread2, m.spread2);
-                cv.multiply(m.sig, m.sig, m.sig);
-                cv.add(m.sig, m.spread2, m.sig);
-                cv.sqrt(m.sig, m.sig);
+                if (!sums) {
+                    cv.multiply(m.sig, m.sig, m.sig);
+                    cv.add(m.sig, m.spread2, m.sig);
+                    cv.sqrt(m.sig, m.sig);
+                }
             }
             // R: brighter (or darker) than both neighbours, by the smaller amount
             cv.threshold(m.dP, m.pos, 0, 0, cv.THRESH_TOZERO);
@@ -570,11 +597,26 @@ export function createDetector(cv, options = {}) {
             // Z: the strongest of the 1×1, 2×2 and 3×3 sums, in units of their own noise
             m.zero.create(r.h, r.w, cv.CV_32F);
             m.zero.setTo(new cv.Scalar(0));
+            m.sigK ??= new cv.Mat();
+            m.edgeK ??= new cv.Mat();
             for (const k of [1, 2, 3]) {
                 if (k === 1) m.R.copyTo(m.S);
                 else cv.boxFilter(m.R, m.S, cv.CV_32F, new cv.Size(k, k), new cv.Point(-1, -1), false);
-                cv.absdiff(m.S, m.zero, m.S);
-                cv.divide(m.S, m.sig, m.Zk, 1 / (SUM_NOISE * k));
+                if (sums) {
+                    // this sum's own noise, per tile, plus the edge term at its scale
+                    tileRms(m.S, r, m.sigK, k * p.minContrast / p.sigmas);
+                    if (edgeNoise > 0) {
+                        m.spread2.convertTo(m.edgeK, cv.CV_32F, (SUM_NOISE * k) ** 2);
+                        cv.multiply(m.sigK, m.sigK, m.sigK);
+                        cv.add(m.sigK, m.edgeK, m.sigK);
+                        cv.sqrt(m.sigK, m.sigK);
+                    }
+                    cv.absdiff(m.S, m.zero, m.S);
+                    cv.divide(m.S, m.sigK, m.Zk, 1);
+                } else {
+                    cv.absdiff(m.S, m.zero, m.S);
+                    cv.divide(m.S, m.sig, m.Zk, 1 / (SUM_NOISE * k));
+                }
                 if (k === 1) m.Zk.copyTo(m.Z); else cv.max(m.Z, m.Zk, m.Z);
             }
             const weakAt = Math.max(1, p.sigmas - Math.max(0, p.weakMargin || 0));
