@@ -93,8 +93,9 @@ export const DETECT_DEFAULTS = {
     sigmas: 5,             // adaptive: threshold in units of the local noise
     minContrast: 4,        // adaptive: lowest threshold, grey levels
     weakMargin: 1.5,       // adaptive: weak candidates down to sigmas − this (0: none)
-    noiseFrom: 'sums',     // adaptive: noise of each k×k sum measured itself ('sums'), or scaled
-                           // from the plain difference ('plain')
+    noiseFrom: 'plain',    // adaptive: noise scaled from the plain difference ('plain', calibrated),
+                           // or each k×k sum's own RMS ('sums': underestimates the tails of these
+                           // non-Gaussian sums; on the benchmark false tracks went into the thousands)
     tolBase: 0.05,         // adaptive: px of misalignment always allowed
     edgeNoise: 0.06,       // adaptive: σ added per grey level of 3×3 spread beyond edgeKnee
     edgeKnee: 0,           // adaptive: grey levels of 3×3 spread that are just texture
