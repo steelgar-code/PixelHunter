@@ -88,6 +88,9 @@ export const CONFIGS = {
     'adaptive+shift': { detectMode: 'adaptive', shiftCheck: true },
     'adaptive6': { detectMode: 'adaptive', sigmas: 6 },
     'adaptive6+shift': { detectMode: 'adaptive', sigmas: 6, shiftCheck: true },
+    'adaptive7': { detectMode: 'adaptive', sigmas: 7, weakMargin: 2.5 },
+    // slow faint targets: the Highest preset's stride and confirmation with the adaptive detector
+    'adaptive-slow': { ...PRESETS.highest.values, detectMode: 'adaptive', sigmas: 6 },
 };
 
 const configs = arg('configs', 'mid,highest,mid+shift').split(',');
@@ -95,6 +98,8 @@ const scenes = arg('scenes', Object.keys(SCENARIOS).join(',')).split(',');
 const seeds = Array.from({ length: Number(arg('seeds', 2)) }, (_, i) => 101 + i);
 const jobs = Math.max(1, Number(arg('jobs', 3)));
 const save = arg('save', null);
+// --extra='{"key":value}': added to every config (for trying a setting across the board)
+const extra = JSON.parse(arg('extra', '{}'));
 for (const c of configs) if (!CONFIGS[c]) throw new Error(`unknown config ${c} (${Object.keys(CONFIGS).join(', ')})`);
 for (const s of scenes) if (!SCENARIOS[s]) throw new Error(`unknown scenario ${s}`);
 
@@ -185,7 +190,8 @@ await Promise.all(pages.map(async ({ page }) => {
         const w = work[next++];
         const sc = SCENARIOS[w.s];
         const scene = sc.scene(w.seed);
-        const spec = sc.h264 ? { raw: await rawClip(scene, sc.h264), params: CONFIGS[w.c] } : { scene, params: CONFIGS[w.c] };
+        const params = { ...CONFIGS[w.c], ...extra };
+        const spec = sc.h264 ? { raw: await rawClip(scene, sc.h264), params } : { scene, params };
         if (spec.raw) spec.raw.url = new URL(spec.raw.url, page.url()).href;
         const r = await page.evaluate(runInPage, spec);
         (results[`${w.s}|${w.c}`] ??= []).push(r);
@@ -223,7 +229,7 @@ const delta = (v, b, scale = 100, unit = '') => {
     const d = (v - b) * scale;
     return Math.abs(d) < 0.5 ? '' : ` (${d > 0 ? '+' : ''}${d.toFixed(0)}${unit})`;
 };
-console.log(`\nBenchmark: ${seeds.length} seed(s), ${jobs} job(s), ${((Date.now() - t0) / 1000).toFixed(0)} s${baseline ? `; changes against the baseline of ${baseline.created}` : ''}`);
+console.log(`\nBenchmark${Object.keys(extra).length ? ` with ${JSON.stringify(extra)}` : ''}: ${seeds.length} seed(s), ${jobs} job(s), ${((Date.now() - t0) / 1000).toFixed(0)} s${baseline ? `; changes against the baseline of ${baseline.created}` : ''}`);
 for (const s of scenes) {
     const sc = SCENARIOS[s];
     console.log(`\n${s}  ${sc.what}${sc.goal === 'recall' ? '   [goal: confirmed ≥ 80 %]' : sc.goal === 'quiet' ? '   [goal: < 1 false track / min]' : ''}`);

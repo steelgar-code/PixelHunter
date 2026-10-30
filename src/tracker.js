@@ -12,6 +12,11 @@
 // it waits at its last seen position, with no velocity, for up to holdFrames frames. A blob near
 // that position picks it up again with the same id, but it must confirm afresh (N of M and min
 // travel) before it is shown, so noise can't revive it.
+//
+// Blobs marked weak (faint, from the adaptive detector) only continue tracks whose velocity is
+// already known (two sightings), within a tight gate around the prediction; they never start a
+// track or pick up a held one. They count as sightings for confirmation, so a faint object that
+// stood out once or twice keeps being followed while it barely shows.
 
 import { project } from './homography.js';
 
@@ -74,8 +79,12 @@ export function createTracker(options = {}) {
             // radius stops growing, so a long wait doesn't make it catch every blob around
             const grow = held || t.reacquired ? Math.min(p.gateGrow * t.misses, p.maxSpeed) : p.gateGrow * t.misses;
             const gate = p.gateBase + motion + grow + (H ? 0 : p.gateBase);
+            // weak blobs: tracks with a known velocity only, gate without the growth for misses
+            const weakGate = p.gateBase + motion + Math.min(grow, p.gateBase);
+            const weakOk = t.hits >= 2 && !held && H;
             blobs.forEach((b, j) => {
                 const d = Math.hypot(b.cx - t.px, b.cy - t.py);
+                if (b.weak) { if (weakOk && d <= weakGate) pairs.push([d + 0.5, t, j, false]); return; }
                 if (d <= gate) { pairs.push([d, t, j, held]); return; }
                 // a confirmed track missed a couple of frames may have stopped where it was last
                 // seen; a match there restarts its confirmation (see below)
@@ -135,7 +144,7 @@ export function createTracker(options = {}) {
             if (t.trail.length > p.trail) t.trail.shift();
         }
         blobs.forEach((b, j) => {
-            if (usedB.has(j)) return;
+            if (usedB.has(j) || b.weak) return;
             tracks.push({ id: nextId++, x: b.cx, y: b.cy, vx: 0, vy: 0, sx: b.cx, sy: b.cy, lx: b.cx, ly: b.cy, hist: 1, hits: 1, misses: 0, age: 1,
                 matched: true, confirmed: p.confirmN <= 1 && p.minTravel <= 0, box: { x: b.x, y: b.y, w: b.w, h: b.h, area: b.area, cx: b.cx, cy: b.cy },
                 trail: [[b.cx, b.cy]] });

@@ -14,7 +14,7 @@ export const REQUIRED_FUNCTIONS = [
     'cvtColor', 'resize', 'goodFeaturesToTrack', 'calcOpticalFlowPyrLK', 'findHomography',
     'warpPerspective', 'absdiff', 'subtract', 'add', 'erode', 'dilate', 'threshold',
     'bitwise_and', 'connectedComponentsWithStats', 'fillConvexPoly', 'mean', 'GaussianBlur',
-    'morphologyEx', 'min', 'max', 'boxFilter', 'divide', 'compare',
+    'morphologyEx', 'min', 'max', 'boxFilter', 'divide', 'compare', 'multiply', 'sqrt', 'addWeighted',
 ];
 
 export const REQUIRED_CONSTANTS = [

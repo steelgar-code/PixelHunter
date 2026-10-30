@@ -22,8 +22,8 @@
 //     loses peak contrast but not its sum, which is what is thresholded (below);
 //   - a tolerance for misalignment that follows how good the camera-motion fit is: each pixel
 //     is compared with the warped neighbour's value moved a fraction e of the way towards its
-//     3×3 max (or min), e = TOL_BASE + TOL_PER_ERR × the fit's 90th-percentile error, clamped to
-//     [TOL_BASE, 1]. e = 1 is the robust mode's full 3×3 min / max (1 px of misalignment); a
+//     3×3 max (or min), e = tolBase + TOL_PER_ERR × the fit's 90th-percentile error, clamped to
+//     [tolBase, 1]. e = 1 is the robust mode's full 3×3 min / max (1 px of misalignment); a
 //     good fit gives a much smaller allowance, which in textured areas is the difference between
 //     a faint object being cancelled and being seen;
 //   - the object must be brighter (or darker) than both neighbours: R = the smaller of the two
@@ -34,7 +34,15 @@
 //   - the threshold follows the local noise: σ of the plain difference is measured in tiles of
 //     NOISE_TILE px (median absolute value), and a pixel is a candidate where any of the sums
 //     exceeds `sigmas` times its own noise there. Quiet sky gets a low threshold, textured or
-//     compressed areas a higher one; `minContrast` is the floor (grey levels, 1×1).
+//     compressed areas a higher one; `minContrast` is the floor (grey levels, 1×1);
+//   - at hard edges the noise is raised in proportion to how steep the neighbourhood is beyond
+//     ordinary texture (edgeNoise × (3×3 spread − edgeKnee)): what is left of misalignment and
+//     resampling there grows with the edge, so a hard edge needs a larger difference to count,
+//     while textured ground keeps its sensitivity;
+//   - candidates come in two strengths: strong (peak above `sigmas`) and weak (above sigmas −
+//     weakMargin). Only strong ones can start a track; weak ones can only continue a track that
+//     already exists (tracker.js), so a faint object, once found, is followed through frames
+//     where it barely shows, while marginal noise can't start anything.
 //
 // Exclusion zones (zones.js) are cleared from the valid region in frame t and also where each
 // compared frame's zones land once warped onto t: an overlay fixed on screen sits somewhere
@@ -67,14 +75,18 @@ const SHIFT_KEEP = 0.25;       // a candidate stays if more than this share of i
 const SHIFT_TOL = 1;           // px: min / max reach when testing the shifted pixels (2 loses real targets)
 const NOISE_TILE = 32;         // px: tiles in which the adaptive mode measures noise
 const SUM_NOISE = 0.61;        // σ of a k×k sum of R, per k, in units of σ of the plain difference
-const TOL_BASE = 0.05;         // px of misalignment always allowed
 const TOL_PER_ERR = 2;         // … plus this × the fit's 90th-percentile point error (px)
+const SHIFT_EXPLAINS = 0.35;   // adaptive shift check: explained if the shift leaves < this share
 
 export const DETECT_DEFAULTS = {
     detectMode: 'robust',  // 'robust' (three frames, M3), 'adaptive' (three frames) or 'basic' (two)
     threshold: 20,         // grey levels (robust, basic)
     sigmas: 5,             // adaptive: threshold in units of the local noise
     minContrast: 4,        // adaptive: lowest threshold, grey levels
+    weakMargin: 1.5,       // adaptive: weak candidates down to sigmas − this (0: none)
+    tolBase: 0.05,         // adaptive: px of misalignment always allowed
+    edgeNoise: 0.06,       // adaptive: σ added per grey level of 3×3 spread beyond edgeKnee
+    edgeKnee: 0,           // adaptive: grey levels of 3×3 spread that are just texture
     minArea: 1,            // px (processing resolution)
     maxArea: 400,
     borderMargin: 3,       // px kept clear inside the warped frame's outline
@@ -238,6 +250,9 @@ export function createDetector(cv, options = {}) {
     // Is candidate c (full-frame px) explained by a local shift of the background? cur: frame t
     // as { data, step, ox, oy } (region pixel (x, y) at data[(y + oy) * step + x + ox]); ns: the
     // warped neighbours (region-sized Mats); mask: the region's detection mask.
+    // thrAt: per-pixel threshold (robust / basic: a pixel still differs above it), or null for the
+    // adaptive mode's relative test: explained when the shift leaves less than SHIFT_EXPLAINS of
+    // the candidate's summed difference (faint objects never pass a per-pixel threshold).
     function shiftExplained(c, r, cur, ns, mask, thrAt = () => p.threshold) {
         const S = Math.max(1, Math.round(p.shiftMax));
         const bx0 = c.x - r.x, by0 = c.y - r.y, bx1 = bx0 + c.w, by1 = by0 + c.h;     // box, exclusive end
@@ -268,6 +283,31 @@ export function createDetector(cv, options = {}) {
                 }
             }
             if (worst - best < RING_TEXTURE) return false;     // nothing to align on: keep
+            if (!thrAt) {
+                if (bdx === 0 && bdy === 0) return false;       // the background lines up as it is
+                const residual = (sx, sy) => {
+                    let sum = 0;
+                    for (let y = by0; y < by1; y++) {
+                        for (let x = bx0; x < bx1; x++) {
+                            if (!M[y * W + x]) continue;
+                            let mn = 255, mx = 0;
+                            for (let yy = y + sy - SHIFT_TOL; yy <= y + sy + SHIFT_TOL; yy++) {
+                                for (let xx = x + sx - SHIFT_TOL; xx <= x + sx + SHIFT_TOL; xx++) {
+                                    const v = nd[yy * W + xx];
+                                    if (v < mn) mn = v;
+                                    if (v > mx) mx = v;
+                                }
+                            }
+                            const v = C(x, y);
+                            sum += Math.max(0, v - mx) + Math.max(0, mn - v);
+                        }
+                    }
+                    return sum;
+                };
+                const r0 = residual(0, 0);
+                if (!(r0 > 0) || residual(bdx, bdy) >= SHIFT_EXPLAINS * r0) return false;
+                continue;
+            }
             let bad = 0, total = 0;
             for (let y = by0; y < by1; y++) {
                 for (let x = bx0; x < bx1; x++) {
@@ -427,7 +467,7 @@ export function createDetector(cv, options = {}) {
     // The adaptive detector on region r (see the top of the file).
     function detectAdaptive(prev, cur, next, Hprev, Hnext, off, r, fitErr) {
         const { view, full, T } = regionOf(cur, r);
-        for (const k of ['dP', 'dN', 'hi', 'lo', 'sig', 'pos', 'neg', 'R', 'S', 'Z', 'Zk', 'tmp2', 'zero']) m[k] ??= new cv.Mat();
+        for (const k of ['dP', 'dN', 'hi', 'lo', 'sig', 'pos', 'neg', 'R', 'S', 'Z', 'Zk', 'tmp2', 'zero', 'spread', 'spread2']) m[k] ??= new cv.Mat();
         try {
             const Hp = mul(T, Hprev), Hn = mul(T, inv(Hnext));
             // all three blurred alike (always, in this mode)
@@ -442,12 +482,17 @@ export function createDetector(cv, options = {}) {
                 noiseMap(m.dP, r);
                 // signed differences beyond the misalignment allowance: (cur − hi)⁺ − (lo − cur)⁺,
                 // hi / lo = the neighbour moved a fraction e towards its 3×3 max / min
-                const base = p.tolBase ?? TOL_BASE;
+                const base = p.tolBase;
                 const e = Math.min(1, Math.max(base, base + TOL_PER_ERR * (fitErr ?? 0.35)));
                 lastTol = e;
+                let first = true;
                 for (const [w, D] of [[m.wPrev, m.dP], [m.wNext, m.dN]]) {
                     cv.dilate(w, m.dil, k3);
                     cv.erode(w, m.ero, k3);
+                    // steepest neighbourhood of the two neighbours, for the edge term
+                    cv.subtract(m.dil, m.ero, first ? m.spread : m.spread2);
+                    if (!first) cv.max(m.spread, m.spread2, m.spread);
+                    first = false;
                     cv.addWeighted(w, 1 - e, m.dil, e, 0, m.hi, cv.CV_32F);
                     cv.addWeighted(w, 1 - e, m.ero, e, 0, m.lo, cv.CV_32F);
                     cv.subtract(src, m.hi, m.pos, none, cv.CV_32F);
@@ -458,6 +503,16 @@ export function createDetector(cv, options = {}) {
                 }
             } finally {
                 none.delete();
+            }
+            // edges: σ² += (edgeNoise × (spread − edgeKnee)⁺)²
+            const { edgeNoise, edgeKnee } = p;
+            if (edgeNoise > 0) {
+                m.spread.convertTo(m.spread2, cv.CV_32F, edgeNoise, -edgeNoise * edgeKnee);
+                cv.threshold(m.spread2, m.spread2, 0, 0, cv.THRESH_TOZERO);
+                cv.multiply(m.spread2, m.spread2, m.spread2);
+                cv.multiply(m.sig, m.sig, m.sig);
+                cv.add(m.sig, m.spread2, m.sig);
+                cv.sqrt(m.sig, m.sig);
             }
             // R: brighter (or darker) than both neighbours, by the smaller amount
             cv.threshold(m.dP, m.pos, 0, 0, cv.THRESH_TOZERO);
@@ -477,7 +532,8 @@ export function createDetector(cv, options = {}) {
                 cv.divide(m.S, m.sig, m.Zk, 1 / (SUM_NOISE * k));
                 if (k === 1) m.Zk.copyTo(m.Z); else cv.max(m.Z, m.Zk, m.Z);
             }
-            cv.threshold(m.Z, m.tmp2, p.sigmas, 255, cv.THRESH_BINARY);
+            const weakAt = Math.max(1, p.sigmas - Math.max(0, p.weakMargin || 0));
+            cv.threshold(m.Z, m.tmp2, weakAt, 255, cv.THRESH_BINARY);
             m.tmp2.convertTo(m.mask, cv.CV_8U);
             regionValid(r, T, [Hp, Hn]);
             cv.bitwise_and(m.mask, m.valid, m.mask);
@@ -494,10 +550,9 @@ export function createDetector(cv, options = {}) {
                 for (let y = c.y - r.y; y < c.y - r.y + c.h; y++) for (let x = c.x - r.x; x < c.x - r.x + c.w; x++) peak = Math.max(peak, z[y * r.w + x]);
                 c.score = peak;
             }
-            // shift check: a pixel still differs when its residual exceeds about twice its noise
-            const sg = m.sig.data32F;
-            const thrAt = (x, y) => Math.max(2, 2 * SUM_NOISE * sg[y * r.w + x]);
-            return shiftFilter(b, r, src, view, full, [m.wPrev, m.wNext], thrAt);
+            const f = shiftFilter(b, r, src, view, full, [m.wPrev, m.wNext], null);
+            return { ...f, candidates: f.candidates.filter(c => c.score >= p.sigmas),
+                weak: f.candidates.filter(c => c.score < p.sigmas).map(c => ({ ...c, weak: true })) };
         } finally {
             if (!full) view.delete();
         }
@@ -526,7 +581,7 @@ export function createDetector(cv, options = {}) {
                 m[k].setTo(new cv.Scalar(0));
             }
         }
-        const out = { candidates: [], rejected: [], components: 0, noisy: false };
+        const out = { candidates: [], weak: [], rejected: [], components: 0, noisy: false };
         for (const r of regions || [{ x: 0, y: 0, w: size.w, h: size.h }]) {
             const b = mode === 'robust'
                 ? detectRobust(args.prev, args.cur, args.next, args.Hprev, args.Hnext, brightness, r)
@@ -535,6 +590,7 @@ export function createDetector(cv, options = {}) {
                     : detectBasic(args.prev, args.cur, args.Hprev, r);
             out.candidates.push(...b.candidates);
             out.rejected.push(...b.rejected);
+            if (b.weak) out.weak.push(...b.weak);
             out.components += b.components;
             out.noisy ||= b.noisy;
         }

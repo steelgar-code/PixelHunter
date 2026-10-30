@@ -178,7 +178,9 @@ export function createPipeline(cv, params) {
         // tracks: a step per frame with detections; without camera motion they coast
         const egoPrev = count >= s + 2 ? cur.egoIn : null;
         let tracks = null;
-        if (detect.ok) tracks = tracker.step(detect.candidates, egoPrev && egoPrev.ok ? egoPrev.Hfull : null, (cur.meta.gap || 0) + 1);
+        // weak candidates (adaptive mode) can only continue tracks, never start them
+        if (detect.ok) tracks = tracker.step(detect.weak && detect.weak.length ? [...detect.candidates, ...detect.weak] : detect.candidates,
+            egoPrev && egoPrev.ok ? egoPrev.Hfull : null, (cur.meta.gap || 0) + 1);
         else if (count >= 2 * s + 1) tracks = tracker.step([], null, (cur.meta.gap || 0) + 1);
         const t3 = performance.now();
 
