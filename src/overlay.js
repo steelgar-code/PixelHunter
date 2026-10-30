@@ -161,3 +161,33 @@ export function drawZones(ctx, tf, zones, w, h, draft = null) {
         ctx.setLineDash([]);
     }
 }
+
+// Inclusion zones: everything outside them dimmed, each outlined in green with its number.
+// `draft` is the one being drawn. Call it before anything else is drawn on the overlay.
+export function drawInclude(ctx, tf, zones, w, h, draft = null) {
+    const box = z => {
+        const x0 = tf.x(z.x * w - 0.5), y0 = tf.y(z.y * h - 0.5);
+        return [x0, y0, tf.x((z.x + z.w) * w - 0.5) - x0, tf.y((z.y + z.h) * h - 0.5) - y0];
+    };
+    if (zones.length) {
+        // drawn first on the overlay, so clearing the holes takes nothing else with it
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.45)';
+        ctx.fillRect(tf.x(-0.5), tf.y(-0.5), w * tf.s, h * tf.s);
+        for (const z of zones) ctx.clearRect(...box(z));
+    }
+    ctx.lineWidth = 1.5 * tf.dpr;
+    ctx.strokeStyle = ctx.fillStyle = '#4cc38a';
+    ctx.font = `600 ${11 * tf.dpr}px system-ui, sans-serif`;
+    ctx.textBaseline = 'top';
+    zones.forEach((z, i) => {
+        const [x, y, bw, bh] = box(z);
+        ctx.strokeRect(x, y, bw, bh);
+        ctx.fillText(`+${i + 1}`, x + 3 * tf.dpr, y + 3 * tf.dpr);
+    });
+    if (draft) {
+        const [x, y, bw, bh] = box(draft);
+        ctx.setLineDash([4 * tf.dpr, 3 * tf.dpr]);
+        ctx.strokeRect(x, y, bw, bh);
+        ctx.setLineDash([]);
+    }
+}

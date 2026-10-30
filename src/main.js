@@ -5,12 +5,12 @@ import { createFrameLoop } from './frameLoop.js';
 import { createSyntheticLoop } from './synthLoop.js';
 import { createScene } from './synth.js';
 import { SCENES } from './scenes.js';
-import { PARAM_DEFS, resolveParams, parseHash, loadSaved, save } from './params.js';
+import { PARAM_DEFS, PRESETS, matchingPreset, resolveParams, parseHash, loadSaved, save } from './params.js';
 import { createPipeline } from './pipeline.js';
 import { createScore } from './score.js';
 import { createExportLog, download } from './exportLog.js';
-import { fitOverlay, clear, drawPoints, drawNote, drawBoxes, drawTruth, drawTracks, drawZones } from './overlay.js';
-import { normalizeZone, normalizeZones, parseZones, formatZones, zoneRect, inZones, loadZones, saveZones, MAX_ZONES } from './zones.js';
+import { fitOverlay, clear, drawPoints, drawNote, drawBoxes, drawTruth, drawTracks, drawZones, drawInclude } from './overlay.js';
+import { normalizeZone, normalizeZones, parseZones, formatZones, zoneRect, inZones, loadZones, saveZones, MAX_ZONES, ZONES_KEY, INCLUDE_KEY } from './zones.js';
 
 const $ = id => document.getElementById(id);
 const video = $('video');
@@ -22,8 +22,12 @@ const stage = $('stage');
 
 const hash = parseHash(location.hash);
 const params = resolveParams(loadSaved(localStorage), hash);
-// exclusion zones: from the hash (#exclude=x,y,w,h;…) if given, else the saved ones
-params.zones = 'exclude' in hash ? parseZones(hash.exclude) : loadZones(localStorage);
+// Zones of each kind: from the hash (#exclude=x,y,w,h;… / #include=…) if given, else the saved ones.
+const ZONE_KINDS = {
+    exclude: { param: 'zones', storage: ZONES_KEY, list: 'zoneList', text: 'zoneText' },
+    include: { param: 'include', storage: INCLUDE_KEY, list: 'includeList', text: 'includeText' },
+};
+for (const [kind, k] of Object.entries(ZONE_KINDS)) params[k.param] = kind in hash ? parseZones(hash[kind]) : loadZones(localStorage, k.storage);
 let source = null;
 let loop = null;
 let cvState = { ready: false, cv: null, ms: null };
@@ -37,7 +41,7 @@ const APP_VERSION = '0.5.0';
 
 // Test hook (see tests/): recent frames and state, no effect on the UI.
 const FRAME_LOG = 5000;
-const ph = window.__ph = { params, frames: [], results: [], cvState, ready: false, error: null, setZones: z => setZones(z) };
+const ph = window.__ph = { params, frames: [], results: [], cvState, ready: false, error: null, setZones: (kind, z) => setZones(kind, z), applyPreset: k => applyPreset(k) };
 
 function showBanner(text) {
     const b = $('banner');
@@ -52,6 +56,8 @@ function fatal(text) {
 }
 
 // --- parameter controls -------------------------------------------------------------------
+
+const syncers = new Map();       // key → puts params[key] into its control
 
 function renderParams() {
     for (const def of PARAM_DEFS) {
@@ -75,6 +81,7 @@ function renderParams() {
                 label.append(input, text);
                 seg.append(label);
             }
+            syncers.set(def.key, () => { for (const i of seg.querySelectorAll('input')) i.checked = i.value === params[def.key]; });
             row.append(seg);
         } else if (def.type === 'bool') {
             const label = document.createElement('label');
@@ -84,6 +91,7 @@ function renderParams() {
             input.id = `param-${def.key}`;
             input.checked = params[def.key];
             input.addEventListener('change', () => setParam(def.key, input.checked));
+            syncers.set(def.key, () => { input.checked = params[def.key]; });
             label.append(input, def.label);
             row.append(label);
         } else {
@@ -102,6 +110,7 @@ function renderParams() {
             input.id = `param-${def.key}`;
             const show = () => { value.textContent = `${params[def.key]}${def.unit ? ' ' + def.unit : ''}`; };
             input.addEventListener('input', () => { setParam(def.key, Number(input.value)); show(); });
+            syncers.set(def.key, () => { input.value = params[def.key]; show(); });
             show();
             row.append(label, input);
         }
@@ -114,11 +123,44 @@ function setParam(key, value) {
     save(localStorage, params);
     if (key === 'mode') { if (loop) loop.setMode(value); }
     else if (['view', 'showCandidates', 'showTruth', 'showZones'].includes(key)) render();
-    else if (pipeline) {
-        pipeline.setParams(params);
-        if (score) score.reset();       // new settings: score from here on
-        if (confScore) confScore.reset();
+    else settingsChanged();
+}
+
+// Detection settings changed: to the pipeline, score from here on, preset buttons updated.
+function settingsChanged() {
+    if (pipeline) pipeline.setParams(params);
+    if (score) score.reset();
+    if (confScore) confScore.reset();
+    updatePresets();
+}
+
+// --- sensitivity presets ------------------------------------------------------------------
+
+function renderPresets() {
+    const host = $('presets');
+    for (const [key, pr] of Object.entries(PRESETS)) {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.id = `preset-${key}`;
+        b.textContent = pr.label;
+        b.title = pr.hint;
+        b.addEventListener('click', () => applyPreset(key));
+        host.append(b);
     }
+    updatePresets();
+}
+
+function applyPreset(key) {
+    Object.assign(params, PRESETS[key].values);
+    save(localStorage, params);
+    for (const sync of syncers.values()) sync();
+    settingsChanged();
+}
+
+function updatePresets() {
+    const current = matchingPreset(params);
+    for (const key of Object.keys(PRESETS)) $(`preset-${key}`).setAttribute('aria-pressed', String(key === current));
+    $('presetHint').textContent = current ? `${PRESETS[current].label}: ${PRESETS[current].hint}.` : 'Custom settings. A preset sets detection, confirmation and camera motion as a starting point to tune from.';
 }
 
 // --- frames -------------------------------------------------------------------------------
@@ -136,11 +178,11 @@ function truthTargets(r) {
         x: (t.x + 0.5) * s - 0.5, y: (t.y + 0.5) * s - 0.5, w: t.w * s, h: t.h * s }));
 }
 
-// Targets whose centre lies in an exclusion zone can't be found: left out of the score.
+// Targets whose centre lies in an exclusion zone, or outside the inclusion zones when there are
+// any, can't be found: left out of the score.
 function scoredTargets(r) {
-    const ts = truthTargets(r);
-    if (!params.zones.length) return ts;
-    return ts.filter(t => !inZones(params.zones, t.cx, t.cy, r.width, r.height));
+    return truthTargets(r).filter(t => !inZones(params.zones, t.cx, t.cy, r.width, r.height)
+        && (!params.include.length || inZones(params.include, t.cx, t.cy, r.width, r.height)));
 }
 
 function onFrame(f) {
@@ -188,29 +230,30 @@ function render() {
     const note = pipeline.renderView(params.view, lastOut, displayCtx);
     const tf = fitOverlay(overlay, g.w, g.h);
     clear(overlayCtx);
+    if (params.showZones || drawing) drawInclude(overlayCtx, tf, params.include, g.w, g.h, drawKind === 'include' ? draft : null);
     const r = lastOut.result;
     if (params.view === 'points' && r) drawPoints(overlayCtx, tf, r.egoNext, r.small);
     if (r && params.showTruth && r.truth) drawTruth(overlayCtx, tf, truthTargets(r));
     if (r && params.showCandidates && params.view !== 'points') drawBoxes(overlayCtx, tf, r.candidates, { alpha: 0.55, width: 1 });
     if (r && params.view !== 'points') drawTracks(overlayCtx, tf, r.confirmed);
-    if (params.showZones || drawing) drawZones(overlayCtx, tf, params.zones, g.w, g.h, draft);
+    if (params.showZones || drawing) drawZones(overlayCtx, tf, params.zones, g.w, g.h, drawKind === 'exclude' ? draft : null);
     if (note) drawNote(overlayCtx, tf, note);
     ph.note = note;
 }
 
-// --- exclusion zones ----------------------------------------------------------------------
+// --- detection area: inclusion and exclusion zones ---------------------------------------
 
 let drawing = false;             // draw mode: drags on the stage add zones
+let drawKind = 'exclude';        // … of this kind
 let draft = null;                // the zone being dragged out
 let dragFrom = null;
 
-function setZones(zones) {
-    params.zones = normalizeZones(zones);
-    saveZones(localStorage, params.zones);
-    if (pipeline) pipeline.setParams(params);
-    if (score) score.reset();
-    if (confScore) confScore.reset();
-    renderZoneList();
+function setZones(kind, zones) {
+    const k = ZONE_KINDS[kind];
+    params[k.param] = normalizeZones(zones);
+    saveZones(localStorage, params[k.param], k.storage);
+    settingsChanged();
+    renderZoneLists();
     render();
 }
 
@@ -223,25 +266,27 @@ function zoneSourceRect(z) {
     return [r.x0, r.y0, r.x1 - r.x0, r.y1 - r.y0];
 }
 
-function renderZoneList() {
-    const list = $('zoneList');
-    list.replaceChildren(...params.zones.map((z, i) => {
-        const li = document.createElement('li');
-        const row = document.createElement('span');
-        const px = zoneSourceRect(z);
-        const text = document.createElement('span');
-        text.textContent = px ? `${px[0]},${px[1]} ${px[2]}×${px[3]} px` : `${z.x},${z.y} ${z.w}×${z.h}`;
-        const del = document.createElement('button');
-        del.type = 'button';
-        del.textContent = '×';
-        del.title = `Remove zone ${i + 1}`;
-        del.addEventListener('click', () => setZones(params.zones.filter((_, j) => j !== i)));
-        row.append(text, del);
-        li.append(row);
-        return li;
-    }));
-    if (document.activeElement !== $('zoneText')) $('zoneText').value = formatZones(params.zones);
-    $('clearZones').disabled = !params.zones.length;
+function renderZoneLists() {
+    for (const [kind, k] of Object.entries(ZONE_KINDS)) {
+        const zones = params[k.param];
+        $(k.list).replaceChildren(...zones.map((z, i) => {
+            const li = document.createElement('li');
+            const row = document.createElement('span');
+            const px = zoneSourceRect(z);
+            const text = document.createElement('span');
+            text.textContent = px ? `${px[0]},${px[1]} ${px[2]}×${px[3]} px` : `${z.x},${z.y} ${z.w}×${z.h}`;
+            const del = document.createElement('button');
+            del.type = 'button';
+            del.textContent = '×';
+            del.title = `Remove ${kind} zone ${i + 1}`;
+            del.addEventListener('click', () => setZones(kind, zones.filter((_, j) => j !== i)));
+            row.append(text, del);
+            li.append(row);
+            return li;
+        }));
+        if (document.activeElement !== $(k.text)) $(k.text).value = formatZones(zones);
+    }
+    $('clearZones').disabled = !params.zones.length && !params.include.length;
 }
 
 function setDrawing(on) {
@@ -266,8 +311,11 @@ function toFrame(e) {
 
 function bindZones() {
     $('drawZone').addEventListener('click', () => setDrawing(!drawing));
-    $('clearZones').addEventListener('click', () => setZones([]));
-    $('zoneText').addEventListener('change', e => setZones(parseZones(e.target.value)));
+    $('clearZones').addEventListener('click', () => { setZones('include', []); setZones('exclude', []); });
+    for (const input of document.querySelectorAll('input[name=zoneKind]')) {
+        input.addEventListener('change', () => { drawKind = input.value; if (!drawing) setDrawing(true); });
+    }
+    for (const [kind, k] of Object.entries(ZONE_KINDS)) $(k.text).addEventListener('change', e => setZones(kind, parseZones(e.target.value)));
     stage.addEventListener('pointerdown', e => {
         if (!drawing || e.button !== 0) return;
         const p = toFrame(e);
@@ -290,12 +338,13 @@ function bindZones() {
         const snap = (v, n) => Math.round(v * n) / n;
         const z = normalizeZone(draft && { x: snap(draft.x, g.srcW), y: snap(draft.y, g.srcH), w: snap(draft.x + draft.w, g.srcW) - snap(draft.x, g.srcW), h: snap(draft.y + draft.h, g.srcH) - snap(draft.y, g.srcH) });
         dragFrom = draft = null;
-        if (z && params.zones.length < MAX_ZONES) setZones([...params.zones, z]);
+        const zones = params[ZONE_KINDS[drawKind].param];
+        if (z && zones.length < MAX_ZONES) setZones(drawKind, [...zones, z]);
         else render();
     };
     stage.addEventListener('pointerup', end);
     stage.addEventListener('pointercancel', () => { dragFrom = draft = null; render(); });
-    renderZoneList();
+    renderZoneLists();
 }
 
 // --- sources ------------------------------------------------------------------------------
@@ -346,7 +395,7 @@ async function openSource(next) {
     // frame t is shown once t+s has arrived (s = stride): load them so the first frame has its result
     if (!next.isLive) for (let i = 0; i < Math.max(1, params.stride); i++) await loop.step();
     for (const id of ['play', 'step', 'timeline']) $(id).disabled = false;
-    renderZoneList();
+    renderZoneLists();
     updateTransport();
 }
 
@@ -433,6 +482,7 @@ function exportJson() {
         params: Object.fromEntries(keys.map(k => [k, params[k]])),
         // fractions of the frame, and the same in source-video pixels [x, y, w, h]
         excludeZones: params.zones.map(z => ({ ...z, px: zoneSourceRect(z) })),
+        includeZones: params.include.map(z => ({ ...z, px: zoneSourceRect(z) })),
         created: new Date().toISOString(),
         units: 'source-video pixels; box = [x, y, w, h] of pixel edges; time = media time, s; vx / vy = px per frame against the background',
     };
@@ -460,7 +510,8 @@ function updateStats() {
     $('stReason').textContent = Object.entries(skipped.reasons).map(([k, n]) => `${k}: ${n}`).join(' · ');
     $('stGrab').textContent = r ? `${r.timings.grab.toFixed(1)} ms` : '–';
     $('stEgo').textContent = r ? `${r.timings.ego.toFixed(1)} ms` : '–';
-    $('stDetect').textContent = r ? `${r.timings.detect.toFixed(1)} ms` : '–';
+    const area = r && r.detect.ok && r.detect.processedArea < 1 ? ` (${Math.round(r.detect.processedArea * 100)} % area)` : '';
+    $('stDetect').textContent = r ? `${r.timings.detect.toFixed(1)} ms${area}` : '–';
     $('stCand').textContent = r ? (r.detect.ok ? `${r.candidates.length}${r.detect.noisy ? '+' : ''}` : '–') : '–';
     $('stTracks').textContent = r ? `${r.confirmed.length} confirmed · ${r.tracks.length - r.tracks.filter(t => t.state === 'confirmed').length} tentative` : '–';
     const sc = score && score.summary(), cs = confScore && confScore.summary();
@@ -479,6 +530,7 @@ function updateStats() {
 
 async function start() {
     renderParams();
+    renderPresets();
     bindTransport();
     bindZones();
     setInterval(updateStats, 250);

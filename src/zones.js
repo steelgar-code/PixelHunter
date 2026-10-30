@@ -1,11 +1,13 @@
-// Exclusion zones: rectangles fixed on screen (OSD text, a timestamp, a logo, the drone's own
-// propellers or landing gear) where nothing is detected. Pure: no DOM, no OpenCV.
+// Zones: rectangles fixed on screen. Exclusion zones (OSD text, a timestamp, a logo, the
+// drone's own propellers or landing gear): nothing is detected there. Inclusion zones: only
+// there is anything detected, and only those areas are processed. Pure: no DOM, no OpenCV.
 //
 // A zone is { x, y, w, h } as fractions of the frame (0…1), so it stays put when the
 // processing width changes and fits any source of the same aspect. In the URL hash they are
-// written as `exclude=x,y,w,h;x,y,w,h` (fractions).
+// written as `exclude=x,y,w,h;x,y,w,h` and `include=…` (fractions).
 
 export const ZONES_KEY = 'pixelhunter.zones.v1';
+export const INCLUDE_KEY = 'pixelhunter.include.v1';
 export const MAX_ZONES = 32;
 const MIN_SIZE = 0.002;        // smaller than this (a click without a drag) is dropped
 
@@ -57,18 +59,42 @@ export function inZones(zones, x, y, w, h, pad = 0) {
     return false;
 }
 
-export function loadZones(storage) {
+export function loadZones(storage, key = ZONES_KEY) {
     try {
-        return normalizeZones(JSON.parse(storage.getItem(ZONES_KEY) || '[]'));
+        return normalizeZones(JSON.parse(storage.getItem(key) || '[]'));
     } catch {
         return [];
     }
 }
 
-export function saveZones(storage, zones) {
+export function saveZones(storage, zones, key = ZONES_KEY) {
     try {
-        storage.setItem(ZONES_KEY, JSON.stringify(normalizeZones(zones)));
+        storage.setItem(key, JSON.stringify(normalizeZones(zones)));
     } catch {
         // private mode or storage full: zones just aren't remembered
     }
+}
+
+// Boxes to process for inclusion zones in a w×h frame: each zone's pixel rectangle grown by
+// `pad`, clipped to the frame, overlapping or touching boxes merged. null when there are none
+// (process the whole frame).
+export function regionRects(include, w, h, pad = 0) {
+    if (!include || !include.length) return null;
+    let rs = include.map(z => zoneRect(z, w, h))
+        .filter(r => r.x1 > r.x0 && r.y1 > r.y0)
+        .map(r => ({ x0: Math.max(0, r.x0 - pad), y0: Math.max(0, r.y0 - pad), x1: Math.min(w, r.x1 + pad), y1: Math.min(h, r.y1 + pad) }));
+    for (let merged = true; merged;) {
+        merged = false;
+        for (let i = 0; i < rs.length && !merged; i++) {
+            for (let j = i + 1; j < rs.length; j++) {
+                const a = rs[i], b = rs[j];
+                if (a.x0 > b.x1 || b.x0 > a.x1 || a.y0 > b.y1 || b.y0 > a.y1) continue;
+                rs[i] = { x0: Math.min(a.x0, b.x0), y0: Math.min(a.y0, b.y0), x1: Math.max(a.x1, b.x1), y1: Math.max(a.y1, b.y1) };
+                rs.splice(j, 1);
+                merged = true;
+                break;
+            }
+        }
+    }
+    return rs.length ? rs.map(r => ({ x: r.x0, y: r.y0, w: r.x1 - r.x0, h: r.y1 - r.y0 })) : null;
 }

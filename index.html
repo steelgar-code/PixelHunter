@@ -84,15 +84,30 @@
             </div>
         </section>
         <section>
-            <h2>Exclusion zones</h2>
+            <h2>Sensitivity preset</h2>
+            <div id="presets" class="segmented" role="group" aria-label="Sensitivity preset"></div>
+            <p id="presetHint" class="muted">Sets detection, confirmation and camera motion as a starting point to tune from.</p>
+        </section>
+        <section>
+            <h2>Detection area</h2>
+            <div class="segmented" role="radiogroup" aria-label="A drag adds">
+                <label><input type="radio" name="zoneKind" value="include">Include (crop)</label>
+                <label><input type="radio" name="zoneKind" value="exclude" checked>Exclude</label>
+            </div>
             <div class="row">
                 <button type="button" id="drawZone" aria-pressed="false" title="Drag rectangles on the video (Esc to stop)">Draw zones</button>
                 <button type="button" id="clearZones" disabled>Clear all</button>
             </div>
+            <h3>Include <span class="muted">· only these areas are processed</span></h3>
+            <ol id="includeList" class="zones mono include"></ol>
+            <label class="field">
+                <input type="text" id="includeText" class="mono" spellcheck="false" placeholder="none: the whole frame" aria-label="Inclusion zones as text">
+            </label>
+            <h3>Exclude <span class="muted">· never detected</span></h3>
             <ol id="zoneList" class="zones mono"></ol>
             <label class="field">
-                <span class="muted">x,y,w,h as fractions of the frame, ; between zones</span>
                 <input type="text" id="zoneText" class="mono" spellcheck="false" placeholder="0.02,0.9,0.3,0.08" aria-label="Exclusion zones as text">
+                <span class="muted">x,y,w,h as fractions of the frame, ; between zones</span>
             </label>
             <div id="params-zones" class="params"></div>
         </section>

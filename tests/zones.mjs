@@ -1,9 +1,10 @@
-// Exclusion zones: zones.js (Node), detection and camera motion with zones on synthetic scenes
-// (an OSD overlay fixed on screen), drawing zones in the app, the hash and the export.
+// Detection-area zones: zones.js (Node); exclusion zones on synthetic scenes (an OSD overlay
+// fixed on screen); inclusion zones (cropped detection: same results inside, less time);
+// drawing zones in the app, the hash and the export.
 import { launch, ok, openApp } from './lib/env.mjs';
 import { instrumentMats } from './lib/mats.mjs';
 import { SCENES } from '../src/scenes.js';
-import { normalizeZone, parseZones, formatZones, zoneRect, inZones, loadZones, saveZones, ZONES_KEY } from '../src/zones.js';
+import { normalizeZone, parseZones, formatZones, zoneRect, inZones, loadZones, saveZones, regionRects, ZONES_KEY, INCLUDE_KEY } from '../src/zones.js';
 
 // --- zones.js ---
 ok('a zone dragged right-to-left is flipped and clipped to the frame',
@@ -14,6 +15,10 @@ ok('pixel rectangle covers every pixel the zone touches', JSON.stringify(zoneRec
 ok('inside / outside a zone (pixel centres), with padding', inZones([{ x: 0.1, y: 0, w: 0.2, h: 1 }], 10, 5, 100, 10)
     && inZones([{ x: 0.1, y: 0, w: 0.2, h: 1 }], 29, 5, 100, 10) && !inZones([{ x: 0.1, y: 0, w: 0.2, h: 1 }], 30, 5, 100, 10)
     && inZones([{ x: 0.1, y: 0, w: 0.2, h: 1 }], 31, 5, 100, 10, 2));
+ok('no inclusion zones: the whole frame', regionRects([], 100, 100) === null);
+ok('inclusion regions are padded and clipped', JSON.stringify(regionRects([{ x: 0, y: 0.5, w: 0.2, h: 0.2 }], 100, 100, 4)) === JSON.stringify([{ x: 0, y: 46, w: 24, h: 28 }]));
+ok('overlapping regions merge, distant ones stay apart', regionRects([{ x: 0.1, y: 0.1, w: 0.2, h: 0.2 }, { x: 0.28, y: 0.2, w: 0.1, h: 0.1 }, { x: 0.7, y: 0.7, w: 0.1, h: 0.1 }], 100, 100, 2).length === 2);
+ok('a chain of overlaps merges into one', regionRects([{ x: 0, y: 0, w: 0.2, h: 0.1 }, { x: 0.4, y: 0, w: 0.2, h: 0.1 }, { x: 0.15, y: 0, w: 0.3, h: 0.1 }], 100, 100).length === 1);
 {
     const mem = new Map();
     const storage = { getItem: k => mem.get(k) ?? null, setItem: (k, v) => mem.set(k, v) };
@@ -67,6 +72,43 @@ try {
             return { raw: sum(raw.summary()), conf: sum(conf.summary()), inside, fitted, frames, err: +err.toFixed(2) };
         };
     });
+    await page.evaluate(async () => {
+        const { createScene, greyToRgba } = await import('/src/synth.js');
+        const { createPipeline } = await import('/src/pipeline.js');
+        // per-frame candidates (rounded centres), median detect time, processed area, views
+        window.runCrop = (sceneOpts, params = {}) => {
+            const s = createScene(sceneOpts);
+            const pipe = createPipeline(cv, { ...window.__ph.params, ...params });
+            const frames = {}, ms = [];
+            let area = null, maskOutside = 0;
+            for (let k = 0; k < s.frames; k++) {
+                const f = s.frame(k);
+                const out = pipe.push({ imageData: new ImageData(greyToRgba(f.grey), s.width, s.height), width: s.width, height: s.height,
+                    time: k / s.fps, frame: k, seq: k, gap: 0, jump: k === 0, truth: f.truth });
+                const r = out.result;
+                if (!r || !r.detect.ok) continue;
+                frames[r.frame] = r.candidates.map(c => [+c.cx.toFixed(2), +c.cy.toFixed(2), c.area, c.x, c.y, c.w, c.h]);
+                ms.push(r.timings.detect);
+                area = r.detect.processedArea;
+                if (k === s.frames - 1 && params.include && params.include.length) {
+                    // the mask view is full-frame and empty outside the regions
+                    const c = document.createElement('canvas');
+                    c.width = s.width; c.height = s.height;
+                    pipe.renderView('mask', out, c.getContext('2d'));
+                    const d = c.getContext('2d').getImageData(0, 0, s.width, s.height).data;
+                    const reg = r.detect.regions;
+                    for (let y = 0; y < s.height; y++) for (let x = 0; x < s.width; x++) {
+                        if (reg.some(q => x >= q.x && x < q.x + q.w && y >= q.y && y < q.y + q.h)) continue;
+                        if (d[(y * s.width + x) * 4]) maskOutside++;
+                    }
+                }
+            }
+            pipe.dispose();
+            ms.sort((a, b) => a - b);
+            return { frames, ms: +ms[ms.length >> 1].toFixed(1), area, maskOutside };
+        };
+    });
+    const runCrop = (scene, params) => page.evaluate(([s, p]) => window.runCrop(s, p), [scene, params]);
     const run = (scene, params, countIn) => page.evaluate(([s, p, c]) => window.runZones(s, p, c), [scene, params, countIn]);
 
     const osd = SCENES.osd;
@@ -94,12 +136,47 @@ try {
         const r = await run({ ...SCENES['pan-dots'].options, frames: 60 }, { zones: [{ x: 0.9, y: 0, w: 0.1, h: 0.1 }] });
         ok('pan-dots with a corner zone: still ≥ 95 % hit, no false positives', r.raw.hit >= 0.95 && r.raw.fpPerFrame < 0.05, r.raw);
     }
+
+    // inclusion zones: cropped detection gives the full-frame result inside the zone
+    {
+        const scene = { width: 1280, height: 720, frames: 40, camera: 'drone', seed: 81, noise: 2, shapes: 40,
+            targets: [{ size: 3, contrast: 50, fx: 300, fy: 250, vx: 4 + 2, vy: -1.5 + 1 }, { size: 3, contrast: -50, fx: 900, fy: 500, vx: 4 - 1.5, vy: -1.5 }] };
+        const inc = [{ x: 0.15, y: 0.2, w: 0.3, h: 0.35 }];
+        for (const detectMode of ['robust', 'basic']) {
+            const full = await runCrop(scene, { detectMode, include: [] });
+            const crop = await runCrop(scene, { detectMode, include: inc });
+            const W = scene.width, H = scene.height, z = inc[0];
+            // blobs wholly inside the zone (3 px clear of its edges; a blob across an edge is clipped): the same
+            const inner = c => c[3] >= z.x * W + 3 && c[3] + c[5] <= (z.x + z.w) * W - 3 && c[4] >= z.y * H + 3 && c[4] + c[6] <= (z.y + z.h) * H - 3;
+            let same = 0, differ = [], outside = 0, insideCount = 0;
+            for (const k of Object.keys(full.frames)) {
+                const a = JSON.stringify(full.frames[k].filter(inner)), b = JSON.stringify((crop.frames[k] || []).filter(inner));
+                if (a === b) same++; else differ.push(k);
+                outside += (crop.frames[k] || []).filter(c => !inZones(inc, c[0], c[1], W, H)).length;
+                insideCount += full.frames[k].filter(inner).length;
+            }
+            ok(`${detectMode}: inside an inclusion zone, the same candidates as the full frame`, differ.length === 0 && insideCount > 0, { same, differ: differ.slice(0, 5), insideCount });
+            ok(`${detectMode}: no candidate outside the inclusion zone`, outside === 0, outside);
+            ok(`${detectMode}: a zone of ${Math.round(crop.area * 100)} % of the frame is processed in less than half the time`, crop.ms < full.ms / 2, { full: full.ms, crop: crop.ms, area: crop.area });
+            ok(`${detectMode}: mask view empty outside the processed regions`, crop.maskOutside === 0, crop.maskOutside);
+        }
+        // two zones far apart, with an exclusion zone inside one of them
+        const two = await runCrop(scene, { include: [{ x: 0.15, y: 0.2, w: 0.3, h: 0.35 }, { x: 0.6, y: 0.55, w: 0.25, h: 0.3 }], zones: [{ x: 0.15, y: 0.2, w: 0.1, h: 0.1 }] });
+        const all = Object.values(two.frames).flat();
+        ok('two inclusion zones: candidates in both, none in the exclusion zone inside one', all.some(c => c[0] < 640) && all.some(c => c[0] > 640)
+            && !all.some(c => inZones([{ x: 0.15, y: 0.2, w: 0.1, h: 0.1 }], c[0], c[1], 1280, 720)), { n: all.length });
+    }
     ok('no Mats left behind', (await page.evaluate(() => window.__liveMats())) === 0);
     ok('no page errors', errors.length === 0, errors);
     await page.close();
 
     // the app: zones from the hash, drawn with the mouse, removed, exported
     {
+        {
+            const { page: q } = await openApp(browser, { hash: 'include=0.1,0.1,0.5,0.5;0.7,0.7,0.2,0.2' });
+            ok('inclusion zones from the hash', (await q.evaluate(() => __ph.params.include.length)) === 2);
+            await q.close();
+        }
         const { page: p, errors: e2 } = await openApp(browser, { hash: 'mode=everyFrame&exclude=0.0125,0.018519,0.195833,0.066667' });
         ok('zones from the hash', (await p.evaluate(() => __ph.params.zones.length)) === 1);
         await p.selectOption('#scene', 'osd');
@@ -129,15 +206,29 @@ try {
         ok('OSD scene in the app with both zones: no false positives', st && st.fpPerFrame < 0.05 && st.hitRate >= 0.9, st);
         const [dl] = await Promise.all([p.waitForEvent('download'), p.click('#exportJson')]);
         const json = JSON.parse(await (await import('fs')).promises.readFile(await dl.path(), 'utf8'));
-        ok('export records the zones in source pixels', json.meta.excludeZones.length === 2 && JSON.stringify(json.meta.excludeZones[0].px) === '[12,10,188,36]', json.meta.excludeZones);
+        ok('export records the zones in source pixels', json.meta.excludeZones.length === 2 && JSON.stringify(json.meta.excludeZones[0].px) === '[12,10,188,36]' && Array.isArray(json.meta.includeZones), json.meta.excludeZones);
         await p.click('#zoneList li:first-child button');
         ok('× removes a zone', (await p.evaluate(() => __ph.params.zones.length)) === 1);
         await p.fill('#zoneText', '0.1,0.1,0.2,0.2;0.5,0.5,0.1,0.1');
         await p.press('#zoneText', 'Enter');
         await p.locator('#zoneText').blur();
         ok('zones typed as text', (await p.evaluate(() => __ph.params.zones.length)) === 2);
+        // an inclusion zone: picked with the kind switch, drawn, shown in the stats
+        await p.click('label:has(input[name=zoneKind][value=include])');
+        ok('picking a zone kind turns draw mode on', (await p.getAttribute('#drawZone', 'aria-pressed')) === 'true');
+        await p.mouse.move(box.x + 100 * box.s, box.y + 100 * box.s);
+        await p.mouse.down();
+        await p.mouse.move(box.x + 580 * box.s, box.y + 370 * box.s, { steps: 4 });
+        await p.mouse.up();
+        await p.keyboard.press('Escape');
+        const inc = await p.evaluate(() => __ph.params.include);
+        ok('a drag in include mode adds an inclusion zone', inc.length === 1 && (await p.textContent('#includeList')).includes('100,100 480×270 px'), inc);
+        ok('inclusion zones are saved', (await p.evaluate(k => JSON.parse(localStorage.getItem(k)).length, INCLUDE_KEY)) === 1);
+        await p.click('#step');
+        await p.waitForTimeout(400);
+        ok('stats show the share of the frame processed', /% area\)/.test(await p.textContent('#stDetect')), await p.textContent('#stDetect'));
         await p.click('#clearZones');
-        ok('Clear all', (await p.evaluate(() => __ph.params.zones.length)) === 0);
+        ok('Clear all', (await p.evaluate(() => __ph.params.zones.length + __ph.params.include.length)) === 0);
         ok('no page errors (app)', e2.length === 0, e2);
         await p.close();
     }

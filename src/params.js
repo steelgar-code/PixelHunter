@@ -10,7 +10,7 @@ export const PARAM_DEFS = [
       choices: [['original', 'Original'], ['stabilised', 'Stabilised'], ['points', 'Points'], ['diff', 'Raw diff'], ['mask', 'Mask']] },
     { key: 'showCandidates', label: 'Unconfirmed candidates', group: 'view', type: 'bool', default: true },
     { key: 'showTruth', label: 'Ground truth (synthetic)', group: 'view', type: 'bool', default: true },
-    { key: 'showZones', label: 'Exclusion zones', group: 'view', type: 'bool', default: true },
+    { key: 'showZones', label: 'Detection-area zones', group: 'view', type: 'bool', default: true },
 
     // detection (detect.js)
     { key: 'detectMode', label: 'Detection', group: 'detect', type: 'choice', default: 'robust',
@@ -54,6 +54,46 @@ export const PARAM_DEFS = [
 
 const DEFS = new Map(PARAM_DEFS.map(d => [d.key, d]));
 
+// Sensitivity presets: starting points for detection, confirmation and camera motion, to tune
+// from by hand. They set those groups only (not playback, view or zones). Mid is the defaults.
+// Areas are in processing-resolution px.
+const MID = Object.fromEntries(PARAM_DEFS.filter(d => ['detect', 'track', 'motion'].includes(d.group) && d.key !== 'zonesMotion').map(d => [d.key, d.default]));
+export const PRESETS = {
+    highest: {
+        label: 'Highest',
+        hint: 'faint 1–2 px objects, slow (down to ~0.8 px/frame); slower to run, more false candidates',
+        values: {
+            ...MID,
+            procWidth: '0', stride: 4, threshold: 12, minArea: 1, maxArea: 100, borderMargin: 4, blur: false, open: false,
+            confirmN: 4, confirmM: 6, gateBase: 3, maxSpeed: 6, minTravel: 2,
+            estWidth: 480, features: 600, fbMax: 0.7, ransacPx: 1.5, minInliers: 40,
+        },
+    },
+    mid: {
+        label: 'Mid',
+        hint: 'the defaults: 2–20 px objects, contrast ≥ 30, ≥ 2–5 px/frame',
+        values: { ...MID },
+    },
+    low: {
+        label: 'Low',
+        hint: 'high-contrast objects ≥ 4 px at 960 px, fast (up to 30 px/frame); fastest, fewest false alarms',
+        values: {
+            ...MID,
+            procWidth: '960', stride: 1, threshold: 35, minArea: 6, maxArea: 3000, borderMargin: 3, blur: true, open: false,
+            confirmN: 3, confirmM: 5, gateBase: 6, maxSpeed: 30, minTravel: 5,
+            estWidth: 320, features: 400, lkWin: 25, lkLevels: 4, ransacPx: 2.5,
+        },
+    },
+};
+
+// The preset whose values all match `p`, or null.
+export function matchingPreset(p) {
+    for (const [key, pr] of Object.entries(PRESETS)) {
+        if (Object.entries(pr.values).every(([k, v]) => String(p[k]) === String(v))) return key;
+    }
+    return null;
+}
+
 export function defaults() {
     return Object.fromEntries(PARAM_DEFS.map(d => [d.key, d.default]));
 }
@@ -77,10 +117,12 @@ export function coerce(key, raw) {
     return Math.min(d.max, Math.max(d.min, n));
 }
 
-// Merges saved values and then hash values over the defaults.
+// Merges saved values, then a preset named in the hash (preset=highest), then hash values over
+// the defaults.
 export function resolveParams(saved, hash) {
     const p = defaults();
-    for (const src of [saved || {}, hash || {}]) {
+    const preset = hash && PRESETS[hash.preset];
+    for (const src of [saved || {}, preset ? preset.values : {}, hash || {}]) {
         for (const [k, raw] of Object.entries(src)) {
             const v = coerce(k, raw);
             if (v !== undefined) p[k] = v;

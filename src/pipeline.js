@@ -14,7 +14,8 @@
 // resolution (procWidth, default the source's own), where detection runs so few-pixel objects
 // survive. Coordinates in results are processing-resolution pixels; geometry.scale converts
 // from source pixels. Exclusion zones (params.zones, fractions of the frame) are cleared from
-// detection and, with zonesMotion, from camera-motion tracking.
+// detection and, with zonesMotion, from camera-motion tracking. Inclusion zones
+// (params.include) crop detection only: camera motion is always fitted on the whole frame.
 
 import { createEgomotion, EGO_DEFAULTS } from './egomotion.js';
 import { createDetector, DETECT_DEFAULTS } from './detect.js';
@@ -33,7 +34,7 @@ function makeCanvas(w, h) {
 const pick = (defaults, p) => Object.fromEntries(Object.keys(defaults).filter(k => k in p).map(k => [k, p[k]]));
 // exclusion zones always apply to detection; to camera motion unless zonesMotion is off
 const egoParams = p => ({ ...pick(EGO_DEFAULTS, p), zones: p.zonesMotion === false ? [] : p.zones || [] });
-const detectParams = p => ({ ...pick(DETECT_DEFAULTS, p), zones: p.zones || [] });
+const detectParams = p => ({ ...pick(DETECT_DEFAULTS, p), zones: p.zones || [], include: p.include || [] });
 const trackParams = p => pick(TRACK_DEFAULTS, p);
 
 export const MAX_STRIDE = 12;
