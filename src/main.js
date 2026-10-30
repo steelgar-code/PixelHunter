@@ -6,6 +6,7 @@ import { createSyntheticLoop } from './synthLoop.js';
 import { createScene } from './synth.js';
 import { SCENES } from './scenes.js';
 import { PARAM_DEFS, PRESETS, matchingPreset, resolveParams, parseHash, loadSaved, save } from './params.js';
+import { HELP, SECTION_HELP } from './help.js';
 import { createPipeline } from './pipeline.js';
 import { createScore } from './score.js';
 import { createExportLog, download } from './exportLog.js';
@@ -59,13 +60,102 @@ function fatal(text) {
 
 const syncers = new Map();       // key → puts params[key] into its control
 
+// A "?" button that shows / hides `text` in a paragraph appended to `host`.
+function helpToggle(host, text, name) {
+    const p = document.createElement('p');
+    p.className = 'help';
+    p.textContent = text;
+    p.hidden = true;
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'help-btn';
+    b.textContent = '?';
+    b.title = `What does ${name} do?`;
+    b.setAttribute('aria-expanded', 'false');
+    b.addEventListener('click', () => { p.hidden = !p.hidden; b.setAttribute('aria-expanded', String(!p.hidden)); });
+    host.append(p);
+    return b;
+}
+
+// Sliders in a scrolling panel: a touch that starts on one scrolls the panel unless it is
+// clearly sideways; then the value follows the finger relative to where it started (no jump to
+// the touch point). A mouse drags or clicks as usual. The input itself takes no pointer events
+// (keyboard still works once focused).
+function guardSlider(input, def) {
+    const wrap = document.createElement('div');
+    wrap.className = 'slider';
+    wrap.append(input);
+    const min = Number(def.min), max = Number(def.max), step = Number(def.step);
+    const decimals = (String(def.step).split('.')[1] || '').length;
+    const snap = v => +(Math.min(max, Math.max(min, min + Math.round((v - min) / step) * step))).toFixed(decimals);
+    const set = v => {
+        const n = snap(v);
+        if (n === Number(input.value)) return;
+        input.value = n;
+        input.dispatchEvent(new Event('input'));
+    };
+    const track = () => input.getBoundingClientRect();
+    const at = x => { const r = track(); return min + Math.min(1, Math.max(0, (x - r.left - 8) / Math.max(1, r.width - 16))) * (max - min); };
+    let g = null;                // { id, x, y, v, mouse, dragging }
+    const capture = id => { try { wrap.setPointerCapture(id); } catch { /* pointer already gone */ } };
+    wrap.addEventListener('pointerdown', e => {
+        if (e.button !== 0) return;
+        g = { id: e.pointerId, x: e.clientX, y: e.clientY, v: Number(input.value), mouse: e.pointerType === 'mouse', dragging: false };
+        if (g.mouse) {
+            g.dragging = true;
+            capture(e.pointerId);
+            input.focus({ preventScroll: true });
+            set(at(e.clientX));
+        }
+    });
+    wrap.addEventListener('pointermove', e => {
+        if (!g || e.pointerId !== g.id) return;
+        const dx = e.clientX - g.x, dy = e.clientY - g.y;
+        if (!g.dragging) {
+            if (Math.abs(dy) > 8 && Math.abs(dy) >= Math.abs(dx)) { g = null; return; }      // a scroll
+            if (Math.abs(dx) < 10 || Math.abs(dx) < 2 * Math.abs(dy)) return;               // not yet clear
+            g.dragging = true;
+            g.x = e.clientX;                                                                 // start from here: no jump
+            capture(e.pointerId);
+            wrap.classList.add('dragging');
+            return;
+        }
+        if (g.mouse) set(at(e.clientX));
+        else set(g.v + (e.clientX - g.x) / Math.max(1, track().width - 16) * (max - min));
+    });
+    const end = () => { g = null; wrap.classList.remove('dragging'); };
+    wrap.addEventListener('pointerup', end);
+    wrap.addEventListener('pointercancel', end);
+    return wrap;
+}
+
+function stepButton(text, title, onClick) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'step-btn';
+    b.textContent = text;
+    b.title = title;
+    b.addEventListener('click', onClick);
+    return b;
+}
+
 function renderParams() {
     for (const def of PARAM_DEFS) {
         const host = $(`params-${def.group}`);
         if (!host) continue;
         const row = document.createElement('div');
         row.className = 'param';
+        const head = document.createElement('div');
+        head.className = 'param-head';
+        row.append(head);
         if (def.type === 'choice') {
+            const name = document.createElement('span');
+            name.className = 'param-name';
+            name.textContent = def.label;
+            // no caption when the section heading already says it (Processing, View)
+            const heading = host.closest('section, details').querySelector('h2, summary');
+            if (heading && heading.textContent.trim().toLowerCase() === def.label.toLowerCase()) name.textContent = '';
+            head.append(name);
             const seg = document.createElement('div');
             seg.className = 'segmented';
             seg.setAttribute('role', 'radiogroup');
@@ -93,14 +183,14 @@ function renderParams() {
             input.addEventListener('change', () => setParam(def.key, input.checked));
             syncers.set(def.key, () => { input.checked = params[def.key]; });
             label.append(input, def.label);
-            row.append(label);
+            head.append(label);
         } else {
-            const label = document.createElement('label');
-            const name = document.createElement('span');
+            const name = document.createElement('label');
+            name.className = 'param-name';
             name.textContent = def.label;
+            name.htmlFor = `param-${def.key}`;
             const value = document.createElement('span');
             value.className = 'value mono';
-            label.append(name, value);
             const input = document.createElement('input');
             input.type = 'range';
             input.min = def.min;
@@ -112,10 +202,34 @@ function renderParams() {
             input.addEventListener('input', () => { setParam(def.key, Number(input.value)); show(); });
             syncers.set(def.key, () => { input.value = params[def.key]; show(); });
             show();
-            row.append(label, input);
+            const nudge = dir => {
+                const decimals = (String(def.step).split('.')[1] || '').length;
+                const v = +(Math.min(def.max, Math.max(def.min, Number(input.value) + dir * def.step))).toFixed(decimals);
+                if (v === Number(input.value)) return;
+                input.value = v;
+                input.dispatchEvent(new Event('input'));
+            };
+            const controls = document.createElement('span');
+            controls.className = 'param-value';
+            controls.append(stepButton('−', `Decrease ${def.label}`, () => nudge(-1)), value, stepButton('+', `Increase ${def.label}`, () => nudge(1)));
+            head.append(name, controls);
+            row.append(guardSlider(input, def));
         }
+        if (HELP[def.key]) head.append(helpToggle(row, HELP[def.key], def.label));
         host.append(row);
     }
+    // section explanations
+    for (const [key, text] of Object.entries(SECTION_HELP)) {
+        const h = document.querySelector(`[data-help=${key}]`);
+        if (h) h.append(helpToggle(h.parentElement.querySelector('.help-host') || h.parentElement, text, h.textContent.trim()));
+    }
+    $('helpAll').addEventListener('click', () => {
+        const show = [...document.querySelectorAll('.help-btn')].some(b => b.getAttribute('aria-expanded') === 'false');
+        for (const b of document.querySelectorAll('.help-btn')) if ((b.getAttribute('aria-expanded') === 'true') !== show) b.click();
+        $('helpAll').textContent = show ? 'Hide explanations' : 'Explain settings';
+        // the details sections open too, so every explanation is in view
+        if (show) for (const d of document.querySelectorAll('.panel details')) d.open = true;
+    });
 }
 
 function setParam(key, value) {

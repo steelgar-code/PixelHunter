@@ -59,9 +59,31 @@ button.primary { background: var(--accent); border-color: var(--accent); color: 
 select { font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--line); border-radius: var(--radius); padding: 4px 6px; }
 .check { display: flex; align-items: center; gap: 8px; cursor: pointer; }
 .contents { display: contents; }
-.param label { display: flex; justify-content: space-between; gap: 8px; }
-.param input[type=range] { width: 100%; }
-.param .value { color: var(--muted); }
+.param-head { display: flex; align-items: center; gap: 6px; min-height: 24px; }
+.param-head .param-name, .param-head .check { flex: 1; min-width: 0; }
+.param-head .param-name:empty { display: none; }
+.param-head .check + .help-btn, .param-head .param-name:empty + .help-btn { margin-left: auto; }
+.param-value { display: flex; align-items: center; gap: 4px; }
+.param .value { color: var(--muted); min-width: 4.5em; text-align: center; }
+.param .segmented { margin-top: 4px; }
+.step-btn, .help-btn { padding: 0; width: 24px; height: 24px; line-height: 1; border-radius: 999px; flex: none; }
+.help-btn { color: var(--muted); font-size: 12px; font-weight: 600; }
+.help-btn[aria-expanded=true] { color: var(--accent); border-color: var(--accent); }
+.help { margin: 4px 0 2px; padding: 6px 8px; font-size: 12px; line-height: 1.45; color: var(--text); background: var(--bg); border-left: 2px solid var(--accent); border-radius: 0 var(--radius) var(--radius) 0; }
+.panel h2[data-help] { display: flex; align-items: center; justify-content: space-between; }
+.help-all { margin-left: auto; font-size: 12px; padding: 3px 10px; }
+
+/* Sliders: the wrapper takes the pointer; vertical swipes scroll the panel (touch-action), only
+   a clearly sideways drag changes the value (main.js guardSlider). */
+.slider { touch-action: pan-y; padding: 4px 0; cursor: pointer; }
+.slider input[type=range] { width: 100%; pointer-events: none; margin: 0; }
+.slider.dragging input[type=range] { accent-color: var(--ok); }
+.panel { overscroll-behavior: contain; scrollbar-gutter: stable; padding-right: 2px; }
+@media (pointer: coarse) {
+    .step-btn, .help-btn { width: 32px; height: 32px; }
+    .panel { gap: 16px; }
+    .params { gap: 14px; }
+}
 .segmented { display: flex; border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
 .segmented { flex-wrap: wrap; }
 .segmented label { position: relative; flex: 1 0 auto; text-align: center; padding: 4px 6px; cursor: pointer; }
