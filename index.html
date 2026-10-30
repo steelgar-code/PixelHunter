@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PixelHunter</title>
+<meta name="description" content="Finds small moving objects in video from a moving camera, in the browser.">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<header class="bar">
+    <h1>PixelHunter</h1>
+    <span id="cvStatus" class="pill">Loading OpenCV.js…</span>
+</header>
+<div id="banner" class="banner" hidden></div>
+
+<main class="layout">
+    <section class="stage-wrap">
+        <div id="stage" class="stage">
+            <video id="video" muted playsinline preload="auto"></video>
+            <canvas id="display"></canvas>
+            <canvas id="overlay"></canvas>
+            <div id="empty" class="empty">
+                <p>Open a video file, or drop one here.</p>
+                <button type="button" class="primary" data-open>Open video file…</button>
+            </div>
+        </div>
+        <div class="transport">
+            <button type="button" id="play" disabled title="Play / pause (Space)">Play</button>
+            <button type="button" id="step" disabled title="Step one frame (→)">Step ›</button>
+            <input type="range" id="timeline" min="0" max="1000" value="0" step="1" disabled aria-label="Position">
+            <span id="time" class="mono">0:00.000</span>
+        </div>
+    </section>
+
+    <aside class="panel">
+        <section>
+            <h2>Source</h2>
+            <input type="file" id="file" accept="video/*" hidden>
+            <button type="button" data-open>Open file…</button>
+            <div class="row">
+                <select id="scene" aria-label="Synthetic scene"></select>
+                <button type="button" id="openScene">Load</button>
+            </div>
+            <p id="srcLabel" class="muted">No video</p>
+        </section>
+        <section>
+            <h2>Processing</h2>
+            <div id="params-playback" class="params"></div>
+        </section>
+        <section>
+            <h2>View</h2>
+            <div id="params-view" class="params"></div>
+        </section>
+        <section>
+            <h2>Stats</h2>
+            <dl class="stats mono">
+                <dt>Source</dt><dd id="stSource">–</dd>
+                <dt>Processed</dt><dd id="stFps">–</dd>
+                <dt>Dropped</dt><dd id="stDropped">–</dd>
+                <dt>Rate</dt><dd id="stRate">–</dd>
+                <dt>Frame</dt><dd id="stFrame">–</dd>
+                <dt>Frame cost</dt><dd id="stCost">–</dd>
+                <dt>Points</dt><dd id="stPoints">–</dd>
+                <dt>Inliers</dt><dd id="stInliers">–</dd>
+                <dt>Skipped</dt><dd id="stSkipped">–</dd>
+                <dt>Grab</dt><dd id="stGrab">–</dd>
+                <dt>Motion</dt><dd id="stEgo">–</dd>
+                <dt>Detect</dt><dd id="stDetect">–</dd>
+                <dt>Candidates</dt><dd id="stCand">–</dd>
+                <dt>Tracks</dt><dd id="stTracks">–</dd>
+                <div id="rowScore" class="contents" hidden><dt>Truth (raw)</dt><dd id="stScore">–</dd>
+                    <dt>Truth (confirmed)</dt><dd id="stScoreConf">–</dd></div>
+                <dt>OpenCV.js</dt><dd id="stCv">–</dd>
+            </dl>
+            <p id="stReason" class="muted"></p>
+        </section>
+        <section>
+            <h2>Detections</h2>
+            <p id="logCount" class="muted">No confirmed detections yet</p>
+            <div class="row">
+                <button type="button" id="exportJson" disabled>Export JSON</button>
+                <button type="button" id="clearLog" disabled>Clear</button>
+            </div>
+        </section>
+        <details open>
+            <summary>Detection</summary>
+            <div id="params-detect" class="params"></div>
+        </details>
+        <details>
+            <summary>Confirmation</summary>
+            <div id="params-track" class="params"></div>
+        </details>
+        <details>
+            <summary>Camera motion</summary>
+            <div id="params-motion" class="params"></div>
+        </details>
+        <details>
+            <summary>Debug</summary>
+            <div id="params-debug" class="params"></div>
+        </details>
+    </aside>
+</main>
+
+<script type="module" src="src/main.js"></script>
+</body>
+</html>

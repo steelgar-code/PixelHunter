@@ -1,0 +1,12 @@
+{
+  "name": "pixelhunter-tests",
+  "private": true,
+  "type": "module",
+  "description": "Tests for PixelHunter (Node + Playwright). Not part of the app.",
+  "scripts": {
+    "test": "node run.mjs"
+  },
+  "devDependencies": {
+    "playwright": "1.63.0"
+  }
+}
