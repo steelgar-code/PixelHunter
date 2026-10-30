@@ -20,7 +20,7 @@
 import { createEgomotion, EGO_DEFAULTS } from './egomotion.js';
 import { createDetector, DETECT_DEFAULTS } from './detect.js';
 import { createTracker, TRACK_DEFAULTS } from './tracker.js';
-import { scaleH, mul, normalize } from './homography.js';
+import { scaleH, mul, normalize, composeNewestFirst } from './homography.js';
 import { mulberry32 } from './synth.js';
 
 function makeCanvas(w, h) {
@@ -113,15 +113,16 @@ export function createPipeline(cv, params) {
 
     // Product of the per-frame fits from `back + n` frames before the newest to `back` frames
     // before it: { H (processing px), Hs (small px) }, or a reason when one is missing.
+    // Slot `back + j` holds H(frame back+j+1 → frame back+j), so walking i upwards lists the fits
+    // newest first.
     function chain(back, n) {
-        let H = [1, 0, 0, 0, 1, 0, 0, 0, 1], Hs = H;
+        const fits = [];
         for (let i = back; i < back + n; i++) {
             const e = at(i).egoIn;
             if (!e || !e.ok) return { reason: e ? `camera motion: ${e.reason}` : `no previous frame${restarted()}` };
-            H = mul(H, e.Hfull);
-            Hs = mul(Hs, e.H);
+            fits.push(e);
         }
-        return { H: normalize(H), Hs: normalize(Hs) };
+        return { H: normalize(composeNewestFirst(fits.map(e => e.Hfull))), Hs: normalize(composeNewestFirst(fits.map(e => e.H))) };
     }
 
     // f: { image (CanvasImageSource) or imageData, width, height, time, frame, seq, gap, jump, truth? }

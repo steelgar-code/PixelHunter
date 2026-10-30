@@ -15,6 +15,15 @@ export function mul(A, B) {
     return C;
 }
 
+// Composes consecutive per-frame fits given newest first: [H(t−1→t), H(t−2→t−1), …,
+// H(t−n→t−n+1)] → H(t−n → t) = H(t−1→t) · H(t−2→t−1) · … (column vectors: the earliest step is
+// applied first, so it is the rightmost factor).
+export function composeNewestFirst(Hs) {
+    let H = IDENTITY.slice();
+    for (const Hi of Hs) H = mul(H, Hi);
+    return H;
+}
+
 export function inv(M) {
     const [a, b, c, d, e, f, g, h, i] = M;
     const A = e * i - f * h, B = -(d * i - f * g), C = d * h - e * g;

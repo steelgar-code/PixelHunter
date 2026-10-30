@@ -39,3 +39,24 @@ ok('mirror rejected', implausible([-1, 0, 319, 0, 1, 0, 0, 0, 1], 320, 180) !== 
 ok('3× zoom rejected', implausible(rot(0, 3), 320, 180) === 'implausible scale change');
 ok('folded perspective rejected', implausible([1, 0, 0, 0, 1, 0, 0.01, 0, 1], 320, 180) !== null);
 ok('half-frame jump rejected', implausible(rot(0, 1, 160, 0), 320, 180) === 'motion too large');
+
+// Composition order over several frames (stride > 1): checked against exact ground truth of a
+// scene whose per-frame motions don't commute (rotation, zoom, perspective, translation).
+{
+    const { composeNewestFirst } = await import('../src/homography.js');
+    const { createScene } = await import('../src/synth.js');
+    // each frame turns, zooms and shifts by a different amount, so the steps don't commute
+    const camera = k => ({ cx: 8 * k + 15 * Math.sin(k * 1.3), cy: 10 * Math.cos(k * 0.9), rot: 0.04 * Math.sin(k * 1.7), scale: 1 + 0.03 * Math.sin(k * 1.1), px: 2e-5 * Math.sin(k), py: 0 });
+    const s = createScene({ width: 640, height: 360, frames: 12, camera, seed: 3 });
+    const corners = [[0, 0], [639, 0], [639, 359], [0, 359]];
+    const err = (A, B) => Math.max(...corners.map(([x, y]) => { const [a, b] = project(A, x, y), [c, d] = project(B, x, y); return Math.hypot(a - c, b - d); }));
+    for (const n of [2, 3, 6, 10]) {
+        const t = 11;
+        const fits = [];                                         // newest first: H(t−1→t), H(t−2→t−1), …
+        for (let k = t; k > t - n; k--) fits.push(s.truth(k).H);
+        const exact = mul(s.pose(t), inv(s.pose(t - n)));        // world → t after frame t−n → world
+        const reversed = fits.slice().reverse().reduce((H, Hi) => mul(H, Hi), [1, 0, 0, 0, 1, 0, 0, 0, 1]);
+        ok(`composition over ${n} frames matches the exact t−${n} → t mapping`, err(composeNewestFirst(fits), exact) < 1e-6, err(composeNewestFirst(fits), exact));
+        ok(`… and the opposite order would be off by pixels (the test can tell)`, err(reversed, exact) > 1, +err(reversed, exact).toFixed(3));
+    }
+}
