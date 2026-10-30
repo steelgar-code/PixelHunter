@@ -18,6 +18,7 @@ export function createSyntheticLoop({ scene, onFrame, mode = 'realtime' }) {
     const deliveredAt = [];
     let rgba = null;
 
+    // jump: why the previous frames don't connect ('start', 'seek', …), or false
     function deliver(next, jump) {
         const gap = jump || k < 0 ? 0 : Math.max(0, next - k - 1);
         if (!jump) dropped += gap;
@@ -27,7 +28,7 @@ export function createSyntheticLoop({ scene, onFrame, mode = 'realtime' }) {
         k = next;
         const t0 = performance.now();
         try {
-            onFrame({ imageData, width: f.width, height: f.height, time: next / fps, frame: next, seq: seq++, gap, jump, truth: f.truth });
+            onFrame({ imageData, width: f.width, height: f.height, time: next / fps, frame: next, seq: seq++, gap, jump: !!jump, jumpReason: jump || null, truth: f.truth });
         } finally {
             costs.push(performance.now() - t0);
             if (costs.length > 20) costs.shift();
@@ -72,10 +73,10 @@ export function createSyntheticLoop({ scene, onFrame, mode = 'realtime' }) {
         get duration() { return n / fps; },
         async start() {
             k = -1; seq = 0; dropped = 0; costs.length = 0; deliveredAt.length = 0;
-            deliver(0, true);
+            deliver(0, 'start');
         },
         async play() {
-            if (k >= n - 1) deliver(0, true);
+            if (k >= n - 1) deliver(0, 'replay from the start');
             playing = true;
             clock = { t0: performance.now() - 1000 / fps, k0: k };
             stopTimer();
@@ -94,7 +95,7 @@ export function createSyntheticLoop({ scene, onFrame, mode = 'realtime' }) {
         seek(time) {
             const target = Math.min(n - 1, Math.max(0, Math.round(time * fps)));
             if (playing) clock = { t0: performance.now(), k0: target };
-            deliver(target, true);
+            deliver(target, 'seek');
         },
         setMode(m) {
             mode = m;

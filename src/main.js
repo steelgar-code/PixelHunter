@@ -404,7 +404,7 @@ function scoredTargets(r) {
 
 function onFrame(f) {
     const out = pipeline.push({ image: f.video, imageData: f.imageData, width: f.width, height: f.height, time: f.time,
-        frame: f.frame, seq: f.seq, gap: f.gap, jump: f.jump, truth: f.truth });
+        frame: f.frame, seq: f.seq, gap: f.gap, jump: f.jump, jumpReason: f.jumpReason, truth: f.truth });
     if (params.simLoad > 0) busyWait(params.simLoad);
     lastOut = out;
     const r = out.result;

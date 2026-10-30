@@ -6,6 +6,8 @@
 //   seq     frames delivered since the source started
 //   gap     source frames skipped since the previous delivered frame (0 = none)
 //   jump    true after a seek, a loop or the first frame: the previous frames don't connect
+//   jumpReason  why: 'start', 'seek', 'replay from the start', 'the browser seeked',
+//           'video time went backwards' (null when jump is false)
 //
 // Modes:
 //   realtime    the video plays at normal speed; frames that arrive while onFrame is busy are
@@ -48,6 +50,8 @@ export function createFrameLoop({ video, onFrame, mode = 'realtime' }) {
     let last = null;            // time of the last delivered frame
     let seq = 0;
     let jumpPending = true;
+    let jumpWhy = 'start';      // reason for the pending jump
+    const markJump = why => { jumpPending = true; jumpWhy = why; };
     let ownSeek = false;
     let playing = false;        // what the user asked for; the video may be paused while stepping
     let stepping = false;       // every-frame mode below MIN_RATE: driving the video by seeks
@@ -89,11 +93,12 @@ export function createFrameLoop({ video, onFrame, mode = 'realtime' }) {
             return;
         }
         let gap = 0;
-        let jump = jumpPending;
+        let jump = jumpPending, jumpReason = jumpPending ? jumpWhy : null;
         if (last !== null && !jump) {
             const dt = t - last;
             if (dt < 0) {
                 jump = true;
+                jumpReason = 'video time went backwards';
             } else {
                 dtSamples.push(dt);
                 if (dtSamples.length > 60) dtSamples.shift();
@@ -112,7 +117,7 @@ export function createFrameLoop({ video, onFrame, mode = 'realtime' }) {
 
         const frame = {
             video, width: md.width, height: md.height, time: t,
-            frame: dur ? Math.round(t / dur) : null, seq: seq++, gap, jump,
+            frame: dur ? Math.round(t / dur) : null, seq: seq++, gap, jump, jumpReason,
         };
         const t0 = performance.now();
         try {
@@ -239,7 +244,7 @@ export function createFrameLoop({ video, onFrame, mode = 'realtime' }) {
         return found;
     }
 
-    const onSeeking = () => { if (!ownSeek) jumpPending = true; };
+    const onSeeking = () => { if (!ownSeek) markJump('the browser seeked'); };
     const onSeeked = () => { ownSeek = false; };
     const onEnded = () => { playing = false; stepping = false; };
     video.addEventListener('seeking', onSeeking);
@@ -255,7 +260,7 @@ export function createFrameLoop({ video, onFrame, mode = 'realtime' }) {
             playing = true;
             safety = 1;
             if (Number.isFinite(video.duration) && video.currentTime >= video.duration - 0.001) {
-                jumpPending = true;
+                markJump('replay from the start');
                 video.currentTime = 0;
             }
             const rate = mode === 'everyFrame' ? targetRate() : 1;
@@ -278,7 +283,7 @@ export function createFrameLoop({ video, onFrame, mode = 'realtime' }) {
             return stepOnce();
         },
         seek(time) {
-            jumpPending = true;
+            markJump('seek');
             video.currentTime = time;
             arm();
         },
@@ -295,7 +300,7 @@ export function createFrameLoop({ video, onFrame, mode = 'realtime' }) {
         // Called when a new source starts (video loaded and paused). Probes the frame duration
         // of a file, then delivers the first frame.
         async start({ probe = true } = {}) {
-            last = null; seq = 0; jumpPending = true; dur = null; dtSamples.length = 0;
+            last = null; seq = 0; markJump('start'); dur = null; dtSamples.length = 0;
             costs.length = 0; safety = 1; dropped = 0; recovered = 0; deliveredAt.length = 0;
             playing = false; stepping = false;
             const t0 = video.currentTime;
@@ -304,11 +309,11 @@ export function createFrameLoop({ video, onFrame, mode = 'realtime' }) {
                 dtSamples.push(d);
                 dur = d;
             }
-            jumpPending = true;
+            markJump('start');
             if (d && (await seekAndWait(t0)) === 'ok') return;
             // no new frame came (probe off or failed): the one on screen was presented before
             // the loop existed, so deliver it directly
-            jumpPending = true;
+            markJump('start');
             onVideoFrame(performance.now(), { mediaTime: video.currentTime, width: video.videoWidth, height: video.videoHeight });
         },
         stats() {

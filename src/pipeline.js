@@ -52,6 +52,7 @@ export function createPipeline(cv, params) {
     let count = 0;               // frames pushed since the last reset (capped at the slot count)
     let pushed = 0;              // frames pushed overall (picks the display canvas)
     let tmpCanvas = null;        // ImageData sources at a different processing size
+    let resetCause = 'start';    // why the frame history last started over (shown while it refills)
     const scratch = {};          // Mats for debug views, made on first use
     let viewData = null;         // ImageData for grey views
 
@@ -67,8 +68,9 @@ export function createPipeline(cv, params) {
         rgba = null;
     }
 
-    function setup(srcW, srcH) {
+    function setup(srcW, srcH, cause = 'start') {
         freeAll();
+        resetCause = cause;
         const pw = Number(p.procWidth) > 0 ? Math.min(srcW, Number(p.procWidth)) : srcW;
         const w = pw, h = Math.max(1, Math.round(srcH * pw / srcW));
         const sw = Math.min(w, Math.round(p.estWidth)), sh = Math.max(1, Math.round(h * sw / w));
@@ -115,7 +117,7 @@ export function createPipeline(cv, params) {
         let H = [1, 0, 0, 0, 1, 0, 0, 0, 1], Hs = H;
         for (let i = back; i < back + n; i++) {
             const e = at(i).egoIn;
-            if (!e || !e.ok) return { reason: e ? `camera motion: ${e.reason}` : 'no previous frame' };
+            if (!e || !e.ok) return { reason: e ? `camera motion: ${e.reason}` : `no previous frame${restarted()}` };
             H = mul(H, e.Hfull);
             Hs = mul(Hs, e.H);
         }
@@ -126,9 +128,12 @@ export function createPipeline(cv, params) {
     // Returns { slot: the frame to show (.view.canvas, .meta), result: frame t's result or null }.
     function push(f) {
         const t0 = performance.now();
-        if (!geom || geom.srcW !== f.width || geom.srcH !== f.height || geom.stride !== stride()) setup(f.width, f.height);
+        if (!geom) setup(f.width, f.height);
+        else if (geom.srcW !== f.width || geom.srcH !== f.height) setup(f.width, f.height, `video size changed to ${f.width}×${f.height}`);
+        else if (geom.stride !== stride()) setup(f.width, f.height, 'frame stride changed');
         const s = geom.stride;
         if (f.jump) {
+            resetCause = f.jumpReason || (f.seq === 0 ? 'start' : 'seek');
             count = 0;
             ego.reset();
             tracker.reset();
@@ -153,7 +158,7 @@ export function createPipeline(cv, params) {
         const cur = at(s);
         let detect;
         if (count < 2 * s + 1) {
-            detect = { ok: false, reason: count === s + 1 ? 'no previous frame' : `waiting for ${s} frames before`, candidates: [] };
+            detect = { ok: false, reason: (count === s + 1 ? 'no previous frame' : `waiting for ${s} frames before`) + restarted(), candidates: [] };
         } else {
             const back = chain(s, s);         // t−s → t
             const fwd = chain(0, s);          // t → t+s
@@ -197,6 +202,9 @@ export function createPipeline(cv, params) {
         return mul([1, 0, dx, 0, 1, dy, 0, 0, 1], H);
     }
 
+    // ' (restarted: …)' after anything but the start of a source
+    const restarted = () => (resetCause && resetCause !== 'start' ? ` (restarted: ${resetCause})` : '');
+
     function greyToCanvas(mat, ctx) {
         if (!viewData || viewData.width !== mat.cols || viewData.height !== mat.rows) viewData = new ImageData(mat.cols, mat.rows);
         const src = mat.data, dst = viewData.data;
@@ -215,7 +223,7 @@ export function createPipeline(cv, params) {
         if (view === 'stabilised') {
             if (!r || !r.egoPrev || !r.egoPrev.ok) {
                 ctx.drawImage(slot.view.canvas, 0, 0);
-                return r && r.egoPrev ? `no camera motion for this frame: ${r.egoPrev.reason}` : 'no previous frame';
+                return r && r.egoPrev ? `no camera motion for this frame: ${r.egoPrev.reason}` : `no previous frame${restarted()}`;
             }
             const prev = at(geom.stride + 1);
             scratch.warped ??= new cv.Mat();
@@ -230,7 +238,7 @@ export function createPipeline(cv, params) {
         if (view === 'diff' || view === 'mask') {
             if (!r || !r.detect.ok) {
                 ctx.drawImage(slot.view.canvas, 0, 0);
-                return r ? `no detection for this frame: ${r.detect.reason}` : 'no previous frame';
+                return r ? `no detection for this frame: ${r.detect.reason}` : `no previous frame${restarted()}`;
             }
             greyToCanvas(detector.viewMat(view), ctx);
             return null;
@@ -244,14 +252,15 @@ export function createPipeline(cv, params) {
         renderView,
         get geometry() { return geom; },
         setParams(next) {
-            const resize = next.estWidth !== p.estWidth || String(next.procWidth) !== String(p.procWidth);
+            const cause = String(next.procWidth) !== String(p.procWidth) ? 'processing width changed'
+                : next.estWidth !== p.estWidth ? 'estimation width changed' : null;
             p = { ...p, ...next };
             ego.setParams(egoParams(p));
             detector.setParams(detectParams(p));
             tracker.setParams(trackParams(p));
-            if (resize && geom) setup(geom.srcW, geom.srcH);
+            if (cause && geom) setup(geom.srcW, geom.srcH, cause);
         },
-        reset() { count = 0; ego.reset(); tracker.reset(); },
+        reset(cause = 'reset') { resetCause = cause; count = 0; ego.reset(); tracker.reset(); },
         dispose() {
             freeAll();
             for (const m of Object.values(scratch)) m.delete();
