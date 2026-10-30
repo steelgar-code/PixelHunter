@@ -9,7 +9,8 @@ import { PARAM_DEFS, resolveParams, parseHash, loadSaved, save } from './params.
 import { createPipeline } from './pipeline.js';
 import { createScore } from './score.js';
 import { createExportLog, download } from './exportLog.js';
-import { fitOverlay, clear, drawPoints, drawNote, drawBoxes, drawTruth, drawTracks } from './overlay.js';
+import { fitOverlay, clear, drawPoints, drawNote, drawBoxes, drawTruth, drawTracks, drawZones } from './overlay.js';
+import { normalizeZone, normalizeZones, parseZones, formatZones, zoneRect, inZones, loadZones, saveZones, MAX_ZONES } from './zones.js';
 
 const $ = id => document.getElementById(id);
 const video = $('video');
@@ -19,7 +20,10 @@ const overlay = $('overlay');
 const overlayCtx = overlay.getContext('2d');
 const stage = $('stage');
 
-const params = resolveParams(loadSaved(localStorage), parseHash(location.hash));
+const hash = parseHash(location.hash);
+const params = resolveParams(loadSaved(localStorage), hash);
+// exclusion zones: from the hash (#exclude=x,y,w,h;…) if given, else the saved ones
+params.zones = 'exclude' in hash ? parseZones(hash.exclude) : loadZones(localStorage);
 let source = null;
 let loop = null;
 let cvState = { ready: false, cv: null, ms: null };
@@ -29,11 +33,11 @@ const skipped = { count: 0, reasons: {} };
 let score = null;                // synthetic sources: candidates against ground truth
 let confScore = null;            // … and confirmed detections
 const log = createExportLog();
-const APP_VERSION = '0.4.0';
+const APP_VERSION = '0.5.0';
 
 // Test hook (see tests/): recent frames and state, no effect on the UI.
 const FRAME_LOG = 5000;
-const ph = window.__ph = { params, frames: [], results: [], cvState, ready: false, error: null };
+const ph = window.__ph = { params, frames: [], results: [], cvState, ready: false, error: null, setZones: z => setZones(z) };
 
 function showBanner(text) {
     const b = $('banner');
@@ -109,7 +113,7 @@ function setParam(key, value) {
     params[key] = value;
     save(localStorage, params);
     if (key === 'mode') { if (loop) loop.setMode(value); }
-    else if (['view', 'showCandidates', 'showTruth'].includes(key)) render();
+    else if (['view', 'showCandidates', 'showTruth', 'showZones'].includes(key)) render();
     else if (pipeline) {
         pipeline.setParams(params);
         if (score) score.reset();       // new settings: score from here on
@@ -132,6 +136,13 @@ function truthTargets(r) {
         x: (t.x + 0.5) * s - 0.5, y: (t.y + 0.5) * s - 0.5, w: t.w * s, h: t.h * s }));
 }
 
+// Targets whose centre lies in an exclusion zone can't be found: left out of the score.
+function scoredTargets(r) {
+    const ts = truthTargets(r);
+    if (!params.zones.length) return ts;
+    return ts.filter(t => !inZones(params.zones, t.cx, t.cy, r.width, r.height));
+}
+
 function onFrame(f) {
     const out = pipeline.push({ image: f.video, imageData: f.imageData, width: f.width, height: f.height, time: f.time,
         frame: f.frame, seq: f.seq, gap: f.gap, jump: f.jump, truth: f.truth });
@@ -143,8 +154,8 @@ function onFrame(f) {
         skipped.reasons[r.egoNext.reason] = (skipped.reasons[r.egoNext.reason] || 0) + 1;
     }
     if (r && r.truth && score && r.detect.ok) {
-        r.score = score.add(r.frame, r.candidates, truthTargets(r));
-        r.confScore = confScore.add(r.frame, r.confirmed.map(t => t.box), truthTargets(r));
+        r.score = score.add(r.frame, r.candidates, scoredTargets(r));
+        r.confScore = confScore.add(r.frame, r.confirmed.map(t => t.box), scoredTargets(r));
     }
     if (r && r.confirmed.length) log.add(r);
     render();
@@ -182,8 +193,109 @@ function render() {
     if (r && params.showTruth && r.truth) drawTruth(overlayCtx, tf, truthTargets(r));
     if (r && params.showCandidates && params.view !== 'points') drawBoxes(overlayCtx, tf, r.candidates, { alpha: 0.55, width: 1 });
     if (r && params.view !== 'points') drawTracks(overlayCtx, tf, r.confirmed);
+    if (params.showZones || drawing) drawZones(overlayCtx, tf, params.zones, g.w, g.h, draft);
     if (note) drawNote(overlayCtx, tf, note);
     ph.note = note;
+}
+
+// --- exclusion zones ----------------------------------------------------------------------
+
+let drawing = false;             // draw mode: drags on the stage add zones
+let draft = null;                // the zone being dragged out
+let dragFrom = null;
+
+function setZones(zones) {
+    params.zones = normalizeZones(zones);
+    saveZones(localStorage, params.zones);
+    if (pipeline) pipeline.setParams(params);
+    if (score) score.reset();
+    if (confScore) confScore.reset();
+    renderZoneList();
+    render();
+}
+
+// Source-video pixel rectangle of a zone, as [x, y, w, h] (pixel edges).
+function zoneSourceRect(z) {
+    const g = pipeline && pipeline.geometry;
+    const w = g ? g.srcW : video.videoWidth, h = g ? g.srcH : video.videoHeight;
+    if (!w || !h) return null;
+    const r = zoneRect(z, w, h);
+    return [r.x0, r.y0, r.x1 - r.x0, r.y1 - r.y0];
+}
+
+function renderZoneList() {
+    const list = $('zoneList');
+    list.replaceChildren(...params.zones.map((z, i) => {
+        const li = document.createElement('li');
+        const row = document.createElement('span');
+        const px = zoneSourceRect(z);
+        const text = document.createElement('span');
+        text.textContent = px ? `${px[0]},${px[1]} ${px[2]}×${px[3]} px` : `${z.x},${z.y} ${z.w}×${z.h}`;
+        const del = document.createElement('button');
+        del.type = 'button';
+        del.textContent = '×';
+        del.title = `Remove zone ${i + 1}`;
+        del.addEventListener('click', () => setZones(params.zones.filter((_, j) => j !== i)));
+        row.append(text, del);
+        li.append(row);
+        return li;
+    }));
+    if (document.activeElement !== $('zoneText')) $('zoneText').value = formatZones(params.zones);
+    $('clearZones').disabled = !params.zones.length;
+}
+
+function setDrawing(on) {
+    drawing = on;
+    draft = dragFrom = null;
+    $('drawZone').setAttribute('aria-pressed', String(on));
+    $('drawZone').textContent = on ? 'Done drawing' : 'Draw zones';
+    stage.classList.toggle('drawing', on);
+    render();
+}
+
+// Client coordinates → fractions of the frame (the display canvas is fitted with "contain").
+function toFrame(e) {
+    const g = pipeline && pipeline.geometry;
+    if (!g) return null;
+    const rect = display.getBoundingClientRect();
+    const s = Math.min(rect.width / g.w, rect.height / g.h);
+    const ox = (rect.width - g.w * s) / 2, oy = (rect.height - g.h * s) / 2;
+    const fx = (e.clientX - rect.left - ox) / (g.w * s), fy = (e.clientY - rect.top - oy) / (g.h * s);
+    return [Math.min(1, Math.max(0, fx)), Math.min(1, Math.max(0, fy))];
+}
+
+function bindZones() {
+    $('drawZone').addEventListener('click', () => setDrawing(!drawing));
+    $('clearZones').addEventListener('click', () => setZones([]));
+    $('zoneText').addEventListener('change', e => setZones(parseZones(e.target.value)));
+    stage.addEventListener('pointerdown', e => {
+        if (!drawing || e.button !== 0) return;
+        const p = toFrame(e);
+        if (!p) return;
+        e.preventDefault();
+        stage.setPointerCapture(e.pointerId);
+        dragFrom = p;
+        draft = { x: p[0], y: p[1], w: 0, h: 0 };
+    });
+    stage.addEventListener('pointermove', e => {
+        if (!dragFrom) return;
+        const p = toFrame(e);
+        draft = { x: Math.min(dragFrom[0], p[0]), y: Math.min(dragFrom[1], p[1]), w: Math.abs(p[0] - dragFrom[0]), h: Math.abs(p[1] - dragFrom[1]) };
+        render();
+    });
+    const end = () => {
+        if (!dragFrom) return;
+        const g = pipeline.geometry;
+        // snapped to whole source pixels, so the list and the export are exact
+        const snap = (v, n) => Math.round(v * n) / n;
+        const z = normalizeZone(draft && { x: snap(draft.x, g.srcW), y: snap(draft.y, g.srcH), w: snap(draft.x + draft.w, g.srcW) - snap(draft.x, g.srcW), h: snap(draft.y + draft.h, g.srcH) - snap(draft.y, g.srcH) });
+        dragFrom = draft = null;
+        if (z && params.zones.length < MAX_ZONES) setZones([...params.zones, z]);
+        else render();
+    };
+    stage.addEventListener('pointerup', end);
+    stage.addEventListener('pointercancel', () => { dragFrom = draft = null; render(); });
+    renderZoneList();
 }
 
 // --- sources ------------------------------------------------------------------------------
@@ -234,6 +346,7 @@ async function openSource(next) {
     // frame t is shown once t+s has arrived (s = stride): load them so the first frame has its result
     if (!next.isLive) for (let i = 0; i < Math.max(1, params.stride); i++) await loop.step();
     for (const id of ['play', 'step', 'timeline']) $(id).disabled = false;
+    renderZoneList();
     updateTransport();
 }
 
@@ -291,6 +404,7 @@ function bindTransport() {
         if (e.target instanceof HTMLInputElement && e.target.type !== 'range') return;
         if (e.code === 'Space') { e.preventDefault(); togglePlay(); }
         else if (e.code === 'ArrowRight' && loop) { e.preventDefault(); loop.step().then(updateTransport); }
+        else if (e.code === 'Escape' && drawing) setDrawing(false);
     });
 
     for (const b of document.querySelectorAll('[data-open]')) b.addEventListener('click', () => $('file').click());
@@ -312,11 +426,13 @@ function bindTransport() {
 function exportJson() {
     if (!log.count || !pipeline.geometry) return;
     const g = pipeline.geometry;
-    const keys = PARAM_DEFS.filter(d => !['view', 'showCandidates', 'showTruth', 'simLoad'].includes(d.key)).map(d => d.key);
+    const keys = PARAM_DEFS.filter(d => !['view', 'showCandidates', 'showTruth', 'showZones', 'simLoad'].includes(d.key)).map(d => d.key);
     const meta = {
         app: 'PixelHunter', version: APP_VERSION, source: source ? source.label : null,
         width: g.srcW, height: g.srcH, fps: loop && loop.stats().sourceFps,
         params: Object.fromEntries(keys.map(k => [k, params[k]])),
+        // fractions of the frame, and the same in source-video pixels [x, y, w, h]
+        excludeZones: params.zones.map(z => ({ ...z, px: zoneSourceRect(z) })),
         created: new Date().toISOString(),
         units: 'source-video pixels; box = [x, y, w, h] of pixel edges; time = media time, s; vx / vy = px per frame against the background',
     };
@@ -364,6 +480,7 @@ function updateStats() {
 async function start() {
     renderParams();
     bindTransport();
+    bindZones();
     setInterval(updateStats, 250);
     if (typeof video.requestVideoFrameCallback !== 'function') {
         fatal('This browser does not support requestVideoFrameCallback, which PixelHunter needs to read video frames. Use a current Chrome, Edge, Firefox or Safari.');

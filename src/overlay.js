@@ -123,3 +123,41 @@ export function drawTracks(ctx, tf, tracks, { colour = '#ff4fd8' } = {}) {
         ctx.fillText(`#${t.id}`, x0, y0 - 2 * tf.dpr);
     }
 }
+
+// Exclusion zones ({ x, y, w, h } fractions of a w×h frame): a hatched red rectangle with its
+// number. `draft` is the one being drawn (dashed outline, no number).
+export function drawZones(ctx, tf, zones, w, h, draft = null) {
+    const box = z => {
+        const x0 = tf.x(z.x * w - 0.5), y0 = tf.y(z.y * h - 0.5);
+        return [x0, y0, tf.x((z.x + z.w) * w - 0.5) - x0, tf.y((z.y + z.h) * h - 0.5) - y0];
+    };
+    ctx.lineWidth = 1.5 * tf.dpr;
+    ctx.strokeStyle = '#ff5c5c';
+    ctx.font = `600 ${11 * tf.dpr}px system-ui, sans-serif`;
+    ctx.textBaseline = 'top';
+    zones.forEach((z, i) => {
+        const [x, y, bw, bh] = box(z);
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(x, y, bw, bh);
+        ctx.clip();
+        ctx.fillStyle = 'rgba(255, 92, 92, 0.12)';
+        ctx.fillRect(x, y, bw, bh);
+        ctx.strokeStyle = 'rgba(255, 92, 92, 0.35)';
+        ctx.lineWidth = tf.dpr;
+        ctx.beginPath();
+        const step = 8 * tf.dpr;
+        for (let d = -bh; d < bw; d += step) { ctx.moveTo(x + d, y + bh); ctx.lineTo(x + d + bh, y); }
+        ctx.stroke();
+        ctx.restore();
+        ctx.strokeRect(x, y, bw, bh);
+        ctx.fillStyle = '#ff5c5c';
+        ctx.fillText(String(i + 1), x + 3 * tf.dpr, y + 3 * tf.dpr);
+    });
+    if (draft) {
+        const [x, y, bw, bh] = box(draft);
+        ctx.setLineDash([4 * tf.dpr, 3 * tf.dpr]);
+        ctx.strokeRect(x, y, bw, bh);
+        ctx.setLineDash([]);
+    }
+}

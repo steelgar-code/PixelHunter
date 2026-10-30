@@ -37,6 +37,20 @@ export const SCENES = {
         label: 'Handheld · no movers (false-positive check)',
         options: { width: 960, height: 540, frames: 150, camera: 'handheld', seed: 24, noise: 2.5, shapes: 40, targets: [] },
     },
+    'osd': {
+        label: 'Pan · OSD overlay, 3 px dots (exclusion zones)',
+        options: {
+            width: 960, height: 540, frames: 150, camera: 'pan', seed: 26, noise: 2,
+            // telemetry-like overlays: top-left readout, bottom bar
+            osd: [{ x: 16, y: 14, w: 180, h: 28, every: 1 }, { x: 0, y: 500, w: 960, h: 40, every: 5 }],
+            targets: [
+                dot(3, 50, 250, 200, 6 + 1.5, 2.5 + 0.6),
+                dot(3, -45, 650, 300, 6 - 1.2, 2.5 - 0.8),
+            ],
+        },
+        // the overlays as exclusion zones (fractions of the frame), a little larger than drawn
+        zones: [{ x: 12 / 960, y: 10 / 540, w: 188 / 960, h: 36 / 540 }, { x: 0, y: 496 / 540, w: 1, h: 44 / 540 }],
+    },
     'exposure': {
         label: 'Pan · exposure steps, 3 px dot',
         options: {

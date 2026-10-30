@@ -38,7 +38,7 @@ try {
     console.log('\nConfirmed detections (defaults, 150 frames = 6 s each):');
     const res = {};
     for (const key of Object.keys(SCENES)) {
-        res[key] = await run(SCENES[key].options, {});
+        res[key] = await run(SCENES[key].options, { zones: SCENES[key].zones || [] });
         const r = res[key];
         console.log(`  ${key.padEnd(14)} raw: hit ${r.raw.hitRate ?? '–'} FP/frame ${r.raw.fpPerFrame}   confirmed: hit ${r.conf.hitRate ?? '–'} FP/10 s ${r.conf.fpPer10s}  latency ${JSON.stringify(r.conf.latency)}  ids ${JSON.stringify(r.ids)}`);
     }

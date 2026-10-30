@@ -83,6 +83,19 @@
                 <button type="button" id="clearLog" disabled>Clear</button>
             </div>
         </section>
+        <section>
+            <h2>Exclusion zones</h2>
+            <div class="row">
+                <button type="button" id="drawZone" aria-pressed="false" title="Drag rectangles on the video (Esc to stop)">Draw zones</button>
+                <button type="button" id="clearZones" disabled>Clear all</button>
+            </div>
+            <ol id="zoneList" class="zones mono"></ol>
+            <label class="field">
+                <span class="muted">x,y,w,h as fractions of the frame, ; between zones</span>
+                <input type="text" id="zoneText" class="mono" spellcheck="false" placeholder="0.02,0.9,0.3,0.08" aria-label="Exclusion zones as text">
+            </label>
+            <div id="params-zones" class="params"></div>
+        </section>
         <details open>
             <summary>Detection</summary>
             <div id="params-detect" class="params"></div>

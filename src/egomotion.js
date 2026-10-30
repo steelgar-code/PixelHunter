@@ -4,8 +4,13 @@
 // Points carry over from frame to frame (the inliers of the last fit), and cells of a grid
 // that have run short are topped up, so features stay spread over the image and one region
 // (or one large moving object) can't dominate the fit.
+//
+// Points inside exclusion zones (zones.js) are neither seeded nor used: an overlay fixed on
+// screen tracks as "no motion" and would pull the fit towards the identity. Zones are grown by
+// half the LK window, since a point next to a zone's edge is tracked with the overlay in view.
 
 import { implausible, normalize } from './homography.js';
+import { inZones } from './zones.js';
 
 export const EGO_DEFAULTS = {
     features: 400,         // point budget, split over the grid
@@ -21,6 +26,7 @@ export const EGO_DEFAULTS = {
     minInliers: 30,
     minInlierRatio: 0.5,
     retryEmptyAfter: 10,   // frames before re-trying a cell where no corner was found
+    zones: [],             // exclusion zones, { x, y, w, h } fractions of the frame
 };
 
 export function createEgomotion(cv, options = {}) {
@@ -61,6 +67,7 @@ export function createEgomotion(cv, options = {}) {
                     for (let i = 0; i < found.rows; i++) {
                         const x = d[2 * i] + x0, y = d[2 * i + 1] + y0;
                         if (!all && tooClose(x, y)) continue;
+                        if (excluded(x, y)) continue;
                         added.push(x, y);
                         n++;
                     }
@@ -76,6 +83,8 @@ export function createEgomotion(cv, options = {}) {
         merged.set(added, all ? 0 : pts.length);
         pts = merged;
     }
+
+    const excluded = (x, y) => p.zones && p.zones.length > 0 && inZones(p.zones, x, y, size.w, size.h, Math.max(3, (p.lkWin - 1) / 2));
 
     function tooClose(x, y) {
         const d2 = p.minDistance * p.minDistance;
@@ -131,6 +140,7 @@ export function createEgomotion(cv, options = {}) {
                 if (!(fb <= p.fbMax)) continue;
                 const x = b[2 * i], y = b[2 * i + 1];
                 if (x < 0 || y < 0 || x > size.w - 1 || y > size.h - 1) continue;
+                if (excluded(a[2 * i], a[2 * i + 1]) || excluded(x, y)) continue;
                 src.push(a[2 * i], a[2 * i + 1]);
                 dst.push(x, y);
                 idx.push(i);

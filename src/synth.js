@@ -8,6 +8,8 @@
 // with optional sensor noise, exposure drift and blur.
 //
 // Ground truth per frame: H (frame k−1 → frame k, = G_k·G_{k−1}⁻¹) and each target's box.
+// An optional OSD (text-like blocks fixed on screen, part of them changing every few frames)
+// is drawn over everything, like a drone's telemetry overlay; targets under it are hidden.
 
 import { mul, inv, project } from './homography.js';
 
@@ -90,6 +92,9 @@ export const DEFAULT_SCENE = {
     noise: 2,                  // sensor noise σ, grey levels
     exposure: null,            // { from, to, gain } ramp: offset grows by `gain` grey levels between frames from..to
     blur: false,               // 3×3 box blur of each frame
+    // [{ x, y, w, h, every? }] screen-fixed overlays, frame px: dark panel with bright 2×2
+    // blocks; the right half of the blocks changes every `every` frames (default 1)
+    osd: [],
     // { size, contrast, vx, vy, ax?, ay?, from?, to? } plus a start position: x, y in world
     // coordinates or fx, fy in frame `from`'s coordinates. Velocities in world px per frame.
     targets: [],
@@ -152,7 +157,8 @@ export function createScene(options = {}) {
             const [cx, cy] = project(G, p[0], p[1]);
             const half = t.size / 2;
             const box = { id, cx, cy, x: cx - half, y: cy - half, w: t.size, h: t.size };
-            if (box.x >= 0 && box.y >= 0 && box.x + box.w <= W - 1 && box.y + box.h <= H - 1) inView.push(box);
+            const hidden = s.osd.some(o => box.x + box.w > o.x && box.x < o.x + o.w && box.y + box.h > o.y && box.y < o.y + o.h);
+            if (box.x >= 0 && box.y >= 0 && box.x + box.w <= W - 1 && box.y + box.h <= H - 1 && !hidden) inView.push(box);
         });
         return { k, H: Hk && Hk.map(v => v / Hk[8]), targets: inView };
     }
@@ -188,6 +194,7 @@ export function createScene(options = {}) {
                 }
             }
         }
+        s.osd.forEach((o, n) => drawOsd(out, W, H, o, k, s.seed * 131 + n));
         if (s.blur) boxBlur3(out, W, H);
         if (s.exposure) {
             const { from, to, gain } = s.exposure;
@@ -205,6 +212,23 @@ export function createScene(options = {}) {
     }
 
     return { options: s, width: W, height: H, frames: s.frames, fps: s.fps, pose, truth, frame };
+}
+
+function drawOsd(img, W, H, o, k, seed) {
+    const x0 = Math.max(0, Math.round(o.x)), y0 = Math.max(0, Math.round(o.y));
+    const x1 = Math.min(W, Math.round(o.x + o.w)), y1 = Math.min(H, Math.round(o.y + o.h));
+    for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) img[y * W + x] = 25;
+    const epoch = Math.floor(k / (o.every || 1));
+    const cols = Math.floor((x1 - x0 - 4) / 3), rows = Math.floor((y1 - y0 - 4) / 3);
+    for (let r = 0; r < rows; r++) {
+        for (let c = 0; c < cols; c++) {
+            const changing = c >= cols / 2;
+            const on = mulberry32(seed * 7907 + r * 1009 + c * 17 + (changing ? epoch * 104729 : 0))() < 0.45;
+            if (!on) continue;
+            const bx = x0 + 2 + c * 3, by = y0 + 2 + r * 3;
+            for (let y = by; y < by + 2; y++) for (let x = bx; x < bx + 2; x++) img[y * W + x] = 230;
+        }
+    }
 }
 
 function boxBlur3(img, w, h) {

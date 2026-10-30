@@ -14,10 +14,16 @@
 //     d = max(0, cur − dilate(w)) + max(0, erode(w) − cur), so 1–2 px misregistration along
 //     edges doesn't show up as motion;
 //   - no smoothing by default (3×3 blur and a 3×3 opening are options).
+//
+// Exclusion zones (zones.js) are cleared from the valid region in frame t and also where each
+// compared frame's zones land once warped onto t: an overlay fixed on screen sits somewhere
+// else in the stabilised neighbours, and would show up there as a difference too.
 
 import { project, inv } from './homography.js';
+import { zoneRect } from './zones.js';
 
 const SHIFT = 4;               // fillConvexPoly fractional bits: vertices to 1/16 px
+const ZONE_PAD = 2;            // px around a zone: interpolation and the 3×3 min / max reach
 
 export const DETECT_DEFAULTS = {
     detectMode: 'robust',  // 'robust' (three frames, M3) or 'basic' (two frames, M2)
@@ -30,6 +36,7 @@ export const DETECT_DEFAULTS = {
     brightness: true,      // match the neighbours' mean brightness to frame t (robust mode)
     blur: false,           // 3×3 Gaussian blur before differencing (robust mode)
     open: false,           // 3×3 opening of the final mask (removes 1–2 px blobs!)
+    zones: [],             // exclusion zones, { x, y, w, h } fractions of the frame
 };
 
 // Union of boxes closer than `d` px (gap between them), area-weighted centroids.
@@ -106,6 +113,25 @@ export function createDetector(cv, options = {}) {
         if (margin > 0) cv.erode(out, out, kernelFor(margin));
     }
 
+    // Clears every exclusion zone from `out`, once per H (each a frame's own coordinates →
+    // frame t; the identity for t itself).
+    function clearZones(out, Hs) {
+        const d = m.poly.data32S;
+        for (const z of p.zones || []) {
+            const r = zoneRect(z, size.w, size.h);
+            if (r.x1 <= r.x0 || r.y1 <= r.y0) continue;
+            const a = r.x0 - 0.5 - ZONE_PAD, b = r.y0 - 0.5 - ZONE_PAD, c = r.x1 - 0.5 + ZONE_PAD, e = r.y1 - 0.5 + ZONE_PAD;
+            for (const H of Hs) {
+                [[a, b], [c, b], [c, e], [a, e]].forEach(([x, y], i) => {
+                    const [u, v] = H ? project(H, x, y) : [x, y];
+                    d[2 * i] = Math.round(u * (1 << SHIFT));
+                    d[2 * i + 1] = Math.round(v * (1 << SHIFT));
+                });
+                cv.fillConvexPoly(out, m.poly, new cv.Scalar(0), cv.LINE_8, SHIFT);
+            }
+        }
+    }
+
     function warp(src, H, dst, w = size.w, h = size.h) {
         const M = cv.matFromArray(3, 3, cv.CV_64F, H);
         try {
@@ -164,6 +190,7 @@ export function createDetector(cv, options = {}) {
         cv.absdiff(cur, m.warped, m.diff);
         cv.threshold(m.diff, m.mask, p.threshold, 255, cv.THRESH_BINARY);
         validRegion(Hprev, m.valid);
+        clearZones(m.valid, [null, Hprev]);
         cv.bitwise_and(m.mask, m.valid, m.mask);
         const t1 = performance.now();
         const b = blobs(m.mask);
@@ -192,6 +219,7 @@ export function createDetector(cv, options = {}) {
         validRegion(Hprev, m.valid);
         validRegion(HnextInv, m.valid2);
         cv.bitwise_and(m.valid, m.valid2, m.valid);
+        clearZones(m.valid, [null, Hprev, HnextInv]);
         cv.bitwise_and(m.mask, m.valid, m.mask);
         if (p.open) cv.morphologyEx(m.mask, m.mask, cv.MORPH_OPEN, k3);
         const t1 = performance.now();

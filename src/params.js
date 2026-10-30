@@ -10,6 +10,7 @@ export const PARAM_DEFS = [
       choices: [['original', 'Original'], ['stabilised', 'Stabilised'], ['points', 'Points'], ['diff', 'Raw diff'], ['mask', 'Mask']] },
     { key: 'showCandidates', label: 'Unconfirmed candidates', group: 'view', type: 'bool', default: true },
     { key: 'showTruth', label: 'Ground truth (synthetic)', group: 'view', type: 'bool', default: true },
+    { key: 'showZones', label: 'Exclusion zones', group: 'view', type: 'bool', default: true },
 
     // detection (detect.js)
     { key: 'detectMode', label: 'Detection', group: 'detect', type: 'choice', default: 'robust',
@@ -24,6 +25,7 @@ export const PARAM_DEFS = [
     { key: 'brightness', label: 'Match brightness', group: 'detect', type: 'bool', default: true },
     { key: 'blur', label: '3×3 blur', group: 'detect', type: 'bool', default: false },
     { key: 'open', label: '3×3 opening (drops 1–2 px blobs)', group: 'detect', type: 'bool', default: false },
+    { key: 'zonesMotion', label: 'Also ignore zones for camera motion', group: 'zones', type: 'bool', default: true },
 
     // temporal confirmation (tracker.js)
     { key: 'confirmN', label: 'Confirm: seen in N', group: 'track', type: 'number', default: 3, min: 1, max: 10, step: 1, unit: 'frames' },
