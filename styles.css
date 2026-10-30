@@ -55,7 +55,12 @@ button.primary { background: var(--accent); border-color: var(--accent); color: 
 
 .params { display: flex; flex-direction: column; gap: 8px; }
 .row { display: flex; gap: 6px; margin-top: 8px; }
-.row select { flex: 1; min-width: 0; }
+.row select, .row input[type=url], .row input[type=text] { flex: 1; min-width: 0; }
+.row input[type=text] { font: inherit; font-size: 12px; color: var(--text); background: var(--bg); border: 1px solid var(--line); border-radius: var(--radius); padding: 4px 6px; }
+.row.checks { align-items: center; gap: 12px; }
+.row.checks .muted { margin: 0; }
+#deleteUserPreset.armed { border-color: var(--danger); color: var(--danger); }
+input[type=url] { font: inherit; font-size: 12px; color: var(--text); background: var(--bg); border: 1px solid var(--line); border-radius: var(--radius); padding: 4px 6px; }
 select { font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--line); border-radius: var(--radius); padding: 4px 6px; }
 .check { display: flex; align-items: center; gap: 8px; cursor: pointer; }
 .contents { display: contents; }

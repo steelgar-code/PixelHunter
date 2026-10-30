@@ -182,6 +182,7 @@ export function createPipeline(cv, params) {
             candidates: detect.candidates,
             tracks: tracks || [],
             confirmed: tracks ? tracks.filter(t => t.state === 'confirmed' && t.matched) : [],
+            held: tracks ? tracks.filter(t => t.state === 'held') : [],     // stopped or lost, kept for a while
             timings: { grab: t1 - t0, ego: t2 - t1, detect: t3 - t2, total: t3 - t0 },
         };
         return { slot: cur, result };

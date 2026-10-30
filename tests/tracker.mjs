@@ -103,3 +103,53 @@ const confirmedIds = tracks => tracks.filter(t => t.state === 'confirmed' && t.m
     const s = tr.step([blob(100 + 5 * 5, 50)], I, 2);
     ok('a skipped frame (dt = 2) still matches', s.filter(t => t.matched).length === 1 && s.length === 1, s.map(t => [t.id, t.matched]));
 }
+{
+    // moves 10 frames, stops for 40 (not detected), moves on: same id, re-confirmed, not shown while held
+    const tr = createTracker();
+    const log = [];
+    let x = 100;
+    for (let k = 0; k < 70; k++) {
+        const moving = k < 10 || k >= 50;
+        if (moving) x += 4;
+        log.push(tr.step(moving ? [blob(x, 60)] : [], I));
+    }
+    ok('a stopped track is held, not shown as a detection', log[30].length === 1 && log[30][0].state === 'held' && confirmedIds(log[30]).length === 0, log[30].map(t => t.state));
+    ok('… picked up with the same id when it moves on, re-confirmed after N of M again', confirmedIds(log[50]).length === 0 && confirmedIds(log[52]).join() === '1' && confirmedIds(log[69]).join() === '1',
+        [50, 51, 52].map(k => log[k].map(t => `${t.id}:${t.state}`)));
+}
+{
+    const tr = createTracker({ holdFrames: 20 });
+    let x = 100, s;
+    for (let k = 0; k < 10; k++) s = tr.step([blob(x += 4, 60)], I);
+    for (let k = 0; k < 20; k++) s = tr.step([], I);
+    ok('held up to holdFrames …', s.length === 1 && s[0].state === 'held');
+    s = tr.step([], I);
+    ok('… then dropped', s.length === 0);
+}
+{
+    // noise around where a track stopped: holding it adds no confirmations (vs holdFrames 0)
+    const run = (hold, rate) => {
+        let shown = 0;
+        for (const seed of [9, 10, 11, 12, 13, 14, 15, 16]) {
+            const tr = createTracker({ holdFrames: hold ? 50 : 0 });
+            const r = mulberry32(seed);
+            let x = 100;
+            for (let k = 0; k < 10; k++) tr.step([blob(x += 4, 60)], I);
+            for (let k = 0; k < 100; k++) shown += confirmedIds(tr.step(r() < rate ? [blob(x + (r() - 0.5) * 20, 60 + (r() - 0.5) * 20)] : [], I)).length;
+        }
+        return shown;
+    };
+    const res = [0.1, 0.15, 0.2].map(rate => [run(true, rate), run(false, rate)]);
+    ok('holding a stopped track makes noise around it confirm no more than without holding', res.every(([a, b]) => a <= b), res);
+}
+{
+    // holding doesn't let tracks steal each other: two movers, one stops while the other passes by
+    const tr = createTracker();
+    let ids = new Set();
+    for (let k = 0; k < 40; k++) {
+        const bs = [blob(100 + 5 * k, 100)];
+        if (k < 10 || k > 30) bs.push(blob(300 + (k < 10 ? 3 * k : 30 + 3 * (k - 30)), 106));
+        for (const t of tr.step(bs, I)) if (t.state === 'confirmed' && t.matched) ids.add(t.id);
+    }
+    ok('a mover passing a held track keeps its own id, the held one gets its id back', ids.size === 2, [...ids]);
+}

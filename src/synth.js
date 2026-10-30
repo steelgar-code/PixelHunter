@@ -95,8 +95,9 @@ export const DEFAULT_SCENE = {
     // [{ x, y, w, h, every? }] screen-fixed overlays, frame px: dark panel with bright 2×2
     // blocks; the right half of the blocks changes every `every` frames (default 1)
     osd: [],
-    // { size, contrast, vx, vy, ax?, ay?, from?, to? } plus a start position: x, y in world
-    // coordinates or fx, fy in frame `from`'s coordinates. Velocities in world px per frame.
+    // { size, contrast, vx, vy, ax?, ay?, from?, to?, stops? } plus a start position: x, y in
+    // world coordinates or fx, fy in frame `from`'s coordinates. Velocities in world px per
+    // frame. stops: [[k0, k1], …] frames during which the target stands still (stop and go).
     targets: [],
 };
 
@@ -142,7 +143,8 @@ export function createScene(options = {}) {
     function targetAt(t, k) {
         const from = t.from ?? 0, to = t.to ?? Infinity;
         if (k < from || k > to) return null;
-        const dt = k - from;
+        let dt = k - from;
+        for (const [a, b] of t.stops || []) dt -= Math.max(0, Math.min(k, b) - Math.max(a, from));
         return [t.x + t.vx * dt + 0.5 * (t.ax || 0) * dt * dt, t.y + t.vy * dt + 0.5 * (t.ay || 0) * dt * dt];
     }
 

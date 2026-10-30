@@ -29,10 +29,11 @@ export const PARAM_DEFS = [
 
     // temporal confirmation (tracker.js)
     { key: 'confirmN', label: 'Confirm: seen in N', group: 'track', type: 'number', default: 3, min: 1, max: 10, step: 1, unit: 'frames' },
-    { key: 'confirmM', label: '… of the last M', group: 'track', type: 'number', default: 5, min: 2, max: 10, step: 1, unit: 'frames' },
+    { key: 'confirmM', label: '… of the last M', group: 'track', type: 'number', default: 5, min: 2, max: 20, step: 1, unit: 'frames' },
     { key: 'gateBase', label: 'Association gate', group: 'track', type: 'number', default: 4, min: 1, max: 30, step: 1, unit: 'px' },
     { key: 'maxSpeed', label: 'Max speed (new tracks)', group: 'track', type: 'number', default: 12, min: 2, max: 60, step: 1, unit: 'px/frame' },
     { key: 'minTravel', label: 'Min travel to confirm', group: 'track', type: 'number', default: 3, min: 0, max: 30, step: 1, unit: 'px' },
+    { key: 'holdFrames', label: 'Keep lost tracks', group: 'track', type: 'number', default: 50, min: 0, max: 250, step: 5, unit: 'frames' },
 
     // camera motion (egomotion.js)
     { key: 'estWidth', label: 'Estimation width', group: 'motion', type: 'number', default: 320, min: 160, max: 640, step: 16, unit: 'px' },
@@ -65,7 +66,7 @@ export const PRESETS = {
         values: {
             ...MID,
             procWidth: '0', stride: 4, threshold: 12, minArea: 1, maxArea: 100, borderMargin: 4, blur: false, open: false,
-            confirmN: 4, confirmM: 6, gateBase: 3, maxSpeed: 6, minTravel: 2,
+            confirmN: 4, confirmM: 6, gateBase: 3, maxSpeed: 6, minTravel: 2, holdFrames: 75,
             estWidth: 480, features: 600, fbMax: 0.7, ransacPx: 1.5, minInliers: 40,
         },
     },
@@ -80,7 +81,7 @@ export const PRESETS = {
         values: {
             ...MID,
             procWidth: '960', stride: 1, threshold: 35, minArea: 6, maxArea: 3000, borderMargin: 3, blur: true, open: false,
-            confirmN: 3, confirmM: 5, gateBase: 6, maxSpeed: 30, minTravel: 5,
+            confirmN: 3, confirmM: 5, gateBase: 6, maxSpeed: 30, minTravel: 5, holdFrames: 25,
             estWidth: 320, features: 400, lkWin: 25, lkLevels: 4, ransacPx: 2.5,
         },
     },
@@ -135,8 +136,10 @@ export function parseHash(hash) {
     const out = {};
     for (const part of String(hash || '').replace(/^#/, '').split('&')) {
         if (!part) continue;
-        const [k, v = ''] = part.split('=');
-        out[decodeURIComponent(k)] = decodeURIComponent(v);
+        // split at the first '=' only: values (a URL) may contain more
+        const i = part.indexOf('=');
+        const k = i < 0 ? part : part.slice(0, i), v = i < 0 ? '' : part.slice(i + 1);
+        try { out[decodeURIComponent(k)] = decodeURIComponent(v); } catch { out[k] = v; }
     }
     return out;
 }

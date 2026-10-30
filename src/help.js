@@ -21,9 +21,10 @@ export const HELP = {
     zonesMotion: 'Points inside exclusion zones aren\'t used to work out camera motion: an overlay that never moves on screen would make the camera look still. Leave on.',
 
     confirmN: 'A candidate becomes a confirmed detection (magenta box, #id) once seen in N of the last M frames. Example: found in frames 1, 2 and 4 = 3 of 5, confirmed. Higher N = fewer false alarms, slower confirmation.',
-    confirmM: 'The window for "seen in N of the last M frames". Higher M forgives more missed frames, e.g. an object blinking through compression or passing behind a branch.',
+    confirmM: 'The window for "seen in N of the last M frames". Higher M forgives more missed frames, e.g. an object blinking through compression or passing behind a branch, or one that moves in short jerks (try 3 of 8). Too high lets scattered noise confirm.',
     gateBase: 'How far from where it was expected an object may appear and still count as the same one, in px. Example: a zig-zagging insect needs more. Too big and random noise joins tracks.',
     maxSpeed: 'Fastest an object may move when first spotted, px per frame. Example: a car crossing 1920 px in 2 s at 25 fps moves ~38 px/frame; at the default 12 it never confirms: set ~40.',
+    holdFrames: 'Objects that stop now and then (a bird landing, a drone hovering) vanish while still: only movement is detected. A confirmed track missed for more than M frames is kept this long (dashed box at its last position). When the object moves again near there it gets its old id back, after confirming afresh. At 25 fps, 50 frames = 2 s. 0 = forget at once.',
     minTravel: 'An object must move at least this far from where it was first seen before it confirms. Rejects things that flicker in place (leaf edges, shimmering roofs). Slow objects confirm later: at 0.5 px/frame and 3 px, about 6 frames.',
 
     estWidth: 'Resolution used to work out camera motion. Higher = more precise, slower. Raise it if the Stabilised view shows slight double edges.',
@@ -41,6 +42,6 @@ export const HELP = {
 };
 
 export const SECTION_HELP = {
-    presets: 'One click sets detection, confirmation and camera motion as a starting point to tune from. Highest: faint 1–2 px specks moving slowly (a distant drone on grey sky). Mid: the defaults, birds or small drones 3–10 px with clear contrast. Low: big, obvious, fast things only (cars from a drone, a person running); fastest, fewest false alarms, ignores small specks. Change anything by hand and it shows Custom.',
+    presets: 'One click sets detection, confirmation and camera motion as a starting point to tune from. Highest: faint 1–2 px specks moving slowly (a distant drone on grey sky). Mid: the defaults, birds or small drones 3–10 px with clear contrast. Low: big, obvious, fast things only (cars from a drone, a person running); fastest, fewest false alarms, ignores small specks. Change anything by hand and it shows Custom. My presets: save the current settings, zones, or both under a name (e.g. "DJI OSD" with just the exclusion zones for that drone\'s overlay, or "faint + sky only" with both); Apply puts them back, leaving out what the preset doesn\'t hold. Saved in this browser; Export / Import moves them to another. #preset=<name> in the address applies one on opening.',
     area: 'Include (crop): look only here, e.g. just the sky above the treeline; detection gets faster in proportion (a quarter of the frame ≈ 4× quicker). Camera motion still uses the whole frame. Exclude: never look here, e.g. telemetry text, a timestamp, a logo, propeller tips in view; draw zones a little bigger than the overlay. Pick a kind, then drag on the video. Exclusion zones also apply inside inclusion zones.',
 };

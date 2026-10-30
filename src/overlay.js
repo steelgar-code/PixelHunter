@@ -124,6 +124,24 @@ export function drawTracks(ctx, tf, tracks, { colour = '#ff4fd8' } = {}) {
     }
 }
 
+// Held tracks (confirmed, not seen for a while): a dashed box at the last seen position.
+export function drawHeld(ctx, tf, tracks, { colour = '#ff4fd8' } = {}) {
+    const half = 8 * tf.dpr;
+    ctx.save();
+    ctx.globalAlpha = 0.6;
+    ctx.lineWidth = 1.5 * tf.dpr;
+    ctx.strokeStyle = ctx.fillStyle = colour;
+    ctx.setLineDash([3 * tf.dpr, 3 * tf.dpr]);
+    ctx.font = `600 ${11 * tf.dpr}px system-ui, sans-serif`;
+    ctx.textBaseline = 'bottom';
+    for (const t of tracks) {
+        const x = tf.x(t.lastSeen[0]), y = tf.y(t.lastSeen[1]);
+        ctx.strokeRect(x - half, y - half, 2 * half, 2 * half);
+        ctx.fillText(`#${t.id}`, x - half, y - half - 2 * tf.dpr);
+    }
+    ctx.restore();
+}
+
 // Exclusion zones ({ x, y, w, h } fractions of a w×h frame): a hatched red rectangle with its
 // number. `draft` is the one being drawn (dashed outline, no number).
 export function drawZones(ctx, tf, zones, w, h, draft = null) {

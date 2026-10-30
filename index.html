@@ -39,6 +39,10 @@
             <h2>Source</h2>
             <input type="file" id="file" accept="video/*" hidden>
             <button type="button" data-open>Open file…</button>
+            <form id="urlForm" class="row">
+                <input type="url" id="srcUrl" class="mono" placeholder="https://…/video.mp4" aria-label="Video URL" spellcheck="false">
+                <button type="submit">Open URL</button>
+            </form>
             <div class="row">
                 <select id="scene" aria-label="Synthetic scene"></select>
                 <button type="button" id="openScene">Load</button>
@@ -85,10 +89,31 @@
             </div>
         </section>
         <section>
-            <h2 data-help="presets">Sensitivity preset</h2>
+            <h2 data-help="presets">Presets</h2>
             <div id="presets" class="segmented" role="group" aria-label="Sensitivity preset"></div>
             <p id="presetHint" class="muted">Sets detection, confirmation and camera motion as a starting point to tune from.</p>
             <div class="help-host"></div>
+            <h3>My presets</h3>
+            <div class="row">
+                <select id="userPreset" aria-label="My presets"></select>
+                <button type="button" id="applyUserPreset" disabled>Apply</button>
+                <button type="button" id="deleteUserPreset" disabled title="Delete this preset">×</button>
+            </div>
+            <p id="userPresetInfo" class="muted" hidden></p>
+            <form id="savePresetForm" class="row">
+                <input type="text" id="presetName" placeholder="Name, e.g. DJI OSD, faint" aria-label="Preset name" maxlength="60">
+                <button type="submit" id="savePreset" disabled>Save</button>
+            </form>
+            <div class="row checks">
+                <span class="muted">Save:</span>
+                <label class="check"><input type="checkbox" id="saveSettings" checked>settings</label>
+                <label class="check"><input type="checkbox" id="saveZones" checked>zones</label>
+            </div>
+            <div class="row">
+                <button type="button" id="exportPresets" disabled>Export…</button>
+                <button type="button" id="importPresets">Import…</button>
+                <input type="file" id="presetFile" accept=".json,application/json" hidden>
+            </div>
         </section>
         <section>
             <h2 data-help="area">Detection area</h2>

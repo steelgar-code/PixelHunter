@@ -1,16 +1,17 @@
 // Wiring: OpenCV.js startup check, sources, frame loop, parameter controls and stats.
 import { loadCv, checkCv, CV_VERSION } from './cvLoader.js';
-import { fileSource } from './sources.js';
+import { fileSource, urlSource } from './sources.js';
 import { createFrameLoop } from './frameLoop.js';
 import { createSyntheticLoop } from './synthLoop.js';
 import { createScene } from './synth.js';
 import { SCENES } from './scenes.js';
 import { PARAM_DEFS, PRESETS, matchingPreset, resolveParams, parseHash, loadSaved, save } from './params.js';
 import { HELP, SECTION_HELP } from './help.js';
+import { loadPresets, savePresets, presetFrom, upsert, remove, find, changesOf, describe, toFile, fromFile } from './userPresets.js';
 import { createPipeline } from './pipeline.js';
 import { createScore } from './score.js';
 import { createExportLog, download } from './exportLog.js';
-import { fitOverlay, clear, drawPoints, drawNote, drawBoxes, drawTruth, drawTracks, drawZones, drawInclude } from './overlay.js';
+import { fitOverlay, clear, drawPoints, drawNote, drawBoxes, drawTruth, drawTracks, drawHeld, drawZones, drawInclude } from './overlay.js';
 import { normalizeZone, normalizeZones, parseZones, formatZones, zoneRect, inZones, loadZones, saveZones, MAX_ZONES, ZONES_KEY, INCLUDE_KEY } from './zones.js';
 
 const $ = id => document.getElementById(id);
@@ -22,13 +23,19 @@ const overlayCtx = overlay.getContext('2d');
 const stage = $('stage');
 
 const hash = parseHash(location.hash);
-const params = resolveParams(loadSaved(localStorage), hash);
+let userPresets = loadPresets(localStorage);
+// #preset=<name> may name one of the user's presets: its settings go under the hash values
+const hashUserPreset = hash.preset && !PRESETS[hash.preset] ? find(userPresets, hash.preset) : null;
+const params = resolveParams({ ...loadSaved(localStorage), ...(hashUserPreset ? hashUserPreset.values : {}) }, hash);
 // Zones of each kind: from the hash (#exclude=x,y,w,h;… / #include=…) if given, else the saved ones.
 const ZONE_KINDS = {
     exclude: { param: 'zones', storage: ZONES_KEY, list: 'zoneList', text: 'zoneText' },
     include: { param: 'include', storage: INCLUDE_KEY, list: 'includeList', text: 'includeText' },
 };
-for (const [kind, k] of Object.entries(ZONE_KINDS)) params[k.param] = kind in hash ? parseZones(hash[kind]) : loadZones(localStorage, k.storage);
+for (const [kind, k] of Object.entries(ZONE_KINDS)) {
+    params[k.param] = kind in hash ? parseZones(hash[kind])
+        : hashUserPreset && hashUserPreset[k.param] ? hashUserPreset[k.param] : loadZones(localStorage, k.storage);
+}
 let source = null;
 let loop = null;
 let cvState = { ready: false, cv: null, ms: null };
@@ -42,7 +49,8 @@ const APP_VERSION = '0.5.0';
 
 // Test hook (see tests/): recent frames and state, no effect on the UI.
 const FRAME_LOG = 5000;
-const ph = window.__ph = { params, frames: [], results: [], cvState, ready: false, error: null, setZones: (kind, z) => setZones(kind, z), applyPreset: k => applyPreset(k) };
+const ph = window.__ph = { params, frames: [], results: [], cvState, ready: false, error: null, setZones: (kind, z) => setZones(kind, z), applyPreset: k => applyPreset(k),
+    get userPresets() { return userPresets; } };
 
 function showBanner(text) {
     const b = $('banner');
@@ -264,6 +272,101 @@ function renderPresets() {
     updatePresets();
 }
 
+// --- user presets (settings and / or zones, by name) ----------------------------------------
+
+function renderUserPresets(selected) {
+    const sel = $('userPreset');
+    const keep = selected ?? sel.value;
+    sel.replaceChildren(...(userPresets.length ? userPresets.map(p => new Option(p.name, p.name)) : [new Option('none saved yet', '')]));
+    if (keep && find(userPresets, keep)) sel.value = find(userPresets, keep).name;
+    sel.disabled = !userPresets.length;
+    $('applyUserPreset').disabled = $('deleteUserPreset').disabled = !userPresets.length;
+    $('exportPresets').disabled = !userPresets.length;
+    disarmDelete();
+    showUserPresetInfo();
+    updateSaveButton();
+}
+
+function showUserPresetInfo(text) {
+    const p = find(userPresets, $('userPreset').value);
+    $('userPresetInfo').textContent = text || (p ? `Holds ${describe(p)}.` : '');
+    $('userPresetInfo').hidden = !$('userPresetInfo').textContent;
+}
+
+function updateSaveButton() {
+    const name = $('presetName').value.trim();
+    const what = $('saveSettings').checked || $('saveZones').checked;
+    $('savePreset').disabled = !name || !what;
+    $('savePreset').textContent = name && find(userPresets, name) ? 'Replace' : 'Save';
+}
+
+function applyUserPreset(name) {
+    const p = find(userPresets, name);
+    if (!p) return;
+    const ch = changesOf(p);
+    Object.assign(params, ch.values);
+    save(localStorage, params);
+    for (const sync of syncers.values()) sync();
+    for (const [kind, k] of Object.entries(ZONE_KINDS)) if (ch[k.param]) setZones(kind, ch[k.param]);
+    settingsChanged();
+    showUserPresetInfo(`Applied “${p.name}”: ${describe(p)}.`);
+}
+
+let deleteTimer = null;
+function disarmDelete() {
+    clearTimeout(deleteTimer);
+    $('deleteUserPreset').classList.remove('armed');
+    $('deleteUserPreset').textContent = '×';
+}
+
+function bindUserPresets() {
+    $('applyUserPreset').addEventListener('click', () => applyUserPreset($('userPreset').value));
+    $('userPreset').addEventListener('change', () => { disarmDelete(); showUserPresetInfo(); });
+    // delete takes two clicks: the first arms the button for a few seconds
+    $('deleteUserPreset').addEventListener('click', () => {
+        const b = $('deleteUserPreset');
+        if (!b.classList.contains('armed')) {
+            b.classList.add('armed');
+            b.textContent = 'Delete?';
+            deleteTimer = setTimeout(disarmDelete, 3000);
+            return;
+        }
+        userPresets = remove(userPresets, $('userPreset').value);
+        savePresets(localStorage, userPresets);
+        renderUserPresets();
+    });
+    for (const id of ['presetName', 'saveSettings', 'saveZones']) $(id).addEventListener('input', updateSaveButton);
+    $('savePresetForm').addEventListener('submit', e => {
+        e.preventDefault();
+        const name = $('presetName').value.trim();
+        const p = presetFrom(params, name, { settings: $('saveSettings').checked, zones: $('saveZones').checked });
+        if (!p) return;
+        userPresets = upsert(userPresets, p);
+        savePresets(localStorage, userPresets);
+        $('presetName').value = '';
+        renderUserPresets(p.name);
+        showUserPresetInfo(`Saved “${p.name}”: ${describe(p)}.`);
+    });
+    $('exportPresets').addEventListener('click', () => download('pixelhunter.presets.json', toFile(userPresets)));
+    $('importPresets').addEventListener('click', () => $('presetFile').click());
+    $('presetFile').addEventListener('change', async e => {
+        const file = e.target.files[0];
+        e.target.value = '';
+        if (!file) return;
+        let added = 0;
+        try {
+            const r = fromFile(JSON.parse(await file.text()), userPresets);
+            userPresets = r.list;
+            added = r.added;
+        } catch { /* not JSON: nothing added */ }
+        savePresets(localStorage, userPresets);
+        renderUserPresets();
+        showUserPresetInfo(added ? `Imported ${added} preset${added === 1 ? '' : 's'}.` : 'No presets found in that file.');
+    });
+    renderUserPresets(hashUserPreset ? hashUserPreset.name : undefined);
+    if (hashUserPreset) showUserPresetInfo(`Applied “${hashUserPreset.name}” from the address: ${describe(hashUserPreset)}.`);
+}
+
 function applyPreset(key) {
     Object.assign(params, PRESETS[key].values);
     save(localStorage, params);
@@ -349,7 +452,7 @@ function render() {
     if (params.view === 'points' && r) drawPoints(overlayCtx, tf, r.egoNext, r.small);
     if (r && params.showTruth && r.truth) drawTruth(overlayCtx, tf, truthTargets(r));
     if (r && params.showCandidates && params.view !== 'points') drawBoxes(overlayCtx, tf, r.candidates, { alpha: 0.55, width: 1 });
-    if (r && params.view !== 'points') drawTracks(overlayCtx, tf, r.confirmed);
+    if (r && params.view !== 'points') { drawHeld(overlayCtx, tf, r.held || []); drawTracks(overlayCtx, tf, r.confirmed); }
     if (params.showZones || drawing) drawZones(overlayCtx, tf, params.zones, g.w, g.h, drawKind === 'exclude' ? draft : null);
     if (note) drawNote(overlayCtx, tf, note);
     ph.note = note;
@@ -513,6 +616,14 @@ async function openSource(next) {
     updateTransport();
 }
 
+const URL_KEY = 'pixelhunter.url.v1';
+
+function openUrl(href) {
+    if (!href || !cvState.ready) return;
+    try { localStorage.setItem(URL_KEY, href); } catch { /* not remembered */ }
+    openSource(urlSource(href));
+}
+
 function openFile(file) {
     if (!file || !cvState.ready) return;
     openSource(fileSource(file));
@@ -572,6 +683,8 @@ function bindTransport() {
 
     for (const b of document.querySelectorAll('[data-open]')) b.addEventListener('click', () => $('file').click());
     $('file').addEventListener('change', e => { openFile(e.target.files[0]); e.target.value = ''; });
+    try { $('srcUrl').value = hash.src || localStorage.getItem(URL_KEY) || ''; } catch { /* storage blocked */ }
+    $('urlForm').addEventListener('submit', e => { e.preventDefault(); openUrl($('srcUrl').value.trim()); });
     const pick = $('scene');
     for (const [key, s] of Object.entries(SCENES)) pick.append(new Option(s.label, key));
     $('openScene').addEventListener('click', () => openScene(pick.value));
@@ -582,7 +695,10 @@ function bindTransport() {
     stage.addEventListener('drop', e => {
         e.preventDefault();
         stage.classList.remove('dragover');
-        openFile(e.dataTransfer.files[0]);
+        // a file, or a link dragged from another page
+        const link = e.dataTransfer.getData('text/uri-list') || e.dataTransfer.getData('text/plain');
+        if (e.dataTransfer.files.length) openFile(e.dataTransfer.files[0]);
+        else if (/^https?:\/\//.test(link.trim())) { $('srcUrl').value = link.trim().split('\n')[0]; openUrl($('srcUrl').value); }
     });
 }
 
@@ -627,7 +743,8 @@ function updateStats() {
     const area = r && r.detect.ok && r.detect.processedArea < 1 ? ` (${Math.round(r.detect.processedArea * 100)} % area)` : '';
     $('stDetect').textContent = r ? `${r.timings.detect.toFixed(1)} ms${area}` : '–';
     $('stCand').textContent = r ? (r.detect.ok ? `${r.candidates.length}${r.detect.noisy ? '+' : ''}` : '–') : '–';
-    $('stTracks').textContent = r ? `${r.confirmed.length} confirmed · ${r.tracks.length - r.tracks.filter(t => t.state === 'confirmed').length} tentative` : '–';
+    const nState = st => (r ? r.tracks.filter(t => t.state === st).length : 0);
+    $('stTracks').textContent = r ? `${r.confirmed.length} confirmed · ${nState('tentative')} tentative${nState('held') ? ` · ${nState('held')} held` : ''}` : '–';
     const sc = score && score.summary(), cs = confScore && confScore.summary();
     $('rowScore').hidden = !sc;
     const hit = v => (v === null ? '–' : `${Math.round(v * 100)} %`);
@@ -645,6 +762,7 @@ function updateStats() {
 async function start() {
     renderParams();
     renderPresets();
+    bindUserPresets();
     bindTransport();
     bindZones();
     setInterval(updateStats, 250);
@@ -672,6 +790,8 @@ async function start() {
         status.className = 'pill ok';
         $('stCv').textContent = `${(ms / 1000).toFixed(1)} s load`;
         ph.ready = true;
+        // #src=<URL-encoded link> opens that video at once (repeatable test runs)
+        if (hash.src) openUrl(hash.src);
     } catch (e) {
         status.textContent = 'OpenCV.js failed';
         status.className = 'pill error';
