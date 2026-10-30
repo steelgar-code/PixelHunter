@@ -14,11 +14,13 @@ export const PARAM_DEFS = [
 
     // detection (detect.js)
     { key: 'detectMode', label: 'Detection', group: 'detect', type: 'choice', default: 'robust',
-      choices: [['robust', 'Robust (3 frames)'], ['basic', 'Basic (2 frames)']] },
+      choices: [['robust', 'Robust (3 frames)'], ['adaptive', 'Adaptive (3 frames)'], ['basic', 'Basic (2 frames)']] },
     { key: 'procWidth', label: 'Processing width', group: 'detect', type: 'choice', default: '0',
       choices: [['0', 'Source'], ['1920', '1920'], ['1280', '1280'], ['960', '960'], ['640', '640']] },
     { key: 'stride', label: 'Frame stride', group: 'detect', type: 'number', default: 1, min: 1, max: 12, step: 1, unit: 'frames' },
     { key: 'threshold', label: 'Diff threshold', group: 'detect', type: 'number', default: 20, min: 5, max: 100, step: 1, unit: 'grey' },
+    { key: 'sigmas', label: 'Adaptive threshold', group: 'detect', type: 'number', default: 5, min: 3, max: 12, step: 0.5, unit: 'σ' },
+    { key: 'minContrast', label: 'Adaptive min contrast', group: 'detect', type: 'number', default: 4, min: 1, max: 30, step: 1, unit: 'grey' },
     { key: 'minArea', label: 'Min blob area', group: 'detect', type: 'number', default: 1, min: 1, max: 50, step: 1, unit: 'px' },
     { key: 'maxArea', label: 'Max blob area', group: 'detect', type: 'number', default: 400, min: 10, max: 5000, step: 10, unit: 'px' },
     { key: 'borderMargin', label: 'Border margin', group: 'detect', type: 'number', default: 3, min: 0, max: 20, step: 1, unit: 'px' },

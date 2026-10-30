@@ -1,6 +1,7 @@
 // Runs the test suites against a local copy of the app.
 //   node run.mjs                 all suites
 //   node run.mjs playback        only the named suite(s)
+//   node run.mjs bench           the benchmark (never part of a full run)
 import http from 'http';
 import fs from 'fs';
 import path from 'path';
@@ -13,6 +14,8 @@ const args = process.argv.slice(2);
 const only = args.filter(a => !a.startsWith('--')).map(a => a.replace(/\.mjs$/, ''));
 const suites = fs.readdirSync(here)
     .filter(f => f.endsWith('.mjs') && f !== 'run.mjs')
+    // the benchmark is long: only when named (node run.mjs bench)
+    .filter(f => !f.startsWith('bench') || only.includes(f.replace(/\.mjs$/, '')))
     .filter(f => !only.length || only.includes(f.replace(/\.mjs$/, '')))
     .sort();
 

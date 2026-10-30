@@ -122,7 +122,10 @@ export function createPipeline(cv, params) {
             if (!e || !e.ok) return { reason: e ? `camera motion: ${e.reason}` : `no previous frame${restarted()}` };
             fits.push(e);
         }
-        return { H: normalize(composeNewestFirst(fits.map(e => e.Hfull))), Hs: normalize(composeNewestFirst(fits.map(e => e.H))) };
+        // error of the composition (processing px): the worst step's 90th-percentile error, growing
+        // with the square root of the number of steps
+        const err = Math.max(...fits.map(e => (e.err90 ?? 0.15) * geom.kx)) * Math.sqrt(n);
+        return { H: normalize(composeNewestFirst(fits.map(e => e.Hfull))), Hs: normalize(composeNewestFirst(fits.map(e => e.H))), err };
     }
 
     // f: { image (CanvasImageSource) or imageData, width, height, time, frame, seq, gap, jump, truth? }
@@ -168,6 +171,7 @@ export function createPipeline(cv, params) {
             else {
                 const prev = at(2 * s), next = slot;
                 detect = detector.detect({ prev: prev.grey, cur: cur.grey, next: next.grey, Hprev: back.H, Hnext: fwd.H || null,
+                    fitErr: Math.max(back.err, fwd.err || 0),
                     small: { prev: prev.small, cur: cur.small, next: next.small, Hprev: back.Hs, Hnext: fwd.Hs || null } });
             }
         }
@@ -183,6 +187,10 @@ export function createPipeline(cv, params) {
             width: geom.w, height: geom.h, scale: geom.scale, stride: s,
             small: { w: geom.sw, h: geom.sh, kx: geom.kx, ky: geom.ky },
             egoPrev,                                          // t−1 → t
+            // how good that fit is, at processing resolution: 90 % of its inliers are within
+            // err90 px of where the fit puts them; coverage: share of grid cells it holds
+            fit: egoPrev && egoPrev.err90 !== undefined && egoPrev.err90 !== null
+                ? { err50: egoPrev.err50 * geom.kx, err90: egoPrev.err90 * geom.kx, coverage: egoPrev.coverage } : null,
             egoNext: at(s - 1).egoIn,                         // t → t+1
             detect,
             candidates: detect.candidates,

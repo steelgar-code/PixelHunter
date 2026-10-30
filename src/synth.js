@@ -13,6 +13,14 @@
 // Optional "trees": leafy, hard-edged discs that don't follow the ground exactly: closer to the
 // camera (parallax: they drift against the ground as the camera moves) and swaying in the wind.
 // They are background, not targets: anything detected on them is a false positive.
+//
+// Camera artefacts a homography can't describe, as on real drones and phones: `lens` (radial
+// barrel distortion: the frame corners show this much more of the scene, 0.05 = 5 %) and
+// `rollingShutter` (rows are exposed one after another over this fraction of a frame, top
+// first, so a turning camera skews the picture), and `motionBlur` (exposure time as a fraction
+// of a frame: the background is averaged over the camera's motion during it, so edges smear by
+// more when the camera moves faster). Targets follow lens and rolling shutter (and are drawn
+// sharp); trees and the ground truth H follow none (H stays the ideal camera's).
 
 import { mul, inv, project } from './homography.js';
 
@@ -81,6 +89,17 @@ export const CAMERAS = {
         cy: 3 * Math.sin(k * 0.7 + 1) + 2 * Math.sin(k * 1.9),
         rot: 0.01 * Math.sin(k * 0.5), scale: 1 + 0.01 * Math.sin(k * 0.2), px: 0, py: 0,
     }),
+    // strong handheld shake: larger jitter, quicker roll
+    shake: k => ({
+        cx: 3 * k + 10 * Math.sin(k * 0.9) + 5 * Math.sin(k * 2.3),
+        cy: 7 * Math.sin(k * 0.7 + 1) + 5 * Math.sin(k * 1.9),
+        rot: 0.025 * Math.sin(k * 0.6), scale: 1 + 0.015 * Math.sin(k * 0.25), px: 0, py: 0,
+    }),
+    // a drone turning while it flies: steady pan with a continuous roll of ~0.3° a frame
+    turn: k => ({ cx: 4 * k, cy: 1.5 * Math.sin(k * 0.3), rot: 0.005 * k, scale: 1, px: 1e-7 * Math.sin(k * 0.2), py: 0 }),
+    // a fast yaw (about 40°/s on a wide lens: 12–16 px a frame, speeding up and slowing down)
+    // with a slow roll
+    yaw: k => ({ cx: 14 * k + 25 * Math.sin(k * 0.12), cy: 2 * Math.sin(k * 0.4), rot: 0.003 * k, scale: 1, px: 0, py: 0 }),
 };
 
 export const DEFAULT_SCENE = {
@@ -95,6 +114,9 @@ export const DEFAULT_SCENE = {
     noise: 2,                  // sensor noise σ, grey levels
     exposure: null,            // { from, to, gain } ramp: offset grows by `gain` grey levels between frames from..to
     blur: false,               // 3×3 box blur of each frame
+    lens: 0,                   // radial barrel distortion at the frame corners (0.05 = 5 %)
+    rollingShutter: 0,         // readout time top to bottom, fraction of a frame
+    motionBlur: 0,             // exposure time, fraction of a frame (background smear)
     // [{ x, y, w, h, every? }] screen-fixed overlays, frame px: dark panel with bright 2×2
     // blocks; the right half of the blocks changes every `every` frames (default 1)
     osd: [],
@@ -124,12 +146,32 @@ export function createScene(options = {}) {
         return mul(toFrame, mul(persp, mul(rs, toCentre)));
     }
 
-    // world raster: covers every frame of the scene, plus a margin
+    // lens: observed pixel → where an ideal (pinhole) camera would see it; r = 1 at the corners
+    const lcx = (W - 1) / 2, lcy = (H - 1) / 2, R2 = lcx * lcx + lcy * lcy;
+    const ideal = (x, y) => {
+        if (!s.lens) return [x, y];
+        const f = 1 + s.lens * ((x - lcx) ** 2 + (y - lcy) ** 2) / R2;
+        return [lcx + (x - lcx) * f, lcy + (y - lcy) * f];
+    };
+    // … and back: ideal → observed (fixed-point iteration, converges for small distortion)
+    const observed = (u, v) => {
+        if (!s.lens) return [u, v];
+        let x = u, y = v;
+        for (let i = 0; i < 8; i++) {
+            const f = 1 + s.lens * ((x - lcx) ** 2 + (y - lcy) ** 2) / R2;
+            x = lcx + (u - lcx) / f; y = lcy + (v - lcy) / f;
+        }
+        return [x, y];
+    };
+    // rolling shutter: when row y of frame k is exposed
+    const rowTime = (k, y) => k + s.rollingShutter * ((y + 0.5) / H - 0.5);
+
+    // world raster: covers every frame of the scene (every row's exposure time), plus a margin
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
     for (let k = 0; k < s.frames; k++) {
-        const Gi = inv(pose(k));
-        for (const [x, y] of [[-1, -1], [W, -1], [W, H], [-1, H]]) {
-            const [u, v] = project(Gi, x, y);
+        for (const [x, y, e] of [[-1, -1, -1], [W, -1, -1], [W, H, -1], [-1, H, -1], [-1, -1, 1], [W, -1, 1], [W, H, 1], [-1, H, 1]]) {
+            const Gi = inv(pose(rowTime(k, y) + e * (s.motionBlur || 0) / 2));
+            const [u, v] = project(Gi, ...ideal(x, y));
             minX = Math.min(minX, u); maxX = Math.max(maxX, u);
             minY = Math.min(minY, v); maxY = Math.max(maxY, v);
         }
@@ -163,7 +205,14 @@ export function createScene(options = {}) {
         targets.forEach((t, id) => {
             const p = targetAt(t, k);
             if (!p) return;
-            const [cx, cy] = project(G, p[0], p[1]);
+            let [cx, cy] = project(G, p[0], p[1]);
+            if (s.rollingShutter || s.lens) {
+                // seen at its own row's exposure time, through the lens
+                for (let i = 0; i < 3; i++) {
+                    const kk = rowTime(k, cy), q = targetAt(t, kk) || p;
+                    [cx, cy] = observed(...project(pose(kk), q[0], q[1]));
+                }
+            }
             const half = t.size / 2;
             const box = { id, cx, cy, x: cx - half, y: cy - half, w: t.size, h: t.size };
             const hidden = s.osd.some(o => box.x + box.w > o.x && box.x < o.x + o.w && box.y + box.h > o.y && box.y < o.y + o.h);
@@ -176,18 +225,26 @@ export function createScene(options = {}) {
     function frame(k) {
         const Gi = inv(pose(k));
         const out = new Float32Array(W * H);
-        for (let y = 0; y < H; y++) {
-            for (let x = 0; x < W; x++) {
-                const d = Gi[6] * x + Gi[7] * y + Gi[8];
-                let u = (Gi[0] * x + Gi[1] * y + Gi[2]) / d - ox;
-                let v = (Gi[3] * x + Gi[4] * y + Gi[5]) / d - oy;
-                u = Math.min(ww - 1.001, Math.max(0, u));
-                v = Math.min(wh - 1.001, Math.max(0, v));
-                const iu = Math.floor(u), iv = Math.floor(v), fu = u - iu, fv = v - iv;
-                const i = iv * ww + iu;
-                const top = world[i] + (world[i + 1] - world[i]) * fu;
-                const bot = world[i + ww] + (world[i + ww + 1] - world[i + ww]) * fu;
-                out[y * W + x] = top + (bot - top) * fv;
+        // motion blur: the average of `n` instants spread over the exposure
+        const n = s.motionBlur > 0 ? 7 : 1;
+        for (let j = 0; j < n; j++) {
+            const dt = n > 1 ? s.motionBlur * (j / (n - 1) - 0.5) : 0;
+            const Gj = dt ? inv(pose(k + dt)) : Gi;
+            for (let y = 0; y < H; y++) {
+                const Gr = s.rollingShutter ? inv(pose(rowTime(k, y) + dt)) : Gj;
+                for (let x = 0; x < W; x++) {
+                    const [xi, yi] = s.lens ? ideal(x, y) : [x, y];
+                    const d = Gr[6] * xi + Gr[7] * yi + Gr[8];
+                    let u = (Gr[0] * xi + Gr[1] * yi + Gr[2]) / d - ox;
+                    let v = (Gr[3] * xi + Gr[4] * yi + Gr[5]) / d - oy;
+                    u = Math.min(ww - 1.001, Math.max(0, u));
+                    v = Math.min(wh - 1.001, Math.max(0, v));
+                    const iu = Math.floor(u), iv = Math.floor(v), fu = u - iu, fv = v - iv;
+                    const i = iv * ww + iu;
+                    const top = world[i] + (world[i + 1] - world[i]) * fu;
+                    const bot = world[i + ww] + (world[i + ww + 1] - world[i + ww]) * fu;
+                    out[y * W + x] += (top + (bot - top) * fv) / n;
+                }
             }
         }
         const t = truth(k);

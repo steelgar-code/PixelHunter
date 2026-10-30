@@ -740,6 +740,7 @@ function updateStats() {
     const e = r && r.egoNext;
     $('stPoints').textContent = e ? String(e.tracked) : '–';
     $('stInliers').textContent = e ? `${e.inliers} (${Math.round(e.ratio * 100)} %)` : '–';
+    $('stFit').textContent = r && r.fit ? `${r.fit.err90.toFixed(2)} px · ${Math.round(r.fit.coverage * 100)} %` : '–';
     $('stSkipped').textContent = String(skipped.count);
     $('stReason').textContent = Object.entries(skipped.reasons).map(([k, n]) => `${k}: ${n}`).join(' · ');
     $('stGrab').textContent = r ? `${r.timings.grab.toFixed(1)} ms` : '–';

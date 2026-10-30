@@ -14,13 +14,13 @@ export const REQUIRED_FUNCTIONS = [
     'cvtColor', 'resize', 'goodFeaturesToTrack', 'calcOpticalFlowPyrLK', 'findHomography',
     'warpPerspective', 'absdiff', 'subtract', 'add', 'erode', 'dilate', 'threshold',
     'bitwise_and', 'connectedComponentsWithStats', 'fillConvexPoly', 'mean', 'GaussianBlur',
-    'morphologyEx', 'min',
+    'morphologyEx', 'min', 'max', 'boxFilter', 'divide', 'compare',
 ];
 
 export const REQUIRED_CONSTANTS = [
     'CV_8U', 'CV_8UC4', 'CV_32F', 'CV_32FC2', 'CV_32S', 'CV_32SC2', 'CV_64F',
     'COLOR_RGBA2GRAY', 'INTER_LINEAR', 'INTER_AREA', 'INTER_NEAREST', 'WARP_INVERSE_MAP',
-    'BORDER_CONSTANT', 'THRESH_BINARY', 'MORPH_RECT', 'MORPH_OPEN', 'RANSAC', 'LINE_8',
+    'BORDER_CONSTANT', 'THRESH_BINARY', 'THRESH_TOZERO', 'THRESH_TOZERO_INV', 'CMP_GT', 'MORPH_RECT', 'MORPH_OPEN', 'RANSAC', 'LINE_8',
     'TermCriteria_COUNT', 'TermCriteria_EPS',
 ];
 

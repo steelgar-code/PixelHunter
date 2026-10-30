@@ -5,6 +5,11 @@
 // that have run short are topped up, so features stay spread over the image and one region
 // (or one large moving object) can't dominate the fit.
 //
+// Each fit also reports how good it is: the median and 90th-percentile distance between where
+// the fit puts each inlier and where it was tracked to (small-frame px), and the share of grid
+// cells with tracked points that also hold inliers (coverage). A fit can have plenty of inliers
+// and still be off in part of the frame; these show it.
+//
 // Points inside exclusion zones (zones.js) are neither seeded nor used: an overlay fixed on
 // screen tracks as "no motion" and would pull the fit towards the identity. Zones are grown by
 // half the LK window, since a point next to a zone's edge is tracked with the overlay in view.
@@ -82,6 +87,24 @@ export function createEgomotion(cv, options = {}) {
         if (!all) merged.set(pts);
         merged.set(added, all ? 0 : pts.length);
         pts = merged;
+    }
+
+    // { err50, err90 (small px), coverage } of a fit, from its inliers
+    function fitQuality(H, src, dst, points, idx) {
+        const errs = [];
+        const tracked = new Set(), covered = new Set();
+        for (let j = 0; j < idx.length; j++) {
+            const cell = cellOf(src[2 * j], src[2 * j + 1]);
+            tracked.add(cell);
+            if (points[idx[j] * 5 + 4] !== 1) continue;
+            covered.add(cell);
+            const x = src[2 * j], y = src[2 * j + 1];
+            const d = H[6] * x + H[7] * y + H[8];
+            errs.push(Math.hypot((H[0] * x + H[1] * y + H[2]) / d - dst[2 * j], (H[3] * x + H[4] * y + H[5]) / d - dst[2 * j + 1]));
+        }
+        errs.sort((a, b) => a - b);
+        const q = f => (errs.length ? errs[Math.min(errs.length - 1, Math.floor(errs.length * f))] : null);
+        return { err50: q(0.5), err90: q(0.9), coverage: tracked.size ? covered.size / tracked.size : 0 };
     }
 
     const excluded = (x, y) => p.zones && p.zones.length > 0 && inZones(p.zones, x, y, size.w, size.h, Math.max(3, (p.lkWin - 1) / 2));
@@ -176,6 +199,7 @@ export function createEgomotion(cv, options = {}) {
         }
         if (inlierMask) inlierMask.delete();
         result.ratio = result.tracked ? result.inliers / result.tracked : 0;
+        if (H) Object.assign(result, fitQuality(H, src, dst, result.points, idx));
 
         if (!result.reason) {
             if (!H) result.reason = 'no homography';
