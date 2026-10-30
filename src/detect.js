@@ -19,6 +19,16 @@
 // compared frame's zones land once warped onto t: an overlay fixed on screen sits somewhere
 // else in the stabilised neighbours, and would show up there as a difference too.
 //
+// Background-shift check (option): a candidate on the edge of something that doesn't follow the
+// ground exactly (a treetop closer to the camera, a branch in the wind) is the background sitting
+// slightly off, not an object moving on its own. For each candidate, the ring of background
+// around it is matched against each warped neighbour at shifts up to ±shiftMax px; if the shift
+// that best aligns the ring also makes the candidate's own pixels match (same 3×3 min / max test,
+// under the threshold), the candidate is dropped. A real mover isn't explained that way: the
+// background around it lines up with no shift (or the shift of the trees behind it), and the
+// object is somewhere else in the other frames. Surroundings without texture (sky) give no shift
+// to go by, so candidates there are kept.
+//
 // Inclusion zones crop detection: only the box around each zone (plus REGION_PAD, overlapping
 // boxes merged) is processed, so the cost falls with the area watched. Neighbours are warped
 // straight into the box (H composed with a translation), and only pixels inside an inclusion
@@ -30,6 +40,10 @@ import { zoneRect, regionRects } from './zones.js';
 const SHIFT = 4;               // fillConvexPoly fractional bits: vertices to 1/16 px
 const ZONE_PAD = 2;            // px around a zone: interpolation and the 3×3 min / max reach
 const REGION_PAD = 4;          // px of context around an inclusion zone (3×3 blur, min / max)
+const RING = 5;                // px of background around a candidate for the shift check
+const RING_TEXTURE = 1.5;      // grey levels: ring cost must vary at least this much over shifts
+const SHIFT_KEEP = 0.25;       // a candidate stays if more than this share of its pixels still differ
+const SHIFT_TOL = 1;           // px: min / max reach when testing the shifted pixels (2 loses real targets)
 
 export const DETECT_DEFAULTS = {
     detectMode: 'robust',  // 'robust' (three frames, M3) or 'basic' (two frames, M2)
@@ -42,6 +56,8 @@ export const DETECT_DEFAULTS = {
     brightness: true,      // match the neighbours' mean brightness to frame t (robust mode)
     blur: false,           // 3×3 Gaussian blur before differencing (robust mode)
     open: false,           // 3×3 opening of the final mask (removes 1–2 px blobs!)
+    shiftCheck: false,     // drop candidates explained by a small local shift of the background
+    shiftMax: 2,           // px: largest local shift tried
     zones: [],             // exclusion zones, { x, y, w, h } fractions of the frame
     include: [],           // inclusion zones: when set, only these areas are processed
 };
@@ -91,7 +107,7 @@ export function createDetector(cv, options = {}) {
         for (const k of Object.keys(m)) { m[k].delete(); delete m[k]; }
         size = { w, h };
         for (const k of ['warped', 'diff', 'mask', 'valid', 'labels', 'stats', 'centroids',
-            'ero', 'dil', 'tmp', 'dNext', 'mPrev', 'valid2', 'curBlur', 'sWarp', 'sValid', 'inc']) m[k] = new cv.Mat();
+            'ero', 'dil', 'tmp', 'dNext', 'mPrev', 'valid2', 'curBlur', 'sWarp', 'sValid', 'inc', 'wPrev', 'wNext']) m[k] = new cv.Mat();
         m.poly = new cv.Mat(4, 1, cv.CV_32SC2);
         if (!k3) k3 = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(3, 3));
     }
@@ -158,12 +174,12 @@ export function createDetector(cv, options = {}) {
     }
 
     // d = max(0, cur − dilate(w)) + max(0, erode(w) − cur), w = ref warped onto t by H.
-    function minMaxDiff(ref, H, offset, cur, out) {
-        warp(ref, H, m.warped, cur.cols, cur.rows);
-        if (offset) m.warped.convertTo(m.warped, -1, 1, offset);
-        if (p.blur) cv.GaussianBlur(m.warped, m.warped, new cv.Size(3, 3), 0);
-        cv.erode(m.warped, m.ero, k3);
-        cv.dilate(m.warped, m.dil, k3);
+    function minMaxDiff(ref, H, offset, cur, out, w = m.warped) {
+        warp(ref, H, w, cur.cols, cur.rows);
+        if (offset) w.convertTo(w, -1, 1, offset);
+        if (p.blur) cv.GaussianBlur(w, w, new cv.Size(3, 3), 0);
+        cv.erode(w, m.ero, k3);
+        cv.dilate(w, m.dil, k3);
         cv.subtract(cur, m.dil, out);
         cv.subtract(m.ero, cur, m.tmp);
         cv.add(out, m.tmp, out);
@@ -191,11 +207,79 @@ export function createDetector(cv, options = {}) {
         return { candidates: out, components: n - 1, noisy };
     }
 
+    // Is candidate c (full-frame px) explained by a local shift of the background? cur: frame t
+    // as { data, step, ox, oy } (region pixel (x, y) at data[(y + oy) * step + x + ox]); ns: the
+    // warped neighbours (region-sized Mats); mask: the region's detection mask.
+    function shiftExplained(c, r, cur, ns, mask) {
+        const S = Math.max(1, Math.round(p.shiftMax));
+        const bx0 = c.x - r.x, by0 = c.y - r.y, bx1 = bx0 + c.w, by1 = by0 + c.h;     // box, exclusive end
+        // the window must leave room for the shifts and the 3×3 min / max inside the region
+        const lo = S + SHIFT_TOL;
+        const wx0 = Math.max(lo, bx0 - RING), wy0 = Math.max(lo, by0 - RING);
+        const wx1 = Math.min(r.w - lo, bx1 + RING), wy1 = Math.min(r.h - lo, by1 + RING);
+        if (wx0 > bx0 - 2 || wy0 > by0 - 2 || wx1 < bx1 + 2 || wy1 < by1 + 2) return false;  // at the edge: keep
+        const cd = cur.data, cs = cur.step, M = mask.data;
+        const C = (x, y) => cd[(y + cur.oy) * cs + x + cur.ox];
+        for (const n of ns) {
+            const nd = n.data, W = r.w;
+            let best = Infinity, worst = 0, bdx = 0, bdy = 0;
+            for (let dy = -S; dy <= S; dy++) {
+                for (let dx = -S; dx <= S; dx++) {
+                    let sum = 0, cnt = 0;
+                    for (let y = wy0; y < wy1; y++) {
+                        const inRows = y >= by0 - 1 && y <= by1;
+                        for (let x = wx0; x < wx1; x++) {
+                            if (inRows && x >= bx0 - 1 && x <= bx1) continue;            // the ring only
+                            sum += Math.abs(C(x, y) - nd[(y + dy) * W + x + dx]);
+                            cnt++;
+                        }
+                    }
+                    const cost = sum / cnt + 0.05 * (Math.abs(dx) + Math.abs(dy));     // ties: the smaller shift
+                    if (cost < best) { best = cost; bdx = dx; bdy = dy; }
+                    if (cost > worst) worst = cost;
+                }
+            }
+            if (worst - best < RING_TEXTURE) return false;     // nothing to align on: keep
+            let bad = 0, total = 0;
+            for (let y = by0; y < by1; y++) {
+                for (let x = bx0; x < bx1; x++) {
+                    if (!M[y * W + x]) continue;
+                    total++;
+                    let mn = 255, mx = 0;
+                    for (let yy = y + bdy - SHIFT_TOL; yy <= y + bdy + SHIFT_TOL; yy++) {
+                        for (let xx = x + bdx - SHIFT_TOL; xx <= x + bdx + SHIFT_TOL; xx++) {
+                            const v = nd[yy * W + xx];
+                            if (v < mn) mn = v;
+                            if (v > mx) mx = v;
+                        }
+                    }
+                    const v = C(x, y);
+                    if (Math.max(0, v - mx) + Math.max(0, mn - v) > p.threshold) bad++;
+                }
+            }
+            if (!total || bad > total * SHIFT_KEEP) return false;
+        }
+        return true;
+    }
+
+    // Splits a region's candidates into kept and explained by a background shift.
+    function shiftFilter(b, r, src, view, full, ns) {
+        if (!p.shiftCheck || !b.candidates.length) return { ...b, rejected: [] };
+        const cur = src !== view ? { data: src.data, step: r.w, ox: 0, oy: 0 }
+            : full ? { data: view.data, step: r.w, ox: 0, oy: 0 }
+            : { data: src.__full.data, step: size.w, ox: r.x, oy: r.y };
+        const kept = [], rejected = [];
+        for (const c of b.candidates) (shiftExplained(c, r, cur, ns, m.mask) ? rejected : kept).push(c);
+        return { ...b, candidates: kept, rejected };
+    }
+
     // Frame t inside region r ({ x, y, w, h }, processing px): a view of `cur` and the
     // translation from full-frame to region coordinates.
     function regionOf(cur, r) {
         const full = r.x === 0 && r.y === 0 && r.w === size.w && r.h === size.h;
-        return { view: full ? cur : cur.roi(new cv.Rect(r.x, r.y, r.w, r.h)), full, T: [1, 0, -r.x, 0, 1, -r.y, 0, 0, 1] };
+        const view = full ? cur : cur.roi(new cv.Rect(r.x, r.y, r.w, r.h));
+        if (!full) view.__full = cur;      // an ROI's own data isn't contiguous: read through the frame
+        return { view, full, T: [1, 0, -r.x, 0, 1, -r.y, 0, 0, 1] };
     }
 
     // Valid pixels of region r: inside every compared frame's warped outline (Hs: those frames
@@ -236,13 +320,13 @@ export function createDetector(cv, options = {}) {
         const { view, full, T } = regionOf(cur, r);
         try {
             const Hp = mul(T, Hprev);
-            warp(prev, Hp, m.warped, r.w, r.h);
-            cv.absdiff(view, m.warped, m.diff);
+            warp(prev, Hp, m.wPrev, r.w, r.h);
+            cv.absdiff(view, m.wPrev, m.diff);
             cv.threshold(m.diff, m.mask, p.threshold, 255, cv.THRESH_BINARY);
             regionValid(r, T, [Hp]);
             cv.bitwise_and(m.mask, m.valid, m.mask);
             if (!full) keepViews(r, m.diff);
-            return blobs(m.mask, r.x, r.y);
+            return shiftFilter(blobs(m.mask, r.x, r.y), r, view, view, full, [m.wPrev]);
         } finally {
             if (!full) view.delete();
         }
@@ -258,8 +342,8 @@ export function createDetector(cv, options = {}) {
                 cv.GaussianBlur(view, m.curBlur, new cv.Size(3, 3), 0);
                 src = m.curBlur;
             }
-            minMaxDiff(prev, Hp, off[0], src, m.diff);
-            minMaxDiff(next, Hn, off[1], src, m.dNext);
+            minMaxDiff(prev, Hp, off[0], src, m.diff, m.wPrev);
+            minMaxDiff(next, Hn, off[1], src, m.dNext, m.wNext);
             cv.threshold(m.diff, m.mPrev, p.threshold, 255, cv.THRESH_BINARY);
             cv.threshold(m.dNext, m.mask, p.threshold, 255, cv.THRESH_BINARY);
             cv.bitwise_and(m.mask, m.mPrev, m.mask);
@@ -270,7 +354,7 @@ export function createDetector(cv, options = {}) {
                 cv.min(m.diff, m.dNext, m.tmp);
                 keepViews(r, m.tmp);
             }
-            return blobs(m.mask, r.x, r.y);
+            return shiftFilter(blobs(m.mask, r.x, r.y), r, src, view, full, [m.wPrev, m.wNext]);
         } finally {
             if (!full) view.delete();
         }
@@ -299,18 +383,19 @@ export function createDetector(cv, options = {}) {
                 m[k].setTo(new cv.Scalar(0));
             }
         }
-        const out = { candidates: [], components: 0, noisy: false };
+        const out = { candidates: [], rejected: [], components: 0, noisy: false };
         for (const r of regions || [{ x: 0, y: 0, w: size.w, h: size.h }]) {
             const b = mode === 'robust'
                 ? detectRobust(args.prev, args.cur, args.next, args.Hprev, args.Hnext, brightness, r)
                 : detectBasic(args.prev, args.cur, args.Hprev, r);
             out.candidates.push(...b.candidates);
+            out.rejected.push(...b.rejected);
             out.components += b.components;
             out.noisy ||= b.noisy;
         }
         if (out.candidates.length > p.maxCandidates) { out.candidates.length = p.maxCandidates; out.noisy = true; }
         const t1 = performance.now();
-        return { ...out, ...(brightness ? { brightness } : {}), regions: regions || null,
+        return { ...out, shiftRejected: out.rejected.length, ...(brightness ? { brightness } : {}), regions: regions || null,
             processedArea: regions ? regions.reduce((a, r) => a + r.w * r.h, 0) / (size.w * size.h) : 1,
             timings: { diff: t1 - t0 } };
     }

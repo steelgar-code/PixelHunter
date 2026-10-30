@@ -25,6 +25,8 @@ export const PARAM_DEFS = [
     { key: 'brightness', label: 'Match brightness', group: 'detect', type: 'bool', default: true },
     { key: 'blur', label: '3×3 blur', group: 'detect', type: 'bool', default: false },
     { key: 'open', label: '3×3 opening (drops 1–2 px blobs)', group: 'detect', type: 'bool', default: false },
+    { key: 'shiftCheck', label: 'Drop background-shift edges (trees, branches)', group: 'detect', type: 'bool', default: false, preset: false },
+    { key: 'shiftMax', label: 'Max background shift', group: 'detect', type: 'number', default: 2, min: 1, max: 5, step: 1, unit: 'px', preset: false },
     { key: 'zonesMotion', label: 'Also ignore zones for camera motion', group: 'zones', type: 'bool', default: true },
 
     // temporal confirmation (tracker.js)
@@ -56,9 +58,10 @@ export const PARAM_DEFS = [
 const DEFS = new Map(PARAM_DEFS.map(d => [d.key, d]));
 
 // Sensitivity presets: starting points for detection, confirmation and camera motion, to tune
-// from by hand. They set those groups only (not playback, view or zones). Mid is the defaults.
+// from by hand. They set those groups only (not playback, view or zones), and leave options
+// marked preset: false alone (the background-shift check). Mid is the defaults.
 // Areas are in processing-resolution px.
-const MID = Object.fromEntries(PARAM_DEFS.filter(d => ['detect', 'track', 'motion'].includes(d.group) && d.key !== 'zonesMotion').map(d => [d.key, d.default]));
+const MID = Object.fromEntries(PARAM_DEFS.filter(d => ['detect', 'track', 'motion'].includes(d.group) && d.preset !== false).map(d => [d.key, d.default]));
 export const PRESETS = {
     highest: {
         label: 'Highest',

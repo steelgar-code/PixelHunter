@@ -51,6 +51,23 @@ export const SCENES = {
         // the overlays as exclusion zones (fractions of the frame), a little larger than drawn
         zones: [{ x: 12 / 960, y: 10 / 540, w: 188 / 960, h: 36 / 540 }, { x: 0, y: 496 / 540, w: 1, h: 44 / 540 }],
     },
+    'trees': {
+        label: 'Pan · trees (parallax, wind), 3 px dots',
+        options: {
+            width: 960, height: 540, frames: 150, camera: 'pan', seed: 27, noise: 2,
+            trees: [
+                { fx: 150, fy: 120, r: 45, parallax: 0.12, sway: 1.5, swayPeriod: 37 },
+                { fx: 420, fy: 380, r: 60, parallax: 0.18, sway: 2.5, swayPeriod: 29 },
+                { fx: 700, fy: 160, r: 35, parallax: 0.08, sway: 3, swayPeriod: 23 },
+                { fx: 820, fy: 420, r: 50, parallax: 0.15, sway: 1, swayPeriod: 41, dark: false },
+                { fx: 280, fy: 330, r: 28, parallax: 0.22, sway: 2, swayPeriod: 33 },
+            ],
+            targets: [
+                dot(3, 50, 560, 280, 6 + 1.8, 2.5 + 0.7),
+                dot(3, -45, 120, 460, 6 + 1.5, 2.5 - 1.2),
+            ],
+        },
+    },
     'exposure': {
         label: 'Pan · exposure steps, 3 px dot',
         options: {

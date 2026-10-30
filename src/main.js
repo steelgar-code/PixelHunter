@@ -451,7 +451,11 @@ function render() {
     const r = lastOut.result;
     if (params.view === 'points' && r) drawPoints(overlayCtx, tf, r.egoNext, r.small);
     if (r && params.showTruth && r.truth) drawTruth(overlayCtx, tf, truthTargets(r));
-    if (r && params.showCandidates && params.view !== 'points') drawBoxes(overlayCtx, tf, r.candidates, { alpha: 0.55, width: 1 });
+    if (r && params.showCandidates && params.view !== 'points') {
+        // dropped by the background-shift check: grey, so the check can be judged
+        if (r.detect.rejected && r.detect.rejected.length) drawBoxes(overlayCtx, tf, r.detect.rejected, { colour: '#8b939c', alpha: 0.6, width: 1 });
+        drawBoxes(overlayCtx, tf, r.candidates, { alpha: 0.55, width: 1 });
+    }
     if (r && params.view !== 'points') { drawHeld(overlayCtx, tf, r.held || []); drawTracks(overlayCtx, tf, r.confirmed); }
     if (params.showZones || drawing) drawZones(overlayCtx, tf, params.zones, g.w, g.h, drawKind === 'exclude' ? draft : null);
     if (note) drawNote(overlayCtx, tf, note);
@@ -742,7 +746,8 @@ function updateStats() {
     $('stEgo').textContent = r ? `${r.timings.ego.toFixed(1)} ms` : '–';
     const area = r && r.detect.ok && r.detect.processedArea < 1 ? ` (${Math.round(r.detect.processedArea * 100)} % area)` : '';
     $('stDetect').textContent = r ? `${r.timings.detect.toFixed(1)} ms${area}` : '–';
-    $('stCand').textContent = r ? (r.detect.ok ? `${r.candidates.length}${r.detect.noisy ? '+' : ''}` : '–') : '–';
+    const dropped = r && r.detect.ok && r.detect.shiftRejected ? ` (${r.detect.shiftRejected} shift)` : '';
+    $('stCand').textContent = r ? (r.detect.ok ? `${r.candidates.length}${r.detect.noisy ? '+' : ''}${dropped}` : '–') : '–';
     const nState = st => (r ? r.tracks.filter(t => t.state === st).length : 0);
     $('stTracks').textContent = r ? `${r.confirmed.length} confirmed · ${nState('tentative')} tentative${nState('held') ? ` · ${nState('held')} held` : ''}` : '–';
     const sc = score && score.summary(), cs = confScore && confScore.summary();

@@ -10,6 +10,9 @@
 // Ground truth per frame: H (frame k−1 → frame k, = G_k·G_{k−1}⁻¹) and each target's box.
 // An optional OSD (text-like blocks fixed on screen, part of them changing every few frames)
 // is drawn over everything, like a drone's telemetry overlay; targets under it are hidden.
+// Optional "trees": leafy, hard-edged discs that don't follow the ground exactly: closer to the
+// camera (parallax: they drift against the ground as the camera moves) and swaying in the wind.
+// They are background, not targets: anything detected on them is a false positive.
 
 import { mul, inv, project } from './homography.js';
 
@@ -95,6 +98,9 @@ export const DEFAULT_SCENE = {
     // [{ x, y, w, h, every? }] screen-fixed overlays, frame px: dark panel with bright 2×2
     // blocks; the right half of the blocks changes every `every` frames (default 1)
     osd: [],
+    // [{ x, y (world, or fx, fy in frame 0), r (px), parallax? (0.1 = 10 % closer-than-ground
+    // drift), sway? (px), swayPeriod? (frames), dark? }]
+    trees: [],
     // { size, contrast, vx, vy, ax?, ay?, from?, to?, stops? } plus a start position: x, y in
     // world coordinates or fx, fy in frame `from`'s coordinates. Velocities in world px per
     // frame. stops: [[k0, k1], …] frames during which the target stands still (stop and go).
@@ -132,6 +138,7 @@ export function createScene(options = {}) {
     const ww = Math.ceil(maxX) + 4 - ox, wh = Math.ceil(maxY) + 4 - oy;
     const world = makeWorld(ww, wh, rand, s);
     const noiseSeed = Math.floor(rand() * 2 ** 32);
+    const trees = s.trees.map((t, n) => makeTree(t, n, s.seed, inv(pose(0)), camera));
 
     // targets given in frame coordinates start where that frame sees them
     const targets = s.targets.map(t => {
@@ -196,6 +203,7 @@ export function createScene(options = {}) {
                 }
             }
         }
+        for (const t of trees) drawTree(out, W, H, t, k, Gi, pose(k));
         s.osd.forEach((o, n) => drawOsd(out, W, H, o, k, s.seed * 131 + n));
         if (s.blur) boxBlur3(out, W, H);
         if (s.exposure) {
@@ -214,6 +222,56 @@ export function createScene(options = {}) {
     }
 
     return { options: s, width: W, height: H, frames: s.frames, fps: s.fps, pose, truth, frame };
+}
+
+// A tree: a disc of leafy texture (dark, with bright speckles), its own seed.
+function makeTree(t, n, seed, G0i, camera) {
+    let x = t.x, y = t.y;
+    if (t.fx !== undefined) [x, y] = project(G0i, t.fx, t.fy);
+    const r = t.r, size = Math.ceil(2 * r + 3);
+    const rand = mulberry32(seed * 977 + n * 31 + 5);
+    const tex = new Float32Array(size * size);
+    const base = t.dark === false ? 170 : 55;
+    for (let i = 0; i < tex.length; i++) tex[i] = base + (rand() - 0.5) * 50 + (rand() < 0.08 ? 90 : 0);
+    // soften the speckle a little (leaves are a few px across)
+    const soft = tex.slice();
+    for (let yy = 1; yy < size - 1; yy++) for (let xx = 1; xx < size - 1; xx++) {
+        const i = yy * size + xx;
+        soft[i] = (tex[i] * 2 + tex[i - 1] + tex[i + 1] + tex[i - size] + tex[i + size]) / 6;
+    }
+    const c0 = camera(0);
+    return { x, y, r, size, tex: soft, parallax: t.parallax || 0, sway: t.sway || 0, period: t.swayPeriod || 40, phase: rand() * 6.28, camera, c0 };
+}
+
+// Tree centre in world coordinates at frame k: parallax drifts it against the camera's motion,
+// sway moves it back and forth.
+function treeAt(t, k) {
+    const c = t.camera(k);
+    const w = Math.sin(2 * Math.PI * k / t.period + t.phase) * t.sway;
+    return [t.x - t.parallax * (c.cx - t.c0.cx) + w, t.y - t.parallax * (c.cy - t.c0.cy) + 0.3 * w];
+}
+
+function drawTree(img, W, H, t, k, Gi, G) {
+    const [tx, ty] = treeAt(t, k);
+    const [fx, fy] = project(G, tx, ty);
+    const reach = t.r * 1.2 + 2;
+    const x0 = Math.max(0, Math.floor(fx - reach)), x1 = Math.min(W - 1, Math.ceil(fx + reach));
+    const y0 = Math.max(0, Math.floor(fy - reach)), y1 = Math.min(H - 1, Math.ceil(fy + reach));
+    const half = (t.size - 1) / 2;
+    for (let y = y0; y <= y1; y++) {
+        for (let x = x0; x <= x1; x++) {
+            const [u, v] = project(Gi, x, y);
+            const dx = u - tx, dy = v - ty, d = Math.hypot(dx, dy);
+            if (d > t.r + 0.5) continue;
+            const a = Math.min(1, t.r + 0.5 - d);          // antialiased edge
+            const tu = Math.min(t.size - 1.001, Math.max(0, dx + half)), tv = Math.min(t.size - 1.001, Math.max(0, dy + half));
+            const iu = Math.floor(tu), iv = Math.floor(tv), fu = tu - iu, fv = tv - iv, i = iv * t.size + iu;
+            const top = t.tex[i] + (t.tex[i + 1] - t.tex[i]) * fu;
+            const bot = t.tex[i + t.size] + (t.tex[i + t.size + 1] - t.tex[i + t.size]) * fu;
+            const val = top + (bot - top) * fv;
+            img[y * W + x] = img[y * W + x] * (1 - a) + val * a;
+        }
+    }
 }
 
 function drawOsd(img, W, H, o, k, seed) {

@@ -18,6 +18,8 @@ export const HELP = {
     brightness: 'Cancels automatic exposure changes, e.g. the camera brightening as it turns away from the sun. Leave on.',
     blur: 'Smooths the picture first: less noise and compression blockiness, but 1–2 px objects get erased. Only for bigger targets.',
     open: 'Deletes every spot only 1–2 px wide. Same trade-off as the blur, stronger.',
+    shiftCheck: 'For false detections along tree edges and branches: things that don\'t follow the ground exactly (treetops closer to the camera, branches in the wind). For each candidate, the background around it is nudged by up to "Max background shift" px; if that makes the difference vanish, it was just the background sitting slightly off, and the candidate is dropped (grey boxes). A real object isn\'t explained that way. Candidates in plain sky are never dropped. Not changed by the presets.',
+    shiftMax: 'Largest nudge tried by the background-shift check, px. 2 covers treetops at stride 1 and light wind; raise to 3–4 for strong sway or a larger stride. Too large and slow objects next to texture may be dropped too.',
     zonesMotion: 'Points inside exclusion zones aren\'t used to work out camera motion: an overlay that never moves on screen would make the camera look still. Leave on.',
 
     confirmN: 'A candidate becomes a confirmed detection (magenta box, #id) once seen in N of the last M frames. Example: found in frames 1, 2 and 4 = 3 of 5, confirmed. Higher N = fewer false alarms, slower confirmation.',
