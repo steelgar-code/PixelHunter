@@ -3,6 +3,7 @@
 
 export const HELP = {
     mode: 'Real-time plays at normal speed and skips frames it can\'t keep up with (counted as Dropped): for watching. Every frame never skips: it slows playback down, or steps frame by frame. Use it when testing settings, so two runs give the same result.',
+    speed: 'Playback speed. Real-time plays at ×2 or ×3 and skips whatever processing can\'t keep up with (more Dropped); Every frame goes at most this fast and still processes every frame.',
     view: 'Display only, doesn\'t change detection. Original: the video. Stabilised: the previous frame lined up onto this one, 50/50; sharp = good alignment, double edges = camera motion is off. Points: points used for camera motion (green used, red rejected, grey lost). Raw diff: what\'s left after lining up, ×4; movers glow, the background should be black. Mask: pixels that passed the diff threshold, the raw material for candidates.',
     showCandidates: 'Faint yellow boxes around everything that differed this frame, before confirmation. Turn off to see only confirmed detections (magenta).',
     showTruth: 'Test scenes only: dashed circles where the targets really are, to compare with what was found.',
@@ -29,6 +30,10 @@ export const HELP = {
     gateBase: 'How far from where it was expected an object may appear and still count as the same one, in px. Example: a zig-zagging insect needs more. Too big and random noise joins tracks.',
     maxSpeed: 'Fastest an object may move when first spotted, px per frame. Example: a car crossing 1920 px in 2 s at 25 fps moves ~38 px/frame; at the default 12 it never confirms: set ~40.',
     holdFrames: 'Objects that stop now and then (a bird landing, a drone hovering) vanish while still: only movement is detected. A confirmed track missed for more than M frames is kept this long (dashed box at its last position). When the object moves again near there it gets its old id back, after confirming afresh. At 25 fps, 50 frames = 2 s. 0 = forget at once.',
+    pathCheck: 'A track only confirms when its recent sightings lie on a steady, straight path (within Path tolerance). Noise picked up from blob to blob jumps around, and a swaying branch goes back and forth; neither does. Turn off to compare.',
+    pathTolerance: 'How far sightings may stray from a straight, steady path and still confirm, px (RMS). Raise for objects that weave or for noisy positions (low resolution, compression); lower to be stricter.',
+    crowdGate: 'Where candidates are dense (noise, compression, foliage), the radius in which a track looks for its next sighting shrinks, so it can\'t hop to an unrelated blob nearby. The long jump lines of a track chaining noise come from this. Turn off to compare.',
+    motionPause: 'When a frame\'s camera motion can\'t be fitted (see Skipped), tracks can\'t be moved with the scene: their paths are cleared and nothing new starts or confirms until motion is back, instead of paths jumping by however far the camera moved. Turn off to compare.',
     minTravel: 'An object must move at least this far from where it was first seen before it confirms. Rejects things that flicker in place (leaf edges, shimmering roofs). Slow objects confirm later: at 0.5 px/frame and 3 px, about 6 frames.',
 
     estWidth: 'Resolution used to work out camera motion. Higher = more precise, slower. Raise it if the Stabilised view shows slight double edges.',
@@ -47,5 +52,6 @@ export const HELP = {
 
 export const SECTION_HELP = {
     presets: 'One click sets detection, confirmation and camera motion as a starting point to tune from. Highest: faint 1–2 px specks moving slowly (a distant drone on grey sky). Mid: the defaults, birds or small drones 3–10 px with clear contrast. Low: big, obvious, fast things only (cars from a drone, a person running); fastest, fewest false alarms, ignores small specks. Change anything by hand and it shows Custom. My presets: save the current settings, zones, or both under a name (e.g. "DJI OSD" with just the exclusion zones for that drone\'s overlay, or "faint + sky only" with both); Apply puts them back, leaving out what the preset doesn\'t hold. Saved in this browser; Export / Import moves them to another. #preset=<name> in the address applies one on opening.',
+    objects: 'The latest confirmed objects (magenta ● = on screen now): size in source pixels, contrast against the surroundings in grey levels (− darker, + brighter), speed against the background in px per frame, and when and how long it was seen. Click an object to jump to the last frame it was seen; ★ pins it to the top and draws it in orange on the video.',
     area: 'Include (crop): look only here, e.g. just the sky above the treeline; detection gets faster in proportion (a quarter of the frame ≈ 4× quicker). Camera motion still uses the whole frame. Exclude: never look here, e.g. telemetry text, a timestamp, a logo, propeller tips in view; draw zones a little bigger than the overlay. Pick a kind, then drag on the video. Exclusion zones also apply inside inclusion zones.',
 };

@@ -27,16 +27,19 @@
             </div>
         </div>
         <div class="transport">
+            <button type="button" id="back" disabled title="One frame back (←)">‹ Back</button>
             <button type="button" id="play" disabled title="Play / pause (Space)">Play</button>
             <button type="button" id="step" disabled title="Step one frame (→)">Step ›</button>
             <input type="range" id="timeline" min="0" max="1000" value="0" step="1" disabled aria-label="Position">
             <span id="time" class="mono">0:00.000</span>
+            <button type="button" id="bookmark" disabled title="Bookmark this frame (B)">☆ Mark</button>
         </div>
+        <div id="bookmarks" class="bookmarks" hidden></div>
     </section>
 
     <aside class="panel">
-        <section>
-            <h2>Source</h2>
+        <details open id="pSource">
+            <summary>Source</summary>
             <input type="file" id="file" accept="video/*" hidden>
             <button type="button" data-open>Open file…</button>
             <form id="urlForm" class="row">
@@ -48,17 +51,17 @@
                 <button type="button" id="openScene">Load</button>
             </div>
             <p id="srcLabel" class="muted">No video</p>
-        </section>
-        <section>
-            <h2>Processing</h2>
+        </details>
+        <details open id="pProcessing">
+            <summary>Processing</summary>
             <div id="params-playback" class="params"></div>
-        </section>
-        <section>
-            <h2>View</h2>
+        </details>
+        <details open id="pView">
+            <summary>View</summary>
             <div id="params-view" class="params"></div>
-        </section>
-        <section>
-            <h2>Stats</h2>
+        </details>
+        <details open id="pStats">
+            <summary>Stats</summary>
             <dl class="stats mono">
                 <dt>Source</dt><dd id="stSource">–</dd>
                 <dt>Processed</dt><dd id="stFps">–</dd>
@@ -80,17 +83,23 @@
                 <dt>OpenCV.js</dt><dd id="stCv">–</dd>
             </dl>
             <p id="stReason" class="muted"></p>
-        </section>
-        <section>
-            <h2>Detections</h2>
+        </details>
+        <details open id="pDetections">
+            <summary>Detections</summary>
             <p id="logCount" class="muted">No confirmed detections yet</p>
             <div class="row">
                 <button type="button" id="exportJson" disabled>Export JSON</button>
                 <button type="button" id="clearLog" disabled>Clear</button>
             </div>
-        </section>
-        <section>
-            <h2 data-help="presets">Presets</h2>
+        </details>
+        <details open id="pObjects">
+            <summary data-help="objects">Objects</summary>
+            <div class="help-host"></div>
+            <ol id="objectList" class="objects"></ol>
+            <p id="objectsEmpty" class="muted">No confirmed objects yet</p>
+        </details>
+        <details open id="pPresets">
+            <summary data-help="presets">Presets</summary>
             <div id="presets" class="segmented" role="group" aria-label="Sensitivity preset"></div>
             <p id="presetHint" class="muted">Sets detection, confirmation and camera motion as a starting point to tune from.</p>
             <div class="help-host"></div>
@@ -98,6 +107,7 @@
             <div class="row">
                 <select id="userPreset" aria-label="My presets"></select>
                 <button type="button" id="applyUserPreset" disabled>Apply</button>
+                <button type="button" id="updateUserPreset" disabled>Update</button>
                 <button type="button" id="deleteUserPreset" disabled title="Delete this preset">×</button>
             </div>
             <p id="userPresetInfo" class="muted" hidden></p>
@@ -115,9 +125,9 @@
                 <button type="button" id="importPresets">Import…</button>
                 <input type="file" id="presetFile" accept=".json,application/json" hidden>
             </div>
-        </section>
-        <section>
-            <h2 data-help="area">Detection area</h2>
+        </details>
+        <details open id="pArea">
+            <summary data-help="area">Detection area</summary>
             <div class="segmented" role="radiogroup" aria-label="A drag adds">
                 <label><input type="radio" name="zoneKind" value="include">Include (crop)</label>
                 <label><input type="radio" name="zoneKind" value="exclude" checked>Exclude</label>
@@ -139,20 +149,20 @@
                 <span class="muted">x,y,w,h as fractions of the frame, ; between zones</span>
             </label>
             <div id="params-zones" class="params"></div>
-        </section>
-        <details open>
+        </details>
+        <details id="pDetection" open>
             <summary>Detection</summary>
             <div id="params-detect" class="params"></div>
         </details>
-        <details>
+        <details id="pConfirmation">
             <summary>Confirmation</summary>
             <div id="params-track" class="params"></div>
         </details>
-        <details>
+        <details id="pMotion">
             <summary>Camera motion</summary>
             <div id="params-motion" class="params"></div>
         </details>
-        <details>
+        <details id="pDebug">
             <summary>Debug</summary>
             <div id="params-debug" class="params"></div>
         </details>

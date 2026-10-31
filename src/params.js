@@ -6,6 +6,8 @@
 export const PARAM_DEFS = [
     { key: 'mode', label: 'Processing', group: 'playback', type: 'choice', default: 'realtime',
       choices: [['realtime', 'Real-time'], ['everyFrame', 'Every frame']] },
+    { key: 'speed', label: 'Speed', group: 'playback', type: 'choice', default: '1',
+      choices: [['1', '×1'], ['2', '×2'], ['3', '×3']] },
     { key: 'view', label: 'View', group: 'view', type: 'choice', default: 'original',
       choices: [['original', 'Original'], ['stabilised', 'Stabilised'], ['points', 'Points'], ['diff', 'Raw diff'], ['mask', 'Mask']] },
     { key: 'showCandidates', label: 'Unconfirmed candidates', group: 'view', type: 'bool', default: true },
@@ -38,6 +40,10 @@ export const PARAM_DEFS = [
     { key: 'maxSpeed', label: 'Max speed (new tracks)', group: 'track', type: 'number', default: 12, min: 2, max: 60, step: 1, unit: 'px/frame' },
     { key: 'minTravel', label: 'Min travel to confirm', group: 'track', type: 'number', default: 3, min: 0, max: 30, step: 1, unit: 'px' },
     { key: 'holdFrames', label: 'Keep lost tracks', group: 'track', type: 'number', default: 50, min: 0, max: 250, step: 5, unit: 'frames' },
+    { key: 'pathCheck', label: 'Confirm steady paths only', group: 'track', type: 'bool', default: true },
+    { key: 'pathTolerance', label: 'Path tolerance', group: 'track', type: 'number', default: 1.5, min: 0.5, max: 6, step: 0.1, unit: 'px' },
+    { key: 'crowdGate', label: 'Tighter matching where crowded', group: 'track', type: 'bool', default: true },
+    { key: 'motionPause', label: 'Pause tracks without camera motion', group: 'track', type: 'bool', default: true },
 
     // camera motion (egomotion.js)
     { key: 'estWidth', label: 'Estimation width', group: 'motion', type: 'number', default: 320, min: 160, max: 640, step: 16, unit: 'px' },

@@ -153,3 +153,49 @@ const confirmedIds = tracks => tracks.filter(t => t.state === 'confirmed' && t.m
     }
     ok('a mover passing a held track keeps its own id, the held one gets its id back', ids.size === 2, [...ids]);
 }
+{
+    // dense noise (40 blobs a frame on 200×200 px): chained tracks confirm without the guards
+    const run = opts => {
+        let shown = 0;
+        for (const seed of [21, 22, 23]) {
+            const tr = createTracker(opts);
+            const r = mulberry32(seed);
+            for (let k = 0; k < 200; k++) shown += confirmedIds(tr.step(Array.from({ length: 40 }, () => blob(r() * 200, r() * 200)), I)).length;
+        }
+        return shown;
+    };
+    const off = run({ pathCheck: false, crowdGate: false }), path = run({ crowdGate: false }), crowd = run({ pathCheck: false }), both = run({});
+    ok('dense noise: path check and crowd gate each cut chained false tracks, together at least by half', path < off && crowd < off && both <= Math.min(path, crowd) && both * 2 < off, { off, path, crowd, both });
+}
+{
+    // a real target in that noise still confirms
+    const tr = createTracker();
+    const r = mulberry32(5);
+    let hit = 0;
+    for (let k = 0; k < 60; k++) {
+        const s = tr.step([blob(20 + 3 * k, 100 + 0.5 * k), ...Array.from({ length: 40 }, () => blob(r() * 200, r() * 200))], I);
+        if (s.some(t => t.state === 'confirmed' && t.matched && Math.abs(t.box.cx - (20 + 3 * k)) < 2)) hit++;
+    }
+    ok('… a steady target inside it still confirms and is followed (≥ 85 % of frames)', hit >= 51, hit);
+}
+{
+    // back and forth (a swaying branch edge): confirms only without the path check
+    const sway = opts => {
+        const tr = createTracker({ minTravel: 2, ...opts });
+        let shown = 0;
+        for (let k = 0; k < 60; k++) shown += confirmedIds(tr.step([blob(100 + 4 * Math.sin(k * 1.3), 50 + 3 * Math.cos(k * 0.9))], I)).length;
+        return shown;
+    };
+    ok('swaying back and forth: hardly shown with the path check (≤ a quarter of without)', sway({}) * 4 <= sway({ pathCheck: false }) && sway({ pathCheck: false }) > 0, [sway({}), sway({ pathCheck: false })]);
+}
+{
+    // a frame without camera motion: paths cleared, nothing new starts or confirms
+    const tr = createTracker();
+    let s;
+    for (let k = 0; k < 6; k++) s = tr.step([blob(100 + 4 * k, 50)], I);
+    s = tr.step([blob(124, 50), blob(300, 200)], null);
+    ok('no camera motion: paths cleared, no new track', s.length === 1 && s[0].trail.length <= 2, s.map(t => [t.id, t.trail.length]));
+    const tr2 = createTracker({ motionPause: false });
+    for (let k = 0; k < 6; k++) tr2.step([blob(100 + 4 * k, 50)], I);
+    ok('… (without motionPause a new track starts there)', tr2.step([blob(124, 50), blob(300, 200)], null).length === 2);
+}

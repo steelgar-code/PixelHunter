@@ -6,8 +6,9 @@
 
 import { greyToRgba } from './synth.js';
 
-export function createSyntheticLoop({ scene, onFrame, mode = 'realtime' }) {
+export function createSyntheticLoop({ scene, onFrame, mode = 'realtime', speed = 1 }) {
     const fps = scene.fps, n = scene.frames;
+    const rate = () => fps * speed;      // frames per second of wall time
     let k = -1;                  // last delivered frame
     let seq = 0;
     let playing = false;
@@ -42,7 +43,7 @@ export function createSyntheticLoop({ scene, onFrame, mode = 'realtime' }) {
         if (!playing) return;
         if (k >= n - 1) { playing = false; return; }
         const now = performance.now();
-        const due = clock.k0 + Math.floor((now - clock.t0) / 1000 * fps);
+        const due = clock.k0 + Math.floor((now - clock.t0) / 1000 * rate());
         let next;
         if (mode === 'realtime') {
             next = Math.min(n - 1, Math.max(k + 1, due));
@@ -50,7 +51,7 @@ export function createSyntheticLoop({ scene, onFrame, mode = 'realtime' }) {
             next = k + 1;
             if (next > due) {
                 // ahead of the clock: wait until this frame is due
-                timer = setTimeout(tick, Math.max(0, (next - clock.k0) * 1000 / fps - (now - clock.t0)));
+                timer = setTimeout(tick, Math.max(0, (next - clock.k0) * 1000 / rate() - (now - clock.t0)));
                 return;
             }
             // behind (processing slower than real time): move the clock so we don't race later
@@ -78,7 +79,7 @@ export function createSyntheticLoop({ scene, onFrame, mode = 'realtime' }) {
         async play() {
             if (k >= n - 1) deliver(0, 'replay from the start');
             playing = true;
-            clock = { t0: performance.now() - 1000 / fps, k0: k };
+            clock = { t0: performance.now() - 1000 / rate(), k0: k };
             stopTimer();
             timer = setTimeout(tick, 0);
         },
@@ -101,6 +102,11 @@ export function createSyntheticLoop({ scene, onFrame, mode = 'realtime' }) {
             mode = m;
             if (playing) clock = { t0: performance.now(), k0: k };
         },
+        setSpeed(s) {
+            speed = Math.max(0.25, Number(s) || 1);
+            if (playing) clock = { t0: performance.now(), k0: k };
+        },
+        get speed() { return speed; },
         stats() {
             const s = [...costs].sort((a, b) => a - b);
             return {

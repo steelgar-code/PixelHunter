@@ -50,6 +50,7 @@ export function createFrameLoop({ video, onFrame, mode = 'realtime' }) {
     let last = null;            // time of the last delivered frame
     let seq = 0;
     let jumpPending = true;
+    let speed = 1;              // playback speed: real-time mode plays at it, every-frame mode at most at it
     let jumpWhy = 'start';      // reason for the pending jump
     const markJump = why => { jumpPending = true; jumpWhy = why; };
     let ownSeek = false;
@@ -137,7 +138,7 @@ export function createFrameLoop({ video, onFrame, mode = 'realtime' }) {
     function targetRate() {
         const cost = costP90();
         if (cost === null || dur === null) return START_RATE;
-        return Math.min(1, (dur * 1000) / ((cost + VSYNC_MS) * 1.2)) * safety;
+        return Math.min(speed, (dur * 1000) / ((cost + VSYNC_MS) * 1.2)) * safety;
     }
 
     function adaptRate(gap, jump) {
@@ -263,12 +264,12 @@ export function createFrameLoop({ video, onFrame, mode = 'realtime' }) {
                 markJump('replay from the start');
                 video.currentTime = 0;
             }
-            const rate = mode === 'everyFrame' ? targetRate() : 1;
+            const rate = mode === 'everyFrame' ? targetRate() : speed;
             if (rate < MIN_RATE) {
                 startStepping();
                 return;
             }
-            video.playbackRate = Math.min(rate, mode === 'everyFrame' ? START_RATE : 1);
+            video.playbackRate = Math.min(rate, mode === 'everyFrame' ? START_RATE : speed);
             arm();
             await video.play();
         },
@@ -292,11 +293,16 @@ export function createFrameLoop({ video, onFrame, mode = 'realtime' }) {
             safety = 1;
             if (m === 'realtime') {
                 if (stepping) { stepping = false; if (playing) video.play(); }
-                video.playbackRate = 1;
+                video.playbackRate = speed;
             } else if (playing) {
                 video.playbackRate = Math.max(MIN_RATE, Math.min(START_RATE, targetRate()));
             }
         },
+        setSpeed(s) {
+            speed = Math.max(0.25, Number(s) || 1);
+            if (mode === 'realtime' && !stepping) video.playbackRate = speed;
+        },
+        get speed() { return speed; },
         // Called when a new source starts (video loaded and paused). Probes the frame duration
         // of a file, then delivers the first frame.
         async start({ probe = true } = {}) {
