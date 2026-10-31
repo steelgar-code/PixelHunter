@@ -84,6 +84,9 @@ export const CONFIGS = {
     low: PRESETS.low.values,
     'mid+shift': { shiftCheck: true },
     'highest+shift': { ...PRESETS.highest.values, shiftCheck: true },
+    // the tracking guards (path check, crowd gate, motion pause) off, for comparison
+    'mid-noguards': { pathCheck: false, crowdGate: false, motionPause: false },
+    'adaptive7-noguards': { detectMode: 'adaptive', sigmas: 7, weakMargin: 2.5, pathCheck: false, crowdGate: false, motionPause: false },
     adaptive: { detectMode: 'adaptive' },
     'adaptive+shift': { detectMode: 'adaptive', shiftCheck: true },
     'adaptive6': { detectMode: 'adaptive', sigmas: 6 },
