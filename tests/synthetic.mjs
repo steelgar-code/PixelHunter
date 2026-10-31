@@ -37,7 +37,9 @@ try {
     const cyan = await countColour(page, 'b > 200 && g > 180 && r < 140');
     const yellow = await countColour(page, 'r > 200 && g > 170 && b < 140', 100);
     const magenta = await countColour(page, 'r > 200 && g < 120 && b > 180');
-    ok('ground truth circles drawn', cyan > 50, cyan);
+    // (the count depends on the frame on screen and how much of the circles the boxes drawn on top
+    // cover: 50–56 has been seen; a missing overlay gives 0)
+    ok('ground truth circles drawn', cyan > 30, cyan);
     ok('candidate boxes drawn (faint)', yellow > 50, yellow);
     ok('confirmed tracks drawn', magenta > 50, magenta);
     await page.click('#param-showTruth');
