@@ -14,7 +14,8 @@
 // travel) before it is shown, so noise can't revive it.
 //
 // Blobs marked weak (faint, from the adaptive detector) only continue tracks whose velocity is
-// already known (two sightings), within a tight gate around the prediction; they never start a
+// already known (two sightings), within a tight gate around the prediction, and only when not
+// much smaller than the track's own blobs; they never start a
 // track or pick up a held one. They count as sightings for confirmation, so a faint object that
 // stood out once or twice keeps being followed while it barely shows.
 //
@@ -57,6 +58,7 @@ export const TRACK_DEFAULTS = {
 const CROWD_RADIUS = 40;       // px around a prediction in which blob density is measured
 const CROWD_EXPECTED = 0.3;    // unrelated blobs expected inside a gate, at most
 const PATH_POINTS = 8;         // sightings kept for the path check
+const WEAK_MIN_AREA = 0.25;    // a weak blob continues a track only at ≥ this × the track's last blob area
 
 const popcount = x => { let n = 0; while (x) { n += x & 1; x >>>= 1; } return n; };
 
@@ -148,7 +150,8 @@ export function createTracker(options = {}) {
             const weakOk = t.hits >= 2 && !held && H;
             blobs.forEach((b, j) => {
                 const d = Math.hypot(b.cx - t.px, b.cy - t.py);
-                if (b.weak) { if (weakOk && d <= weakGate) pairs.push([d + 0.5, t, j, false]); return; }
+                // (and not much smaller than the track's own blobs: noise is mostly single pixels)
+                if (b.weak) { if (weakOk && d <= weakGate && b.area >= WEAK_MIN_AREA * ((t.box && t.box.area) || 1)) pairs.push([d + 0.5, t, j, false]); return; }
                 if (d <= gate) { pairs.push([d, t, j, held]); return; }
                 // a confirmed track missed a couple of frames may have stopped where it was last
                 // seen; a match there restarts its confirmation (see below)
