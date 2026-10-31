@@ -60,7 +60,7 @@ const CROWD_RADIUS = 40;       // px around a prediction in which blob density i
 const CROWD_EXPECTED = 0.3;    // unrelated blobs expected inside a gate, at most
 const PATH_POINTS = 8;         // sightings kept for the path check
 const PATH_RESTART = 4;        // missed frames after which the path check starts over (stop and go)
-const WEAK_MIN_AREA = 0.25;    // a weak blob continues a track only at ≥ this × the track's last blob area
+const WEAK_MIN_AREA = 0.12;    // a weak blob continues a track only at ≥ this × the track's last blob area
 
 const popcount = x => { let n = 0; while (x) { n += x & 1; x >>>= 1; } return n; };
 
