@@ -93,10 +93,10 @@ export function createSyntheticLoop({ scene, onFrame, mode = 'realtime', speed =
             deliver(k + 1, false);
             return true;
         },
-        seek(time) {
+        seek(time, why = 'seek') {
             const target = Math.min(n - 1, Math.max(0, Math.round(time * fps)));
             if (playing) clock = { t0: performance.now(), k0: target };
-            deliver(target, 'seek');
+            deliver(target, why);
         },
         setMode(m) {
             mode = m;

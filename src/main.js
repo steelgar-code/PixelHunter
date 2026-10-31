@@ -642,7 +642,7 @@ const WARM_UP = 5;
 // forward, without drawing, until the frame at T is shown; then draws it once. Tracking
 // restarts with the jump. By time, not frame number: with a variable frame rate, frame numbers
 // worked out from time don't count frames exactly.
-async function goToTime(T) {
+async function goToTime(T, why = 'seek') {
     if (!loop || navigating || !Number.isFinite(T)) return;
     navigating = true;
     $('stage').classList.add('busy');
@@ -651,7 +651,7 @@ async function goToTime(T) {
         const s = Math.max(1, Math.round(params.stride));
         const fd = 1 / (loop.stats().sourceFps || 25);
         const before = ph.lastFrame ? ph.lastFrame.seq : -1;
-        loop.seek(Math.max(0, T - (s + WARM_UP) * fd));
+        loop.seek(Math.max(0, T - (s + WARM_UP) * fd), why);
         await waitFor(() => ph.lastFrame && ph.lastFrame.seq > before, 3000);
         for (let i = 0; i < 2 * s + WARM_UP + 12 && !(ph.shown && ph.shown.time >= T - 1e-4); i++) {
             if (!(await loop.step())) break;
@@ -684,7 +684,9 @@ function stepForward() {
         // the next frame after the one shown: step from the history's end until it is shown
         const t = ph.shown.time;
         const next = Math.min(...ph.frames.map(f => f.time).filter(x => x > t + 1e-6), Infinity);
-        if (Number.isFinite(next)) { goToTime(next); return; }
+        // keep the reason the history restarted (a settings change), not "seek"
+        const why = pipeline.resetCause && !['start', 'seek'].includes(pipeline.resetCause) ? pipeline.resetCause : 'seek';
+        if (Number.isFinite(next)) { goToTime(next, why); return; }
     }
     loop.step().then(updateTransport);
 }

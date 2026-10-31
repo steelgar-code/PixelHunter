@@ -287,8 +287,9 @@ export function createFrameLoop({ video, onFrame, mode = 'realtime' }) {
             this.pause();
             return stepOnce();
         },
-        seek(time) {
-            markJump('seek');
+        // why: the reason the frame history restarts (shown while it refills)
+        seek(time, why = 'seek') {
+            markJump(why);
             video.currentTime = time;
             arm();
         },
