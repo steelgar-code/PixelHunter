@@ -90,7 +90,7 @@ try {
         const where = await page.evaluate(() => {
             const r = __ph.lastResult, t = r.confirmed.sort((a, b) => a.box.cy - b.box.cy)[0];
             const c = document.getElementById('display').getBoundingClientRect(), s = Math.min(c.width / 960, c.height / 540);
-            return { id: t.id, x: c.left + (c.width - 960 * s) / 2 + (t.box.cx + 0.5) * s, y: c.top + (c.height - 540 * s) / 2 + (t.box.cy + 0.5) * s };
+            return { id: t.objectId ?? t.id, x: c.left + (c.width - 960 * s) / 2 + (t.box.cx + 0.5) * s, y: c.top + (c.height - 540 * s) / 2 + (t.box.cy + 0.5) * s };
         });
         await page.mouse.click(where.x, where.y);
         await page.waitForTimeout(300);
@@ -101,7 +101,7 @@ try {
         ok('… it stops: kept watching where it stopped', /watching/.test(await status()), await status());
         for (let i = 0; i < 60; i++) await page.click('#step');
         await page.waitForTimeout(300);
-        ok('… the camera pans on: out of view, still kept', /out of view/.test(await status()) && (await page.evaluate(id => __ph.lastResult.tracks.some(t => t.id === id && t.pinned), where.id)), await status());
+        ok('… the camera pans on: out of view, still kept', /out of view/.test(await status()) && (await page.evaluate(id => __ph.lastResult.tracks.some(t => t.objectId === id && t.pinned), where.id)), await status());
         await page.mouse.click(where.x, where.y);         // nothing there now: no change
         ok('a click on empty video changes nothing', /out of view/.test(await status()));
         await page.click(`#objectList li:first-child .pin`);
@@ -136,6 +136,41 @@ try {
             backs.push(await page.evaluate(readFrameNumber));
         }
         ok(`${name}: five ‹ Backs in a row, one frame each`, backs.every((v, i) => i === 0 || v === backs[i - 1] - 1), backs);
+    }
+
+    // a pinned object across ‹ Back (tracking restarts): re-linked, same object; history and export
+    {
+        await page.selectOption('#scene', 'pan-dots');
+        await page.click('#openScene');
+        await page.waitForFunction(() => __ph.results.length >= 1 && /Pan · 2, 3/.test(document.getElementById('srcLabel').textContent), null, { timeout: 30000 });
+        for (let i = 0; i < 30; i++) await page.click('#step');
+        await page.waitForTimeout(300);
+        const first = () => page.evaluate(() => document.querySelector('#objectList li:first-child')?.textContent || '');
+        const oid = await page.evaluate(() => document.querySelector('#objectList li:first-child .oid').textContent);
+        await page.click('#objectList li:first-child .pin');
+        await page.click('#back');
+        await page.waitForFunction(() => !document.getElementById('stage').classList.contains('busy'), null, { timeout: 15000 });
+        await page.waitForTimeout(400);
+        ok('after ‹ Back the pinned object is re-linked: same id, on screen', (await first()).startsWith(oid) && /on screen/.test(await first()), await first());
+        await page.click('#objectList li:first-child .obtn button:first-child');
+        ok('≡ opens its history', await page.isVisible('#objectHistory') && (await page.locator('#historyRows tr').count()) > 10);
+        ok('… with the lost and re-linked events', /lost: tracking restarted/.test(await page.textContent('#historyRows')) && /re-linked/.test(await page.textContent('#historyRows')), (await page.textContent('#historyTitle')));
+        const [dl] = await Promise.all([page.waitForEvent('download'), page.click('#historyCsv')]);
+        const csv = await (await import('fs')).promises.readFile(await dl.path(), 'utf8');
+        ok('CSV export: a row per frame, with size, contrast and speed', csv.startsWith('frame,time,track,state,seen,x,y,w,h,contrast,speed') && csv.split('\n').length > 10, csv.split('\n').slice(0, 3));
+        await page.click('#historyClose');
+        ok('× closes it', !(await page.isVisible('#objectHistory')));
+        await page.click('#objectList li:first-child .pin');
+    }
+
+    // the timeline: hover shows the time; the shortcut line is there
+    {
+        const box = await page.locator('#timeline').boundingBox();
+        await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+        ok('hovering the timeline shows the time there', await page.isVisible('#tlHover') && /0:0\d\.\d{3} #\d+/.test(await page.textContent('#tlHover')), await page.textContent('#tlHover'));
+        await page.mouse.move(box.x + box.width / 2, box.y - 60);
+        ok('… and hides when leaving', !(await page.isVisible('#tlHover')));
+        ok('keyboard shortcuts are listed under the player', /Space.*play.*B.*bookmark/s.test(await page.textContent('.keys')));
     }
 
     // speed
