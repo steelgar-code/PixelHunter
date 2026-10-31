@@ -63,8 +63,10 @@ try {
         const seq = await page.evaluate(() => __ph.lastFrame.seq);
         await page.$eval('#timeline', el => { el.value = 750; el.dispatchEvent(new Event('input')); el.dispatchEvent(new Event('change')); });
         await page.waitForFunction(n => __ph.lastFrame.seq > n, seq, { timeout: 5000 });
-        const j = await page.evaluate(() => __ph.lastFrame);
-        ok('seek from the timeline: next frame is marked as a jump', j.jump && Math.abs(j.time - 3) < 0.1, j);
+        // paused: it lands on the frame at that time, refilling the history from a few frames before
+        await page.waitForFunction(() => !document.getElementById('stage').classList.contains('busy'), null, { timeout: 15000 });
+        const j = await page.evaluate(n => ({ jumped: __ph.frames.some(f => f.seq > n && f.jump), shown: __ph.shown }), seq);
+        ok('seek from the timeline: a jump, landing on the frame at that time', j.jumped && Math.abs(j.shown.time - 3) < 0.05, j);
         ok('no page errors', errors.length === 0, errors);
         await page.close();
     }
