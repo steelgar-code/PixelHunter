@@ -153,3 +153,82 @@ const confirmedIds = tracks => tracks.filter(t => t.state === 'confirmed' && t.m
     }
     ok('a mover passing a held track keeps its own id, the held one gets its id back', ids.size === 2, [...ids]);
 }
+{
+    // dense noise (40 blobs a frame on 200×200 px): chained tracks confirm without the guards
+    const run = opts => {
+        let shown = 0;
+        for (const seed of [21, 22, 23]) {
+            const tr = createTracker(opts);
+            const r = mulberry32(seed);
+            for (let k = 0; k < 200; k++) shown += confirmedIds(tr.step(Array.from({ length: 40 }, () => blob(r() * 200, r() * 200)), I)).length;
+        }
+        return shown;
+    };
+    const off = run({ pathCheck: false, crowdGate: false }), path = run({ crowdGate: false }), crowd = run({ pathCheck: false }), both = run({});
+    ok('dense noise: path check and crowd gate each cut chained false tracks, together at least by half', path < off && crowd < off && both <= Math.min(path, crowd) && both * 2 < off, { off, path, crowd, both });
+}
+{
+    // a real target in that noise still confirms
+    const tr = createTracker();
+    const r = mulberry32(5);
+    let hit = 0;
+    for (let k = 0; k < 60; k++) {
+        const s = tr.step([blob(20 + 3 * k, 100 + 0.5 * k), ...Array.from({ length: 40 }, () => blob(r() * 200, r() * 200))], I);
+        if (s.some(t => t.state === 'confirmed' && t.matched && Math.abs(t.box.cx - (20 + 3 * k)) < 2)) hit++;
+    }
+    ok('… a steady target inside it still confirms and is followed (≥ 85 % of frames)', hit >= 51, hit);
+}
+{
+    // back and forth (a swaying branch edge): confirms only without the path check
+    const sway = opts => {
+        const tr = createTracker({ minTravel: 2, ...opts });
+        let shown = 0;
+        for (let k = 0; k < 60; k++) shown += confirmedIds(tr.step([blob(100 + 4 * Math.sin(k * 1.3), 50 + 3 * Math.cos(k * 0.9))], I)).length;
+        return shown;
+    };
+    ok('swaying back and forth: hardly shown with the path check (≤ a quarter of without)', sway({}) * 4 <= sway({ pathCheck: false }) && sway({ pathCheck: false }) > 0, [sway({}), sway({ pathCheck: false })]);
+}
+{
+    // a frame without camera motion: paths cleared, nothing new starts or confirms
+    const tr = createTracker();
+    let s;
+    for (let k = 0; k < 6; k++) s = tr.step([blob(100 + 4 * k, 50)], I);
+    s = tr.step([blob(124, 50), blob(300, 200)], null);
+    ok('no camera motion: paths cleared, no new track', s.length === 1 && s[0].trail.length <= 2, s.map(t => [t.id, t.trail.length]));
+    const tr2 = createTracker({ motionPause: false });
+    for (let k = 0; k < 6; k++) tr2.step([blob(100 + 4 * k, 50)], I);
+    ok('… (without motionPause a new track starts there)', tr2.step([blob(124, 50), blob(300, 200)], null).length === 2);
+}
+{
+    // pinned: kept watching through a stop far longer than holdFrames, same id when it moves on
+    const tr = createTracker({ holdFrames: 20 });
+    let x = 100, s;
+    for (let k = 0; k < 10; k++) s = tr.step([blob(x += 4, 60)], I);
+    tr.setPinned([s[0].id]);
+    for (let k = 0; k < 300; k++) s = tr.step([], I);
+    ok('pinned: still held after 300 frames without a sighting (holdFrames 20)', s.length === 1 && s[0].state === 'held' && s[0].pinned, s.map(t => [t.state, t.pinned]));
+    let ids = new Set();
+    for (let k = 0; k < 8; k++) for (const t of tr.step([blob(x += 4, 60)], I)) if (t.state === 'confirmed' && t.matched) ids.add(t.id);
+    ok('… moving on there: the same id again', ids.size === 1 && ids.has(1), [...ids]);
+}
+{
+    // pinned tracks survive frames without camera motion (the others are dropped after maxSkip)
+    const tr = createTracker({ maxSkip: 3 });
+    for (let k = 0; k < 6; k++) tr.step([blob(100 + 4 * k, 50), blob(300 + 4 * k, 150)], I);
+    tr.setPinned([1]);
+    let s;
+    for (let k = 0; k < 10; k++) s = tr.step([], null);
+    ok('pinned: kept through frames without camera motion, the others dropped', s.length === 1 && s[0].id === 1, s.map(t => t.id));
+}
+{
+    // carried with the scene: the camera pans away (the scene moves 10 px/frame) and back
+    const tr = createTracker();
+    let s;
+    for (let k = 0; k < 6; k++) s = tr.step([blob(100 + 4 * k, 50)], I);
+    tr.setPinned([1]);
+    const away = [1, 0, -10, 0, 1, 0, 0, 0, 1], back = [1, 0, 10, 0, 1, 0, 0, 0, 1];
+    for (let k = 0; k < 30; k++) s = tr.step([], away);
+    ok('pinned: waits where it was, moving with the scene (out of view at −176 px)', Math.abs(s[0].lastSeen[0] - (120 - 300)) < 1e-6, s[0].lastSeen);
+    for (let k = 0; k < 30; k++) s = tr.step([], back);
+    ok('… and back in view where it was', Math.abs(s[0].lastSeen[0] - 120) < 1e-6 && s[0].id === 1, s[0].lastSeen);
+}

@@ -27,16 +27,24 @@
             </div>
         </div>
         <div class="transport">
+            <button type="button" id="back" disabled title="One frame back (←)">‹ Back</button>
             <button type="button" id="play" disabled title="Play / pause (Space)">Play</button>
             <button type="button" id="step" disabled title="Step one frame (→)">Step ›</button>
-            <input type="range" id="timeline" min="0" max="1000" value="0" step="1" disabled aria-label="Position">
+            <div class="timeline-wrap">
+                <input type="range" id="timeline" min="0" max="1000" value="0" step="1" disabled aria-label="Position">
+                <div id="tlMarks" class="tl-marks"></div>
+                <span id="tlHover" class="tl-hover mono" hidden></span>
+            </div>
             <span id="time" class="mono">0:00.000</span>
+            <button type="button" id="bookmark" disabled title="Bookmark this frame (B)">☆ Mark</button>
         </div>
+        <div id="bookmarks" class="bookmarks" hidden></div>
+        <p class="keys muted"><kbd>Space</kbd> play / pause · <kbd>←</kbd> <kbd>→</kbd> one frame · <kbd>B</kbd> bookmark · click an object on the video to pin it · <kbd>Esc</kbd> stop drawing zones</p>
     </section>
 
     <aside class="panel">
-        <section>
-            <h2>Source</h2>
+        <details open id="pSource">
+            <summary>Source</summary>
             <input type="file" id="file" accept="video/*" hidden>
             <button type="button" data-open>Open file…</button>
             <form id="urlForm" class="row">
@@ -48,17 +56,42 @@
                 <button type="button" id="openScene">Load</button>
             </div>
             <p id="srcLabel" class="muted">No video</p>
-        </section>
-        <section>
-            <h2>Processing</h2>
+        </details>
+        <details open id="pPresets">
+            <summary data-help="presets">Presets</summary>
+            <div id="presets" class="segmented" role="group" aria-label="Sensitivity preset"></div>
+            <p id="presetHint" class="muted">Sets detection, confirmation and camera motion as a starting point to tune from.</p>
+            <div class="help-host"></div>
+            <h3>My presets</h3>
+            <div class="row">
+                <select id="userPreset" aria-label="My presets"></select>
+                <button type="button" id="applyUserPreset" disabled>Apply</button>
+                <button type="button" id="updateUserPreset" disabled>Update</button>
+                <button type="button" id="deleteUserPreset" disabled title="Delete this preset">×</button>
+            </div>
+            <p id="userPresetInfo" class="muted" hidden></p>
+            <form id="savePresetForm" class="row">
+                <input type="text" id="presetName" placeholder="Name, e.g. DJI OSD, faint" aria-label="Preset name" maxlength="60">
+                <button type="submit" id="savePreset" disabled>Save</button>
+            </form>
+            <div class="row checks">
+                <span class="muted">Save:</span>
+                <label class="check"><input type="checkbox" id="saveSettings" checked>settings</label>
+                <label class="check"><input type="checkbox" id="saveZones" checked>zones</label>
+            </div>
+            <div class="row">
+                <button type="button" id="exportPresets" disabled>Export…</button>
+                <button type="button" id="importPresets">Import…</button>
+                <input type="file" id="presetFile" accept=".json,application/json" hidden>
+            </div>
+        </details>
+        <details open id="pPlayback">
+            <summary>Playback and view</summary>
             <div id="params-playback" class="params"></div>
-        </section>
-        <section>
-            <h2>View</h2>
-            <div id="params-view" class="params"></div>
-        </section>
-        <section>
-            <h2>Stats</h2>
+            <div id="params-view" class="params view-params"></div>
+        </details>
+        <details open id="pStats">
+            <summary>Stats</summary>
             <dl class="stats mono">
                 <dt>Source</dt><dd id="stSource">–</dd>
                 <dt>Processed</dt><dd id="stFps">–</dd>
@@ -80,44 +113,33 @@
                 <dt>OpenCV.js</dt><dd id="stCv">–</dd>
             </dl>
             <p id="stReason" class="muted"></p>
-        </section>
-        <section>
-            <h2>Detections</h2>
+            <h3>Detections</h3>
             <p id="logCount" class="muted">No confirmed detections yet</p>
             <div class="row">
                 <button type="button" id="exportJson" disabled>Export JSON</button>
                 <button type="button" id="clearLog" disabled>Clear</button>
             </div>
-        </section>
-        <section>
-            <h2 data-help="presets">Presets</h2>
-            <div id="presets" class="segmented" role="group" aria-label="Sensitivity preset"></div>
-            <p id="presetHint" class="muted">Sets detection, confirmation and camera motion as a starting point to tune from.</p>
+        </details>
+        <details open id="pObjects">
+            <summary data-help="objects">Objects</summary>
             <div class="help-host"></div>
-            <h3>My presets</h3>
-            <div class="row">
-                <select id="userPreset" aria-label="My presets"></select>
-                <button type="button" id="applyUserPreset" disabled>Apply</button>
-                <button type="button" id="deleteUserPreset" disabled title="Delete this preset">×</button>
+            <ol id="objectList" class="objects"></ol>
+            <p id="objectsEmpty" class="muted">No confirmed objects yet</p>
+            <div id="objectHistory" class="history" hidden>
+                <div class="row history-head">
+                    <span id="historyTitle" class="mono"></span>
+                    <button type="button" id="historyCsv" title="Download the whole history as CSV">CSV</button>
+                    <button type="button" id="historyJson" title="Download the whole history as JSON, with the settings">JSON</button>
+                    <button type="button" id="historyClose" title="Close">×</button>
+                </div>
+                <div class="history-scroll">
+                    <table class="mono"><thead><tr><th>frame</th><th>time</th><th>state</th><th>size px</th><th>contrast</th><th>speed · σ</th></tr></thead>
+                    <tbody id="historyRows"></tbody></table>
+                </div>
             </div>
-            <p id="userPresetInfo" class="muted" hidden></p>
-            <form id="savePresetForm" class="row">
-                <input type="text" id="presetName" placeholder="Name, e.g. DJI OSD, faint" aria-label="Preset name" maxlength="60">
-                <button type="submit" id="savePreset" disabled>Save</button>
-            </form>
-            <div class="row checks">
-                <span class="muted">Save:</span>
-                <label class="check"><input type="checkbox" id="saveSettings" checked>settings</label>
-                <label class="check"><input type="checkbox" id="saveZones" checked>zones</label>
-            </div>
-            <div class="row">
-                <button type="button" id="exportPresets" disabled>Export…</button>
-                <button type="button" id="importPresets">Import…</button>
-                <input type="file" id="presetFile" accept=".json,application/json" hidden>
-            </div>
-        </section>
-        <section>
-            <h2 data-help="area">Detection area</h2>
+        </details>
+        <details open id="pArea">
+            <summary data-help="area">Detection area</summary>
             <div class="segmented" role="radiogroup" aria-label="A drag adds">
                 <label><input type="radio" name="zoneKind" value="include">Include (crop)</label>
                 <label><input type="radio" name="zoneKind" value="exclude" checked>Exclude</label>
@@ -139,20 +161,20 @@
                 <span class="muted">x,y,w,h as fractions of the frame, ; between zones</span>
             </label>
             <div id="params-zones" class="params"></div>
-        </section>
-        <details open>
+        </details>
+        <details id="pDetection" open>
             <summary>Detection</summary>
             <div id="params-detect" class="params"></div>
         </details>
-        <details>
+        <details id="pConfirmation">
             <summary>Confirmation</summary>
             <div id="params-track" class="params"></div>
         </details>
-        <details>
+        <details id="pMotion">
             <summary>Camera motion</summary>
             <div id="params-motion" class="params"></div>
         </details>
-        <details>
+        <details id="pDebug">
             <summary>Debug</summary>
             <div id="params-debug" class="params"></div>
         </details>

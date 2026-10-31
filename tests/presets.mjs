@@ -65,7 +65,7 @@ try {
         }
     }
     const R = (scene, preset) => res[`${Object.keys(scenes)[scene]}|${preset}`];
-    ok('Highest finds faint slow dots Mid mostly misses (confirmed ≥ 60 %, ≥ 2× Mid)', R(0, 'highest').conf >= 0.6 && R(0, 'highest').conf >= 2 * R(0, 'mid').conf, [R(0, 'highest').conf, R(0, 'mid').conf]);
+    ok('faint slow dots: Mid (adaptive) confirms most, Highest at least 10 points more', R(0, 'mid').conf >= 0.6 && R(0, 'highest').conf >= R(0, 'mid').conf + 0.1, [R(0, 'highest').conf, R(0, 'mid').conf]);
     ok('Mid and Highest both handle the mid scene (confirmed ≥ 90 %)', R(1, 'mid').conf >= 0.9 && R(1, 'highest').conf >= 0.9, [R(1, 'mid').conf, R(1, 'highest').conf]);
     ok('Low tracks large fast objects (confirmed ≥ 90 %) where Mid falls behind', R(2, 'low').conf >= 0.9 && R(2, 'low').conf > R(2, 'mid').conf, [R(2, 'low').conf, R(2, 'mid').conf]);
     ok('Low costs less than half of Mid on a 1920×1080 source', R(2, 'low').ms < R(2, 'mid').ms / 2, [R(2, 'low').ms, R(2, 'mid').ms]);
@@ -77,8 +77,8 @@ try {
     const { page: p, errors: e2 } = await openApp(browser);
     ok('Mid is shown as active with default settings', (await p.getAttribute('#preset-mid', 'aria-pressed')) === 'true');
     await p.click('#preset-highest');
-    ok('Highest sets the settings and the controls', (await p.evaluate(() => [__ph.params.threshold, __ph.params.stride])).join() === '12,4'
-        && (await p.inputValue('#param-threshold')) === '12' && (await p.getAttribute('#preset-highest', 'aria-pressed')) === 'true');
+    ok('Highest sets the settings and the controls', (await p.evaluate(() => [__ph.params.sigmas, __ph.params.confirmN])).join() === '6,4'
+        && (await p.inputValue('#param-sigmas')) === '6' && (await p.getAttribute('#preset-highest', 'aria-pressed')) === 'true');
     await p.fill('#param-threshold', '15');
     await p.dispatchEvent('#param-threshold', 'input');
     ok('changing a setting by hand shows Custom', (await p.evaluate(() => [...document.querySelectorAll('#presets button')].every(b => b.getAttribute('aria-pressed') === 'false')))

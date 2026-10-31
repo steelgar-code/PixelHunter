@@ -262,6 +262,7 @@ export function createPipeline(cv, params) {
         push,
         renderView,
         get geometry() { return geom; },
+        get resetCause() { return resetCause; },
         setParams(next) {
             const cause = String(next.procWidth) !== String(p.procWidth) ? 'processing width changed'
                 : next.estWidth !== p.estWidth ? 'estimation width changed' : null;
@@ -271,6 +272,8 @@ export function createPipeline(cv, params) {
             tracker.setParams(trackParams(p));
             if (cause && geom) setup(geom.srcW, geom.srcH, cause);
         },
+        // ids of tracks to keep watching (pinned by the user)
+        setPinned(ids) { tracker.setPinned(ids); },
         reset(cause = 'reset') { resetCause = cause; count = 0; ego.reset(); tracker.reset(); },
         dispose() {
             freeAll();

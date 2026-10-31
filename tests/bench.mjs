@@ -84,6 +84,13 @@ export const CONFIGS = {
     low: PRESETS.low.values,
     'mid+shift': { shiftCheck: true },
     'highest+shift': { ...PRESETS.highest.values, shiftCheck: true },
+    // the tracking guards (path check, crowd gate, motion pause) off, for comparison
+    'mid-noguards': { pathCheck: false, crowdGate: false, motionPause: false },
+    'adaptive7-noguards': { detectMode: 'adaptive', sigmas: 7, weakMargin: 2.5, pathCheck: false, crowdGate: false, motionPause: false },
+    // candidates for a Highest preset built on the adaptive detector
+    h1: { detectMode: 'adaptive', sigmas: 6, weakMargin: 2 },
+    h2: { detectMode: 'adaptive', sigmas: 6, weakMargin: 2, stride: 2 },
+    h3: { detectMode: 'adaptive', sigmas: 6, weakMargin: 2, confirmN: 4, confirmM: 6, minTravel: 2, estWidth: 480, features: 600, holdFrames: 75 },
     adaptive: { detectMode: 'adaptive' },
     'adaptive+shift': { detectMode: 'adaptive', shiftCheck: true },
     'adaptive6': { detectMode: 'adaptive', sigmas: 6 },

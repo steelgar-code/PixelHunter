@@ -11,7 +11,8 @@ import { loadPresets, savePresets, presetFrom, upsert, remove, find, changesOf, 
 import { createPipeline } from './pipeline.js';
 import { createScore } from './score.js';
 import { createExportLog, download } from './exportLog.js';
-import { fitOverlay, clear, drawPoints, drawNote, drawBoxes, drawTruth, drawTracks, drawHeld, drawZones, drawInclude } from './overlay.js';
+import { createObjects, historyCsv } from './objects.js';
+import { fitOverlay, clear, drawPoints, drawNote, drawBoxes, drawTruth, drawTracks, drawHeld, drawOffscreen, drawZones, drawInclude } from './overlay.js';
 import { normalizeZone, normalizeZones, parseZones, formatZones, zoneRect, inZones, loadZones, saveZones, MAX_ZONES, ZONES_KEY, INCLUDE_KEY } from './zones.js';
 
 const $ = id => document.getElementById(id);
@@ -45,7 +46,7 @@ const skipped = { count: 0, reasons: {} };
 let score = null;                // synthetic sources: candidates against ground truth
 let confScore = null;            // … and confirmed detections
 const log = createExportLog();
-const APP_VERSION = '0.5.0';
+const APP_VERSION = '0.6.0';
 
 // Test hook (see tests/): recent frames and state, no effect on the UI.
 const FRAME_LOG = 5000;
@@ -80,7 +81,11 @@ function helpToggle(host, text, name) {
     b.textContent = '?';
     b.title = `What does ${name} do?`;
     b.setAttribute('aria-expanded', 'false');
-    b.addEventListener('click', () => { p.hidden = !p.hidden; b.setAttribute('aria-expanded', String(!p.hidden)); });
+    b.addEventListener('click', e => {
+        e.preventDefault();                 // inside a panel's summary: don't fold the panel
+        p.hidden = !p.hidden;
+        b.setAttribute('aria-expanded', String(!p.hidden));
+    });
     host.append(p);
     return b;
 }
@@ -244,6 +249,7 @@ function setParam(key, value) {
     params[key] = value;
     save(localStorage, params);
     if (key === 'mode') { if (loop) loop.setMode(value); }
+    else if (key === 'speed') { if (loop) loop.setSpeed(Number(value)); }
     else if (['view', 'showCandidates', 'showTruth', 'showZones'].includes(key)) render();
     else settingsChanged();
 }
@@ -254,6 +260,7 @@ function settingsChanged() {
     if (score) score.reset();
     if (confScore) confScore.reset();
     updatePresets();
+    if (typeof updateUpdateButton === 'function' && $('updateUserPreset')) updateUpdateButton();
 }
 
 // --- sensitivity presets ------------------------------------------------------------------
@@ -281,6 +288,7 @@ function renderUserPresets(selected) {
     if (keep && find(userPresets, keep)) sel.value = find(userPresets, keep).name;
     sel.disabled = !userPresets.length;
     $('applyUserPreset').disabled = $('deleteUserPreset').disabled = !userPresets.length;
+    updateUpdateButton();
     $('exportPresets').disabled = !userPresets.length;
     disarmDelete();
     showUserPresetInfo();
@@ -291,6 +299,20 @@ function showUserPresetInfo(text) {
     const p = find(userPresets, $('userPreset').value);
     $('userPresetInfo').textContent = text || (p ? `Holds ${describe(p)}.` : '');
     $('userPresetInfo').hidden = !$('userPresetInfo').textContent;
+}
+
+// Does the current state differ from what preset p holds (only the parts it holds)?
+function presetDiffers(p) {
+    if (p.values && Object.entries(p.values).some(([k, v]) => String(params[k]) !== String(v))) return true;
+    if (p.zones && formatZones(p.zones) !== formatZones(params.zones)) return true;
+    if (p.include && formatZones(p.include) !== formatZones(params.include)) return true;
+    return false;
+}
+
+function updateUpdateButton() {
+    const p = find(userPresets, $('userPreset').value);
+    $('updateUserPreset').disabled = !p || !presetDiffers(p);
+    $('updateUserPreset').title = p ? `Save the current ${[p.values && 'settings', (p.zones || p.include) && 'zones'].filter(Boolean).join(' and ')} into “${p.name}”` : '';
 }
 
 function updateSaveButton() {
@@ -321,7 +343,17 @@ function disarmDelete() {
 
 function bindUserPresets() {
     $('applyUserPreset').addEventListener('click', () => applyUserPreset($('userPreset').value));
-    $('userPreset').addEventListener('change', () => { disarmDelete(); showUserPresetInfo(); });
+    $('userPreset').addEventListener('change', () => { disarmDelete(); showUserPresetInfo(); updateUpdateButton(); });
+    $('updateUserPreset').addEventListener('click', () => {
+        const old = find(userPresets, $('userPreset').value);
+        if (!old) return;
+        const p = presetFrom(params, old.name, { settings: !!old.values, zones: !!(old.zones || old.include) });
+        if (!p) return;
+        userPresets = upsert(userPresets, p);
+        savePresets(localStorage, userPresets);
+        renderUserPresets(p.name);
+        showUserPresetInfo(`Updated “${p.name}”: ${describe(p)}.`);
+    });
     // delete takes two clicks: the first arms the button for a few seconds
     $('deleteUserPreset').addEventListener('click', () => {
         const b = $('deleteUserPreset');
@@ -416,9 +448,13 @@ function onFrame(f) {
         r.score = score.add(r.frame, r.candidates, scoredTargets(r));
         r.confScore = confScore.add(r.frame, r.confirmed.map(t => t.box), scoredTargets(r));
     }
+    if (r) noteObjects(out);
     if (r && r.confirmed.length) log.add(r);
-    render();
-    if (!f.video) updateTransport();
+    // while refilling the history for a jump (goToTime), only the target frame is drawn
+    if (!navigating) {
+        render();
+        if (!f.video) updateTransport();
+    }
 
     ph.frames.push({ seq: f.seq, frame: f.frame, time: f.time, gap: f.gap, jump: f.jump });
     if (ph.frames.length > FRAME_LOG) ph.frames.shift();
@@ -439,6 +475,7 @@ function onFrame(f) {
 // overlay.
 function render() {
     if (!lastOut) return;
+    ph.renders = (ph.renders || 0) + 1;
     const g = pipeline.geometry;
     if (display.width !== g.w || display.height !== g.h) {
         display.width = g.w;
@@ -456,7 +493,15 @@ function render() {
         if (r.detect.rejected && r.detect.rejected.length) drawBoxes(overlayCtx, tf, r.detect.rejected, { colour: '#8b939c', alpha: 0.6, width: 1 });
         drawBoxes(overlayCtx, tf, r.candidates, { alpha: 0.55, width: 1 });
     }
-    if (r && params.view !== 'points') { drawHeld(overlayCtx, tf, r.held || []); drawTracks(overlayCtx, tf, r.confirmed); }
+    if (r && params.view !== 'points') {
+        const held = r.held || [];
+        drawHeld(overlayCtx, tf, asObject(held.filter(t => !isPinnedTrack(t))));
+        drawHeld(overlayCtx, tf, asObject(held.filter(isPinnedTrack)), { colour: PIN_COLOUR });
+        drawTracks(overlayCtx, tf, asObject(r.confirmed.filter(t => !isPinnedTrack(t))));
+        drawTracks(overlayCtx, tf, asObject(r.confirmed.filter(isPinnedTrack)), { colour: PIN_COLOUR });
+        // pinned and out of view: an arrow at the edge towards it
+        drawOffscreen(overlayCtx, tf, asObject(r.tracks.filter(isPinnedTrack)), g.w, g.h, PIN_COLOUR);
+    }
     if (params.showZones || drawing) drawZones(overlayCtx, tf, params.zones, g.w, g.h, drawKind === 'exclude' ? draft : null);
     if (note) drawNote(overlayCtx, tf, note);
     ph.note = note;
@@ -564,8 +609,333 @@ function bindZones() {
         else render();
     };
     stage.addEventListener('pointerup', end);
+    // a click on a confirmed object on the video pins or unpins it
+    stage.addEventListener('click', e => {
+        if (drawing) return;
+        const t = trackAt(e);
+        if (t) togglePin(objs.objectOfTrack(t.id));
+    });
+    stage.addEventListener('pointermove', e => {
+        if (drawing || e.pointerType !== 'mouse') return;
+        stage.classList.toggle('over-object', !!trackAt(e));
+    });
     stage.addEventListener('pointercancel', () => { dragFrom = draft = null; render(); });
     renderZoneLists();
+}
+
+// --- navigation: one frame back, bookmarks ----------------------------------------------------
+
+let navigating = false;
+
+const waitFor = (cond, ms) => new Promise(resolve => {
+    const end = performance.now() + ms;
+    const tick = () => (cond() || performance.now() > end ? resolve(cond()) : setTimeout(tick, 15));
+    tick();
+});
+
+// Frames processed before the target of a jump, beyond what detection itself needs, so tracks
+// are confirmed again by the time it is on screen.
+const WARM_UP = 5;
+
+// Shows the frame at media time T (s) with its detection result. A jump empties the frame
+// history (frame t needs t − s and t + s), so this seeks stride + WARM_UP frames earlier and steps
+// forward, without drawing, until the frame at T is shown; then draws it once. Tracking
+// restarts with the jump. By time, not frame number: with a variable frame rate, frame numbers
+// worked out from time don't count frames exactly.
+async function goToTime(T, why = 'seek') {
+    if (!loop || navigating || !Number.isFinite(T)) return;
+    navigating = true;
+    $('stage').classList.add('busy');
+    try {
+        loop.pause();
+        const s = Math.max(1, Math.round(params.stride));
+        const fd = 1 / (loop.stats().sourceFps || 25);
+        const before = ph.lastFrame ? ph.lastFrame.seq : -1;
+        loop.seek(Math.max(0, T - (s + WARM_UP) * fd), why);
+        await waitFor(() => ph.lastFrame && ph.lastFrame.seq > before, 3000);
+        for (let i = 0; i < 2 * s + WARM_UP + 12 && !(ph.shown && ph.shown.time >= T - 1e-4); i++) {
+            if (!(await loop.step())) break;
+        }
+    } finally {
+        navigating = false;
+        $('stage').classList.remove('busy');
+        render();
+        updateTransport();
+    }
+}
+
+// The media time of the frame before the one shown: the latest frame time decoded so far that
+// is earlier (exact also with a variable frame rate), else one frame duration back.
+function previousFrameTime() {
+    const t = ph.shown && ph.shown.time;
+    if (!Number.isFinite(t)) return null;
+    let best = -Infinity;
+    for (const f of ph.frames) if (f.time < t - 1e-6 && f.time > best) best = f.time;
+    const fd = 1 / ((loop && loop.stats().sourceFps) || 25);
+    return best > t - 3 * fd ? best : t - fd;
+}
+
+// One frame forward. Right after a jump the history may still be short (the display waits for
+// t + s): then this goes to the next frame properly instead.
+function stepForward() {
+    if (!loop || navigating) return;
+    const r = lastOut && lastOut.result;
+    if (!r && ph.shown && Number.isFinite(ph.shown.time)) {
+        // the next frame after the one shown: step from the history's end until it is shown
+        const t = ph.shown.time;
+        const next = Math.min(...ph.frames.map(f => f.time).filter(x => x > t + 1e-6), Infinity);
+        // keep the reason the history restarted (a settings change), not "seek"
+        const why = pipeline.resetCause && !['start', 'seek'].includes(pipeline.resetCause) ? pipeline.resetCause : 'seek';
+        if (Number.isFinite(next)) { goToTime(next, why); return; }
+    }
+    loop.step().then(updateTransport);
+}
+
+function stepBack() {
+    if (navigating) return;
+    const T = previousFrameTime();
+    if (T !== null && T >= 0) goToTime(T);
+}
+
+const BOOKMARKS_KEY = 'pixelhunter.bookmarks.v1';
+
+function loadBookmarks() {
+    try { return JSON.parse(localStorage.getItem(BOOKMARKS_KEY) || '{}') || {}; } catch { return {}; }
+}
+
+function bookmarksOf(label) { return (loadBookmarks()[label] || []).filter(b => Number.isFinite(b.frame)); }
+
+function saveBookmarks(label, list) {
+    try {
+        const all = loadBookmarks();
+        if (list.length) all[label] = list; else delete all[label];
+        localStorage.setItem(BOOKMARKS_KEY, JSON.stringify(all));
+    } catch { /* not remembered */ }
+}
+
+function addBookmark() {
+    if (!source || !ph.shown || ph.shown.frame === null) return;
+    const list = bookmarksOf(source.label);
+    if (!list.some(b => b.frame === ph.shown.frame)) list.push({ frame: ph.shown.frame, time: ph.shown.time });
+    list.sort((a, b) => a.frame - b.frame);
+    saveBookmarks(source.label, list);
+    renderBookmarks();
+}
+
+function renderBookmarks() {
+    const host = $('bookmarks');
+    const list = source ? bookmarksOf(source.label) : [];
+    host.replaceChildren(...list.map(b => {
+        const chip = document.createElement('span');
+        chip.className = 'chip mono';
+        const go = document.createElement('button');
+        go.type = 'button';
+        go.className = 'go';
+        go.textContent = `${fmtTime(b.time)} #${b.frame}`;
+        go.title = 'Go to this frame';
+        go.addEventListener('click', () => goToTime(b.time));
+        const del = document.createElement('button');
+        del.type = 'button';
+        del.textContent = '×';
+        del.title = 'Remove this bookmark';
+        del.addEventListener('click', () => { saveBookmarks(source.label, bookmarksOf(source.label).filter(x => x.frame !== b.frame)); renderBookmarks(); });
+        chip.append(go, del);
+        return chip;
+    }));
+    host.hidden = !list.length;
+    // and as ticks on the timeline
+    const dur = loop && loop.duration;
+    $('tlMarks').replaceChildren(...(Number.isFinite(dur) && dur > 0 ? list : []).map(b => {
+        const m = document.createElement('button');
+        m.type = 'button';
+        m.style.left = `${Math.min(100, Math.max(0, b.time / dur * 100))}%`;
+        m.title = `Bookmark ${fmtTime(b.time)} #${b.frame}`;
+        m.setAttribute('aria-label', m.title);
+        m.addEventListener('click', () => goToTime(b.time));
+        return m;
+    }));
+}
+
+// --- objects: the latest confirmed objects, details, history and pins (objects.js) ------------
+
+const PIN_COLOUR = '#ff9f43';
+const OBJECTS_SHOWN = 8;
+const objs = createObjects({ kept: 40 });
+let objectsDirty = false;
+let historyOf = null;              // object id whose history is open
+
+function clearObjects() {
+    objs.clear();
+    historyOf = null;
+    if (pipeline) pipeline.setPinned([]);
+    objectsDirty = true;
+}
+
+function noteObjects(out) {
+    const r = out.result;
+    objs.update(r, out.slot.grey, { frameDuration: 1 / ((loop && loop.stats().sourceFps) || 25) });
+    // re-linking may move a pin to another track: the tracker watches the current ones
+    if (objs.pinnedCount) pipeline.setPinned(objs.pinnedTrackIds());
+    // tracks shown with their object's id
+    for (const t of r.tracks) t.objectId = objs.objectOfTrack(t.id);
+    objectsDirty = true;
+}
+
+// object id of a track (for drawing and the export); the track id until it is an object
+const oidOf = t => (t.objectId ?? objs.objectOfTrack(t.id)) ?? t.id;
+const asObject = list => list.map(t => ({ ...t, id: oidOf(t) }));
+const isPinnedTrack = t => { const o = objs.objectOfTrack(t.id); return o !== null && objs.isPinned(o); };
+
+// Pin or unpin an object: pinned ones are drawn in orange, listed first, kept watching by the
+// tracker (also stopped or out of view), and re-linked when tracking loses them.
+function togglePin(oid) {
+    objs.pin(oid);
+    if (pipeline) pipeline.setPinned(objs.pinnedTrackIds());
+    objectsDirty = true;
+    renderObjects();
+    render();
+}
+
+// What a pinned object is doing now.
+function pinStatus(o) {
+    const r = lastOut && lastOut.result, g = pipeline && pipeline.geometry;
+    const t = r && o.trackId !== null && r.tracks.find(x => x.id === o.trackId);
+    if (!t) return o.lost ? `lost: ${o.lost}` : 'lost';
+    if (t.state === 'confirmed' && t.matched) return 'on screen';
+    const [x, y] = t.lastSeen;
+    return g && x >= 0 && y >= 0 && x <= g.w - 1 && y <= g.h - 1 ? 'watching' : 'out of view';
+}
+
+// The object (confirmed or pinned track) under a click on the video, within 14 screen px.
+function trackAt(e) {
+    const r = lastOut && lastOut.result, g = pipeline && pipeline.geometry, p = toFrame(e);
+    if (!r || !g || !p) return null;
+    const rect = display.getBoundingClientRect();
+    const s = Math.min(rect.width / g.w, rect.height / g.h);
+    const x = p[0] * g.w - 0.5, y = p[1] * g.h - 0.5;
+    let best = null, bd = 14 / s;
+    for (const t of r.tracks) {
+        if (objs.objectOfTrack(t.id) === null) continue;
+        if (!(t.state === 'confirmed' && t.matched) && !isPinnedTrack(t)) continue;
+        const [tx, ty] = t.matched ? [t.box.cx, t.box.cy] : t.lastSeen;
+        const d = Math.hypot(tx - x, ty - y);
+        if (d < bd) { bd = d; best = t; }
+    }
+    return best;
+}
+
+function renderObjects() {
+    if (!objectsDirty) return;
+    objectsDirty = false;
+    const list = objs.list().filter(o => o.last).slice(0, Math.max(OBJECTS_SHOWN, objs.pinnedCount));
+    const r = lastOut && lastOut.result;
+    const live = new Set(r ? r.confirmed.map(t => objs.objectOfTrack(t.id)) : []);
+    $('objectList').replaceChildren(...list.map(o => {
+        const li = document.createElement('li');
+        const pin = objs.isPinned(o.id);
+        li.className = `${pin ? 'pinned' : ''} ${live.has(o.id) ? 'live' : ''} ${historyOf === o.id ? 'open' : ''}`;
+        li.title = 'Go to the last frame it was seen';
+        const id = document.createElement('span');
+        id.className = 'oid mono';
+        id.textContent = `#${o.id}`;
+        const size = document.createElement('span');
+        size.className = 'mono';
+        const c = Math.round(o.contrast);
+        size.textContent = `${o.w.toFixed(0)}×${o.h.toFixed(0)} px · ${c > 0 ? '+' : ''}${c} grey`;
+        const data = document.createElement('span');
+        data.className = 'odata mono';
+        const status = pin ? `${pinStatus(o)} · ` : '';
+        data.textContent = `${status}${o.speed.toFixed(1)} px/f · ${fmtTime(o.first.time)}–${fmtTime(o.last.time)} · ${o.frames} frames`;
+        const buttons = document.createElement('span');
+        buttons.className = 'obtn';
+        const hist = document.createElement('button');
+        hist.type = 'button';
+        hist.textContent = '≡';
+        hist.title = 'History: size, contrast, speed and why it was missed, frame by frame';
+        hist.addEventListener('click', e => { e.stopPropagation(); historyOf = historyOf === o.id ? null : o.id; objectsDirty = true; renderObjects(); });
+        const pb = document.createElement('button');
+        pb.type = 'button';
+        pb.className = 'pin';
+        pb.textContent = pin ? '★' : '☆';
+        pb.title = pin ? 'Unpin' : 'Pin: keep watching it, draw in orange';
+        pb.addEventListener('click', e => { e.stopPropagation(); togglePin(o.id); });
+        buttons.append(hist, pb);
+        li.append(id, size, buttons, data);
+        li.addEventListener('click', () => goToTime(o.last.time));
+        return li;
+    }));
+    $('objectsEmpty').hidden = list.length > 0;
+    renderHistory();
+}
+
+// The open object's history: the latest rows first, events highlighted.
+function renderHistory() {
+    const box = $('objectHistory');
+    const o = historyOf !== null ? objs.get(historyOf) : null;
+    box.hidden = !o;
+    if (!o) return;
+    const tracks = [...new Set(o.history.filter(e => e.track !== undefined).map(e => e.track))];
+    $('historyTitle').textContent = `#${o.id} · tracks ${tracks.map(t => `#${t}`).join(', ')} · ${o.history.length} rows`;
+    const rows = o.history.slice(-80).reverse();
+    $('historyRows').replaceChildren(...rows.map(e => {
+        const tr = document.createElement('tr');
+        if (e.event) {
+            tr.className = 'ev';
+            tr.innerHTML = `<td>${e.frame ?? ''}</td><td>${fmtTime(e.time)}</td><td colspan="4"></td>`;
+            tr.lastElementChild.textContent = e.event;
+        } else if (e.seen) {
+            const c = Math.round(e.contrast);
+            tr.innerHTML = `<td>${e.frame ?? ''}</td><td>${fmtTime(e.time)}</td><td></td><td></td><td></td><td></td>`;
+            const td = tr.children;
+            td[2].textContent = `${e.state[0]}${e.weak ? ' weak' : ''}`;
+            td[3].textContent = `${e.w}×${e.h}`;
+            td[4].textContent = `${c > 0 ? '+' : ''}${c}`;
+            td[5].textContent = `${e.speed}${e.score !== undefined ? ` · ${e.score}σ` : ''}`;
+        } else {
+            tr.className = 'miss';
+            tr.innerHTML = `<td>${e.frame ?? ''}</td><td>${fmtTime(e.time)}</td><td></td><td colspan="3"></td>`;
+            tr.children[2].textContent = e.state[0];
+            tr.children[3].textContent = e.why || 'not seen';
+        }
+        return tr;
+    }));
+}
+
+function exportHistory(kind) {
+    const o = historyOf !== null ? objs.get(historyOf) : null;
+    if (!o) return;
+    const base = `${(source && source.label ? source.label.replace(/\.[^.]+$/, '') : 'pixelhunter').replace(/[^\w.-]+/g, '_')}.object-${o.id}`;
+    if (kind === 'csv') {
+        const blob = new Blob([historyCsv(o)], { type: 'text/csv' });
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = `${base}.csv`;
+        document.body.append(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    } else {
+        download(`${base}.json`, { app: 'PixelHunter', version: APP_VERSION, source: source ? source.label : null, object: o.id,
+            units: 'x, y, w, h: source px; contrast: grey levels (box mean − 2 px ring mean); speed: px per frame against the background; score: σ (adaptive mode)',
+            params: Object.fromEntries(PARAM_DEFS.filter(d => !['view', 'showCandidates', 'showTruth', 'showZones', 'simLoad'].includes(d.key)).map(d => [d.key, params[d.key]])),
+            history: o.history.map(({ px, ...e }) => e) });
+    }
+}
+
+// --- panels: remember which are folded ---------------------------------------------------------
+
+const PANELS_KEY = 'pixelhunter.panels.v1';
+
+function bindPanels() {
+    let state = {};
+    try { state = JSON.parse(localStorage.getItem(PANELS_KEY) || '{}') || {}; } catch { /* defaults */ }
+    for (const d of document.querySelectorAll('.panel details[id]')) {
+        if (d.id in state) d.open = !!state[d.id];
+        d.addEventListener('toggle', () => {
+            state[d.id] = d.open;
+            try { localStorage.setItem(PANELS_KEY, JSON.stringify(state)); } catch { /* not remembered */ }
+        });
+    }
 }
 
 // --- sources ------------------------------------------------------------------------------
@@ -599,15 +969,17 @@ async function openSource(next) {
         score = createScore({ fps: next.scene.fps });
         confScore = createScore({ fps: next.scene.fps });
         $('srcLabel').textContent = `${next.label} · ${next.scene.width}×${next.scene.height}`;
-        loop = createSyntheticLoop({ scene: next.scene, onFrame, mode: params.mode });
+        loop = createSyntheticLoop({ scene: next.scene, onFrame, mode: params.mode, speed: Number(params.speed) });
     } else {
         video.hidden = false;
         score = null;
         confScore = null;
         $('srcLabel').textContent = `${next.label} · ${video.videoWidth}×${video.videoHeight}`;
         loop = createFrameLoop({ video, onFrame, mode: params.mode });
+        loop.setSpeed(Number(params.speed));
     }
     ph.loop = loop;
+    clearObjects();
     ph.score = score;
     ph.confScore = confScore;
     ph.log = log;
@@ -615,7 +987,8 @@ async function openSource(next) {
     await loop.start({ probe: !next.isLive });
     // frame t is shown once t+s has arrived (s = stride): load them so the first frame has its result
     if (!next.isLive) for (let i = 0; i < Math.max(1, params.stride); i++) await loop.step();
-    for (const id of ['play', 'step', 'timeline']) $(id).disabled = false;
+    for (const id of ['play', 'step', 'timeline', 'back', 'bookmark']) $(id).disabled = false;
+    renderBookmarks();
     renderZoneLists();
     updateTransport();
 }
@@ -652,7 +1025,8 @@ function updateTransport() {
     $('play').textContent = loop && loop.playing ? 'Pause' : 'Play';
     if (!loop) return;
     const shown = lastOut ? lastOut.slot.meta.time : loop.time;
-    $('time').textContent = `${fmtTime(shown)} / ${fmtTime(loop.duration)}`;
+    const fr = lastOut && lastOut.slot.meta.frame;
+    $('time').textContent = `${fmtTime(shown)}${fr !== null && fr !== undefined ? ` #${fr}` : ''} / ${fmtTime(loop.duration)}`;
     if (!scrubbing && Number.isFinite(loop.duration) && loop.duration > 0) {
         $('timeline').value = Math.round(loop.time / loop.duration * 1000);
     }
@@ -669,19 +1043,40 @@ let scrubbing = false;
 
 function bindTransport() {
     $('play').addEventListener('click', togglePlay);
-    $('step').addEventListener('click', () => loop && loop.step().then(updateTransport));
+    $('step').addEventListener('click', stepForward);
+    $('back').addEventListener('click', stepBack);
+    $('bookmark').addEventListener('click', addBookmark);
     const tl = $('timeline');
     tl.addEventListener('input', () => {
         scrubbing = true;
         if (loop && Number.isFinite(loop.duration)) loop.seek(tl.value / 1000 * loop.duration);
     });
-    tl.addEventListener('change', () => { scrubbing = false; });
+    // hover: the time (and frame) under the pointer
+    const wrap = tl.parentElement;
+    wrap.addEventListener('pointermove', e => {
+        if (!loop || !Number.isFinite(loop.duration) || tl.disabled) return;
+        const r = tl.getBoundingClientRect();
+        const f = Math.min(1, Math.max(0, (e.clientX - r.left - 8) / Math.max(1, r.width - 16)));
+        const t = f * loop.duration, fps = loop.stats().sourceFps;
+        const tip = $('tlHover');
+        tip.textContent = `${fmtTime(t)}${fps ? ` #${Math.round(t * fps)}` : ''}`;
+        tip.style.left = `${e.clientX - wrap.getBoundingClientRect().left}px`;
+        tip.hidden = false;
+    });
+    wrap.addEventListener('pointerleave', () => { $('tlHover').hidden = true; });
+    tl.addEventListener('change', () => {
+        scrubbing = false;
+        // paused: refill the history so the frame shows with its detection result
+        if (loop && !loop.playing && Number.isFinite(loop.duration)) goToTime(tl.value / 1000 * loop.duration);
+    });
     for (const ev of ['play', 'pause', 'timeupdate', 'seeked', 'ended']) video.addEventListener(ev, updateTransport);
 
     document.addEventListener('keydown', e => {
         if (e.target instanceof HTMLInputElement && e.target.type !== 'range') return;
         if (e.code === 'Space') { e.preventDefault(); togglePlay(); }
-        else if (e.code === 'ArrowRight' && loop) { e.preventDefault(); loop.step().then(updateTransport); }
+        else if (e.code === 'ArrowRight' && loop) { e.preventDefault(); stepForward(); }
+        else if (e.code === 'ArrowLeft' && loop) { e.preventDefault(); stepBack(); }
+        else if (e.code === 'KeyB' && loop && !e.ctrlKey && !e.metaKey) addBookmark();
         else if (e.code === 'Escape' && drawing) setDrawing(false);
     });
 
@@ -693,7 +1088,7 @@ function bindTransport() {
     for (const [key, s] of Object.entries(SCENES)) pick.append(new Option(s.label, key));
     $('openScene').addEventListener('click', () => openScene(pick.value));
     $('exportJson').addEventListener('click', exportJson);
-    $('clearLog').addEventListener('click', () => { log.clear(); updateStats(); });
+    $('clearLog').addEventListener('click', () => { log.clear(); clearObjects(); updateStats(); });
     stage.addEventListener('dragover', e => { e.preventDefault(); stage.classList.add('dragover'); });
     stage.addEventListener('dragleave', () => stage.classList.remove('dragover'));
     stage.addEventListener('drop', e => {
@@ -727,6 +1122,7 @@ function exportJson() {
 // --- stats --------------------------------------------------------------------------------
 
 function updateStats() {
+    renderObjects();
     if (!loop) return;
     const s = loop.stats();
     const fps = v => (v === null ? '–' : v.toFixed(1));
@@ -747,7 +1143,9 @@ function updateStats() {
     $('stEgo').textContent = r ? `${r.timings.ego.toFixed(1)} ms` : '–';
     const area = r && r.detect.ok && r.detect.processedArea < 1 ? ` (${Math.round(r.detect.processedArea * 100)} % area)` : '';
     $('stDetect').textContent = r ? `${r.timings.detect.toFixed(1)} ms${area}` : '–';
-    const dropped = r && r.detect.ok && r.detect.shiftRejected ? ` (${r.detect.shiftRejected} shift)` : '';
+    const why = r && r.detect.ok ? [r.detect.shiftRejected && `${r.detect.shiftRejected} shift`, r.detect.sizeRejected && `${r.detect.sizeRejected} size`,
+        r.detect.slivers && `${r.detect.slivers} sliver`].filter(Boolean) : [];
+    const dropped = why.length ? ` (dropped: ${why.join(', ')})` : '';
     $('stCand').textContent = r ? (r.detect.ok ? `${r.candidates.length}${r.detect.noisy ? '+' : ''}${dropped}` : '–') : '–';
     const nState = st => (r ? r.tracks.filter(t => t.state === st).length : 0);
     $('stTracks').textContent = r ? `${r.confirmed.length} confirmed · ${nState('tentative')} tentative${nState('held') ? ` · ${nState('held')} held` : ''}` : '–';
@@ -767,6 +1165,10 @@ function updateStats() {
 
 async function start() {
     renderParams();
+    bindPanels();
+    $('historyCsv').addEventListener('click', () => exportHistory('csv'));
+    $('historyJson').addEventListener('click', () => exportHistory('json'));
+    $('historyClose').addEventListener('click', () => { historyOf = null; objectsDirty = true; renderObjects(); });
     renderPresets();
     bindUserPresets();
     bindTransport();

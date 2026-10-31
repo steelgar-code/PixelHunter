@@ -1,5 +1,5 @@
-// Background-shift check: false detections on trees (parallax, wind) are dropped, real targets
-// are not, also in front of the trees, faint ones, when cropped and with blur.
+// Background-shift check (robust detector): false detections on trees (parallax, wind) are
+// dropped, real targets are not, also in front of the trees, faint ones, when cropped and with blur.
 import { launch, ok, openApp } from './lib/env.mjs';
 import { instrumentMats } from './lib/mats.mjs';
 import { SCENES } from '../src/scenes.js';
@@ -14,7 +14,9 @@ try {
         const { createScore } = await import('/src/score.js');
         window.run = (o, params) => {
             const s = createScene(o);
-            const pipe = createPipeline(cv, { ...window.__ph.params, ...params });
+            // the shift check is measured against the robust detector (adaptive mode is quiet on
+            // these trees without it); presets passed in bring their own detector
+            const pipe = createPipeline(cv, { ...window.__ph.params, detectMode: 'robust', ...params });
             const raw = createScore({ fps: s.fps }), conf = createScore({ fps: s.fps });
             const ms = [];
             for (let k = 0; k < s.frames; k++) {
@@ -92,7 +94,7 @@ try {
     await p.waitForFunction(() => __ph.results.length >= 1, null, { timeout: 30000 });
     for (let i = 0; i < 8; i++) await p.click('#step');
     await p.waitForTimeout(400);
-    ok('stats show how many were dropped', /\(\d+ shift\)/.test(await p.textContent('#stCand')), await p.textContent('#stCand'));
+    ok('stats show how many were dropped', /dropped: .*\d+ shift/.test(await p.textContent('#stCand')), await p.textContent('#stCand'));
     ok('turning a preset on leaves the check alone', await p.evaluate(() => { __ph.applyPreset('low'); return __ph.params.shiftCheck === true; }));
     ok('no page errors (app)', e2.length === 0, e2);
 } finally {

@@ -15,7 +15,7 @@ export function createExportLog() {
             for (const t of r.confirmed) {
                 const b = t.box;
                 rows.push({
-                    frame: r.frame, time: +r.time.toFixed(4), trackId: t.id,
+                    frame: r.frame, time: +r.time.toFixed(4), trackId: t.id, ...(t.objectId !== undefined && t.objectId !== null ? { objectId: t.objectId } : {}),
                     box: [edge(b.x), edge(b.y), edge(b.w), edge(b.h)],
                     cx: src(b.cx), cy: src(b.cy), area: +(b.area / (s * s)).toFixed(1),
                     vx: +(t.vx / s).toFixed(3), vy: +(t.vy / s).toFixed(3),

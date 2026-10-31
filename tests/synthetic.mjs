@@ -37,7 +37,9 @@ try {
     const cyan = await countColour(page, 'b > 200 && g > 180 && r < 140');
     const yellow = await countColour(page, 'r > 200 && g > 170 && b < 140', 100);
     const magenta = await countColour(page, 'r > 200 && g < 120 && b > 180');
-    ok('ground truth circles drawn', cyan > 50, cyan);
+    // (the count depends on the frame on screen and how much of the circles the boxes drawn on top
+    // cover: 50–56 has been seen; a missing overlay gives 0)
+    ok('ground truth circles drawn', cyan > 30, cyan);
     ok('candidate boxes drawn (faint)', yellow > 50, yellow);
     ok('confirmed tracks drawn', magenta > 50, magenta);
     await page.click('#param-showTruth');
@@ -61,10 +63,12 @@ try {
     await page.click('#step');
     await sleep(200);
     ok('step advances one frame', (await page.evaluate(() => __ph.shown.frame)) === before + 1);
+    const seq0 = await page.evaluate(() => __ph.lastFrame.seq);
     await page.$eval('#timeline', el => { el.value = 500; el.dispatchEvent(new Event('input')); el.dispatchEvent(new Event('change')); });
-    await sleep(200);
-    const j = await page.evaluate(() => __ph.lastFrame);
-    ok('timeline seek jumps', j.jump && j.frame === 75, j);
+    // paused: it lands on that frame, refilling the history from a few frames before
+    await page.waitForFunction(n => __ph.lastFrame.seq > n && !document.getElementById('stage').classList.contains('busy'), seq0, { timeout: 15000 });
+    const j = await page.evaluate(n => ({ jumped: __ph.frames.some(f => f.seq > n && f.jump), shown: __ph.shown.frame }), seq0);
+    ok('timeline seek jumps, landing on that frame', j.jumped && j.shown === 75, j);
 
     const s = await page.evaluate(() => { document.querySelector('#param-threshold').value = 40; document.querySelector('#param-threshold').dispatchEvent(new Event('input')); return __ph.stats.score; });
     await sleep(300);
