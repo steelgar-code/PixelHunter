@@ -23,7 +23,8 @@
 //   - pathCheck: a track only confirms when its recent sightings fit a steady straight path (a
 //     least-squares constant-velocity line, RMS deviation ≤ pathTolerance px), and stops being
 //     shown when its last sightings stray more than twice that. Noise chained from blob to blob,
-//     or a branch swaying back and forth, doesn't stay on such a path;
+//     or a branch swaying back and forth, doesn't stay on such a path. After a gap of PATH_RESTART
+//     missed frames the path starts over (the motion may have changed: stop and go);
 //   - crowdGate: where blobs are dense, the association radius shrinks so that on average no
 //     more than CROWD_EXPECTED unrelated blobs fall inside it (but not below gateBase + 2 px);
 //   - motionPause: on a frame without camera motion, tracks can't be carried into the new frame,
@@ -58,6 +59,7 @@ export const TRACK_DEFAULTS = {
 const CROWD_RADIUS = 40;       // px around a prediction in which blob density is measured
 const CROWD_EXPECTED = 0.3;    // unrelated blobs expected inside a gate, at most
 const PATH_POINTS = 8;         // sightings kept for the path check
+const PATH_RESTART = 4;        // missed frames after which the path check starts over (stop and go)
 const WEAK_MIN_AREA = 0.25;    // a weak blob continues a track only at ≥ this × the track's last blob area
 
 const popcount = x => { let n = 0; while (x) { n += x & 1; x >>>= 1; } return n; };
@@ -168,6 +170,9 @@ export function createTracker(options = {}) {
             usedT.add(t);
             usedB.add(j);
             const b = blobs[j];
+            // seen again after a gap: its motion may have changed (stop and go), so the path
+            // check starts over from here
+            if (t.misses >= PATH_RESTART) t.pts = [];
             if (restart) {
                 // picked up again after a pause (or where it stopped): same id, but it confirms
                 // afresh from here, so noise around a stopped object can't show as a detection
