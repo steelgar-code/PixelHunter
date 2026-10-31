@@ -46,6 +46,10 @@ body { background: var(--bg); color: var(--text); display: flex; flex-direction:
     background: #ffcf5c; pointer-events: auto; cursor: pointer; }
 .tl-marks button:hover { background: #fff; }
 .view-params { margin-top: 10px; }
+.tl-hover { position: absolute; bottom: 100%; margin-bottom: 4px; transform: translateX(-50%); padding: 2px 6px; border-radius: var(--radius);
+    background: var(--panel); border: 1px solid var(--line); font-size: 11px; white-space: nowrap; pointer-events: none; z-index: 2; }
+.keys { margin: 0; font-size: 12px; word-break: normal; }
+.keys kbd { font: inherit; font-size: 11px; padding: 0 4px; border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 4px; color: var(--text); }
 
 button { font: inherit; color: var(--text); background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 5px 12px; cursor: pointer; }
 button:hover:not(:disabled) { border-color: var(--accent); }
@@ -141,7 +145,20 @@ button[aria-pressed=true] { background: color-mix(in srgb, var(--danger) 25%, va
 .objects li.live .oid::after { content: ' ●'; color: #ff4fd8; }
 .objects .oid { font-weight: 600; }
 .objects .odata { font-size: 12px; color: var(--muted); grid-column: 1 / 3; }
-.objects .pin { grid-row: 1 / 3; grid-column: 3; padding: 0 6px; font-size: 14px; }
+.objects .obtn { grid-row: 1 / 3; grid-column: 3; display: flex; gap: 4px; }
+.objects .obtn button { padding: 0 6px; font-size: 14px; }
+.objects li.open { border-color: var(--accent); }
 .objects li.pinned .pin { color: #ff9f43; border-color: #ff9f43; }
 .stage.over-object { cursor: pointer; }
 .stage.busy { cursor: progress; }
+
+.history { margin-top: 8px; border: 1px solid var(--line); border-radius: var(--radius); }
+.history-head { margin: 0; padding: 4px 6px; align-items: center; border-bottom: 1px solid var(--line); }
+.history-head span { flex: 1; min-width: 0; font-size: 11px; color: var(--muted); }
+.history-head button { padding: 1px 6px; font-size: 12px; }
+.history-scroll { max-height: 260px; overflow: auto; }
+.history table { width: 100%; border-collapse: collapse; font-size: 11px; }
+.history th { position: sticky; top: 0; background: var(--panel); color: var(--muted); font-weight: 400; text-align: left; padding: 2px 4px; }
+.history td { padding: 1px 4px; border-top: 1px solid color-mix(in srgb, var(--line) 50%, transparent); vertical-align: top; }
+.history tr.miss td { color: var(--muted); }
+.history tr.ev td { color: #ffcf5c; }

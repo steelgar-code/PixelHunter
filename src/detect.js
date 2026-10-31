@@ -72,6 +72,7 @@ import { project, inv, mul } from './homography.js';
 import { zoneRect, regionRects } from './zones.js';
 
 const SHIFT = 4;               // fillConvexPoly fractional bits: vertices to 1/16 px
+const MAX_EXPLAINED = 50;      // blobs dropped by size kept per region, to show and explain
 const ZONE_PAD = 2;            // px around a zone: interpolation and the 3×3 min / max reach
 const REGION_PAD = 4;          // px of context around an inclusion zone (3×3 blur, min / max)
 const RING = 5;                // px of background around a candidate for the shift check
@@ -88,11 +89,11 @@ const SLIVER_ANGLE = 25 * Math.PI / 180;
 const SLIVER_GRADIENT = 8;     // grey levels per px: weaker than this isn't an edge
 
 export const DETECT_DEFAULTS = {
-    detectMode: 'robust',  // 'robust' (three frames, M3), 'adaptive' (three frames) or 'basic' (two)
+    detectMode: 'adaptive', // 'adaptive' (three frames, default), 'robust' (three frames) or 'basic' (two)
     threshold: 20,         // grey levels (robust, basic)
-    sigmas: 5,             // adaptive: threshold in units of the local noise
+    sigmas: 7,             // adaptive: threshold in units of the local noise
     minContrast: 4,        // adaptive: lowest threshold, grey levels
-    weakMargin: 1.5,       // adaptive: weak candidates down to sigmas − this (0: none)
+    weakMargin: 2.5,       // adaptive: weak candidates down to sigmas − this (0: none)
     noiseFrom: 'plain',    // adaptive: noise scaled from the plain difference ('plain', calibrated),
                            // or each k×k sum's own RMS ('sums': underestimates the tails of these
                            // non-Gaussian sums; on the benchmark false tracks went into the thousands)
@@ -244,19 +245,26 @@ export function createDetector(cv, options = {}) {
         const st = m.stats.data32S, ce = m.centroids.data64F;
         let noisy = n - 1 > p.maxCandidates * 4;
         let parts = [];
+        // blobs dropped by their size, kept (a few) so they can be shown and explained
+        const sized = [];
+        const box = i => ({ x: st[i * 5] + ox, y: st[i * 5 + 1] + oy, w: st[i * 5 + 2], h: st[i * 5 + 3], area: st[i * 5 + 4], cx: ce[i * 2] + ox, cy: ce[i * 2 + 1] + oy });
         for (let i = 1; i < n && parts.length < p.maxCandidates * 4; i++) {
             const area = st[i * 5 + 4];
-            if (area > p.maxArea) continue;
-            parts.push({ x: st[i * 5] + ox, y: st[i * 5 + 1] + oy, w: st[i * 5 + 2], h: st[i * 5 + 3], area, cx: ce[i * 2] + ox, cy: ce[i * 2 + 1] + oy });
+            if (area > p.maxArea) { if (sized.length < MAX_EXPLAINED) sized.push({ ...box(i), why: 'too large' }); continue; }
+            parts.push(box(i));
         }
         if (p.mergeDist > 0 && parts.length > 1) parts = mergeClose(parts, p.mergeDist);
         const out = [];
         for (const b of parts) {
-            if (b.area < p.minArea || b.area > p.maxArea) continue;
+            if (b.area < p.minArea || b.area > p.maxArea) {
+                // too small is mostly noise: only the larger of those are worth showing
+                if (sized.length < MAX_EXPLAINED && (b.area > p.maxArea || b.area >= Math.max(2, p.minArea / 2))) sized.push({ ...b, why: b.area > p.maxArea ? 'too large' : 'too small' });
+                continue;
+            }
             if (out.length >= p.maxCandidates) { noisy = true; break; }
             out.push(b);
         }
-        return { candidates: out, components: n - 1, noisy };
+        return { candidates: out, components: n - 1, noisy, sized };
     }
 
     // Is candidate c (full-frame px) explained by a local shift of the background? cur: frame t
@@ -380,13 +388,15 @@ export function createDetector(cv, options = {}) {
 
     // Splits a region's candidates into kept and explained by a background shift.
     function shiftFilter(b, r, src, view, full, ns, thrAt) {
-        if (!p.shiftCheck || !b.candidates.length) return { ...b, rejected: [] };
+        if (!p.shiftCheck || !b.candidates.length) return { ...b, rejected: [...(b.sized || [])] };
         const cur = src !== view ? { data: src.data, step: r.w, ox: 0, oy: 0 }
             : full ? { data: view.data, step: r.w, ox: 0, oy: 0 }
             : { data: src.__full.data, step: size.w, ox: r.x, oy: r.y };
         const kept = [], rejected = [];
-        for (const c of b.candidates) (shiftExplained(c, r, cur, ns, m.mask, thrAt) ? rejected : kept).push(c);
-        return { ...b, candidates: kept, rejected };
+        for (const c of b.candidates) {
+            if (shiftExplained(c, r, cur, ns, m.mask, thrAt)) rejected.push({ ...c, why: 'background shift' }); else kept.push(c);
+        }
+        return { ...b, candidates: kept, rejected: [...rejected, ...(b.sized || [])] };
     }
 
     // Frame t inside region r ({ x, y, w, h }, processing px): a view of `cur` and the
@@ -642,7 +652,7 @@ export function createDetector(cv, options = {}) {
             const slivers = b.candidates.filter(c => isSliver(c, r, m.wPrev, m.mask));
             if (slivers.length) b.candidates = b.candidates.filter(c => !slivers.includes(c));
             const f = shiftFilter(b, r, src, view, full, [m.wPrev, m.wNext], null);
-            f.rejected = [...(f.rejected || []), ...slivers];
+            f.rejected = [...(f.rejected || []), ...slivers.map(c => ({ ...c, why: 'sliver along an edge' }))];
             f.slivers = slivers.length;
             return { ...f, candidates: f.candidates.filter(c => c.score >= p.sigmas),
                 weak: f.candidates.filter(c => c.score < p.sigmas).map(c => ({ ...c, weak: true })) };
@@ -690,7 +700,8 @@ export function createDetector(cv, options = {}) {
         }
         if (out.candidates.length > p.maxCandidates) { out.candidates.length = p.maxCandidates; out.noisy = true; }
         const t1 = performance.now();
-        return { ...out, shiftRejected: out.rejected.length, ...(brightness ? { brightness } : {}), regions: regions || null,
+        return { ...out, shiftRejected: out.rejected.filter(c => c.why === 'background shift').length,
+            sizeRejected: out.rejected.filter(c => c.why === 'too large' || c.why === 'too small').length, ...(brightness ? { brightness } : {}), regions: regions || null,
             ...(mode === 'adaptive' ? { tolerance: lastTol } : {}),
             processedArea: regions ? regions.reduce((a, r) => a + r.w * r.h, 0) / (size.w * size.h) : 1,
             timings: { diff: t1 - t0 } };

@@ -117,9 +117,9 @@ try {
         await p.evaluate(() => { __ph.applyPreset('low'); __ph.setZones('exclude', []); __ph.setZones('include', []); });
         await p.selectOption('#userPreset', 'Sky, faint');
         await p.click('#applyUserPreset');
-        const a = await p.evaluate(() => ({ t: __ph.params.threshold, s: __ph.params.stride, z: __ph.params.zones.length, i: __ph.params.include.length }));
-        ok('applying restores settings and both kinds of zones', a.t === 12 && a.s === 4 && a.z === 1 && a.i === 1, a);
-        ok('… and the controls show them', (await p.inputValue('#param-threshold')) === '12' && (await p.getAttribute('#preset-highest', 'aria-pressed')) === 'true');
+        const a = await p.evaluate(() => ({ t: __ph.params.sigmas, s: __ph.params.confirmN, z: __ph.params.zones.length, i: __ph.params.include.length }));
+        ok('applying restores settings and both kinds of zones', a.t === 6 && a.s === 4 && a.z === 1 && a.i === 1, a);
+        ok('… and the controls show them', (await p.inputValue('#param-sigmas')) === '6' && (await p.getAttribute('#preset-highest', 'aria-pressed')) === 'true');
         await p.evaluate(() => { __ph.applyPreset('low'); __ph.setZones('exclude', []); });
         await p.selectOption('#userPreset', 'OSD only');
         await p.click('#applyUserPreset');
@@ -145,8 +145,8 @@ try {
         const q = await p.context().newPage();
         await q.goto(`${p.url().split('#')[0]}#preset=sky,%20faint`);
         await q.waitForFunction(() => window.__ph && window.__ph.ready);
-        const c = await q.evaluate(() => ({ t: __ph.params.threshold, i: __ph.params.include.length }));
-        ok('#preset=<my preset name> applies it on opening', c.t === 12 && c.i === 1, c);
+        const c = await q.evaluate(() => ({ t: __ph.params.sigmas, i: __ph.params.include.length }));
+        ok('#preset=<my preset name> applies it on opening', c.t === 6 && c.i === 1, c);
         await ctx.close();
     }
 } finally {

@@ -15,13 +15,14 @@ export const PARAM_DEFS = [
     { key: 'showZones', label: 'Detection-area zones', group: 'view', type: 'bool', default: true },
 
     // detection (detect.js)
-    { key: 'detectMode', label: 'Detection', group: 'detect', type: 'choice', default: 'robust',
+    { key: 'detectMode', label: 'Detection', group: 'detect', type: 'choice', default: 'adaptive',
       choices: [['robust', 'Robust (3 frames)'], ['adaptive', 'Adaptive (3 frames)'], ['basic', 'Basic (2 frames)']] },
     { key: 'procWidth', label: 'Processing width', group: 'detect', type: 'choice', default: '0',
       choices: [['0', 'Source'], ['1920', '1920'], ['1280', '1280'], ['960', '960'], ['640', '640']] },
     { key: 'stride', label: 'Frame stride', group: 'detect', type: 'number', default: 1, min: 1, max: 12, step: 1, unit: 'frames' },
     { key: 'threshold', label: 'Diff threshold', group: 'detect', type: 'number', default: 20, min: 5, max: 100, step: 1, unit: 'grey' },
-    { key: 'sigmas', label: 'Adaptive threshold', group: 'detect', type: 'number', default: 5, min: 3, max: 12, step: 0.5, unit: 'σ' },
+    { key: 'sigmas', label: 'Adaptive threshold', group: 'detect', type: 'number', default: 7, min: 3, max: 12, step: 0.5, unit: 'σ' },
+    { key: 'weakMargin', label: 'Adaptive weak margin', group: 'detect', type: 'number', default: 2.5, min: 0, max: 4, step: 0.5, unit: 'σ' },
     { key: 'minContrast', label: 'Adaptive min contrast', group: 'detect', type: 'number', default: 4, min: 1, max: 30, step: 1, unit: 'grey' },
     { key: 'minArea', label: 'Min blob area', group: 'detect', type: 'number', default: 1, min: 1, max: 50, step: 1, unit: 'px' },
     { key: 'maxArea', label: 'Max blob area', group: 'detect', type: 'number', default: 400, min: 10, max: 5000, step: 10, unit: 'px' },
@@ -73,17 +74,17 @@ const MID = Object.fromEntries(PARAM_DEFS.filter(d => ['detect', 'track', 'motio
 export const PRESETS = {
     highest: {
         label: 'Highest',
-        hint: 'faint 1–2 px objects, slow (down to ~0.8 px/frame); slower to run, more false candidates',
+        hint: 'fainter 1–3 px objects (contrast ~10–15): adaptive at 6σ, stricter confirmation (4 of 6), finer camera motion; slower to run. Slow movers: raise Frame stride',
         values: {
             ...MID,
-            procWidth: '0', stride: 4, threshold: 12, minArea: 1, maxArea: 100, borderMargin: 4, blur: false, open: false,
-            confirmN: 4, confirmM: 6, gateBase: 3, maxSpeed: 6, minTravel: 2, holdFrames: 75,
-            estWidth: 480, features: 600, fbMax: 0.7, ransacPx: 1.5, minInliers: 40,
+            detectMode: 'adaptive', sigmas: 6, weakMargin: 2,
+            confirmN: 4, confirmM: 6, minTravel: 2, holdFrames: 75,
+            estWidth: 480, features: 600,
         },
     },
     mid: {
         label: 'Mid',
-        hint: 'the defaults: 2–20 px objects, contrast ≥ 30, ≥ 2–5 px/frame',
+        hint: 'the defaults: adaptive detector at 7σ, objects 2–20 px down to contrast ~15, ≥ 2 px/frame',
         values: { ...MID },
     },
     low: {
@@ -91,7 +92,7 @@ export const PRESETS = {
         hint: 'high-contrast objects ≥ 4 px at 960 px, fast (up to 30 px/frame); fastest, fewest false alarms',
         values: {
             ...MID,
-            procWidth: '960', stride: 1, threshold: 35, minArea: 6, maxArea: 3000, borderMargin: 3, blur: true, open: false,
+            detectMode: 'robust', procWidth: '960', stride: 1, threshold: 35, minArea: 6, maxArea: 3000, borderMargin: 3, blur: true, open: false,
             confirmN: 3, confirmM: 5, gateBase: 6, maxSpeed: 30, minTravel: 5, holdFrames: 25,
             estWidth: 320, features: 400, lkWin: 25, lkLevels: 4, ransacPx: 2.5,
         },

@@ -144,6 +144,7 @@ export function createTracker(options = {}) {
             }
             // weak blobs: tracks with a known velocity only, gate without the growth for misses
             const weakGate = p.gateBase + motion + Math.min(grow, p.gateBase);
+            t.gate = gate; t.weakGate = weakGate;          // for explaining misses (snapshot)
             const weakOk = t.hits >= 2 && !held && H;
             blobs.forEach((b, j) => {
                 const d = Math.hypot(b.cx - t.px, b.cy - t.py);
@@ -230,6 +231,7 @@ export function createTracker(options = {}) {
         return tracks.map(t => ({
             id: t.id, state: held_(t) ? 'held' : t.confirmed ? 'confirmed' : 'tentative', matched: t.matched,
             lastSeen: [t.lx, t.ly], reacquired: t.reacquired || 0, pinned: pinned.has(t.id),
+            predicted: [t.px ?? t.x, t.py ?? t.y], gate: t.gate ?? null, weakGate: t.weakGate ?? null, held: held_(t),
             x: t.x, y: t.y, vx: t.vx, vy: t.vy, hits: t.hits, age: t.age, misses: t.misses,
             seen: popcount(t.hist), box: t.box, trail: t.trail.map(q => q.slice()),
         }));

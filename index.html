@@ -33,11 +33,13 @@
             <div class="timeline-wrap">
                 <input type="range" id="timeline" min="0" max="1000" value="0" step="1" disabled aria-label="Position">
                 <div id="tlMarks" class="tl-marks"></div>
+                <span id="tlHover" class="tl-hover mono" hidden></span>
             </div>
             <span id="time" class="mono">0:00.000</span>
             <button type="button" id="bookmark" disabled title="Bookmark this frame (B)">☆ Mark</button>
         </div>
         <div id="bookmarks" class="bookmarks" hidden></div>
+        <p class="keys muted"><kbd>Space</kbd> play / pause · <kbd>←</kbd> <kbd>→</kbd> one frame · <kbd>B</kbd> bookmark · click an object on the video to pin it · <kbd>Esc</kbd> stop drawing zones</p>
     </section>
 
     <aside class="panel">
@@ -123,6 +125,18 @@
             <div class="help-host"></div>
             <ol id="objectList" class="objects"></ol>
             <p id="objectsEmpty" class="muted">No confirmed objects yet</p>
+            <div id="objectHistory" class="history" hidden>
+                <div class="row history-head">
+                    <span id="historyTitle" class="mono"></span>
+                    <button type="button" id="historyCsv" title="Download the whole history as CSV">CSV</button>
+                    <button type="button" id="historyJson" title="Download the whole history as JSON, with the settings">JSON</button>
+                    <button type="button" id="historyClose" title="Close">×</button>
+                </div>
+                <div class="history-scroll">
+                    <table class="mono"><thead><tr><th>frame</th><th>time</th><th>state</th><th>size px</th><th>contrast</th><th>speed · σ</th></tr></thead>
+                    <tbody id="historyRows"></tbody></table>
+                </div>
+            </div>
         </details>
         <details open id="pArea">
             <summary data-help="area">Detection area</summary>

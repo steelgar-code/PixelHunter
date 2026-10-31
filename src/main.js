@@ -11,6 +11,7 @@ import { loadPresets, savePresets, presetFrom, upsert, remove, find, changesOf, 
 import { createPipeline } from './pipeline.js';
 import { createScore } from './score.js';
 import { createExportLog, download } from './exportLog.js';
+import { createObjects, historyCsv } from './objects.js';
 import { fitOverlay, clear, drawPoints, drawNote, drawBoxes, drawTruth, drawTracks, drawHeld, drawOffscreen, drawZones, drawInclude } from './overlay.js';
 import { normalizeZone, normalizeZones, parseZones, formatZones, zoneRect, inZones, loadZones, saveZones, MAX_ZONES, ZONES_KEY, INCLUDE_KEY } from './zones.js';
 
@@ -447,8 +448,8 @@ function onFrame(f) {
         r.score = score.add(r.frame, r.candidates, scoredTargets(r));
         r.confScore = confScore.add(r.frame, r.confirmed.map(t => t.box), scoredTargets(r));
     }
-    if (r && r.confirmed.length) log.add(r);
     if (r) noteObjects(out);
+    if (r && r.confirmed.length) log.add(r);
     // while refilling the history for a jump (goToTime), only the target frame is drawn
     if (!navigating) {
         render();
@@ -494,12 +495,12 @@ function render() {
     }
     if (r && params.view !== 'points') {
         const held = r.held || [];
-        drawHeld(overlayCtx, tf, held.filter(t => !pinned.has(t.id)));
-        drawHeld(overlayCtx, tf, held.filter(t => pinned.has(t.id)), { colour: PIN_COLOUR });
-        drawTracks(overlayCtx, tf, r.confirmed.filter(t => !pinned.has(t.id)));
-        drawTracks(overlayCtx, tf, r.confirmed.filter(t => pinned.has(t.id)), { colour: PIN_COLOUR });
+        drawHeld(overlayCtx, tf, asObject(held.filter(t => !isPinnedTrack(t))));
+        drawHeld(overlayCtx, tf, asObject(held.filter(isPinnedTrack)), { colour: PIN_COLOUR });
+        drawTracks(overlayCtx, tf, asObject(r.confirmed.filter(t => !isPinnedTrack(t))));
+        drawTracks(overlayCtx, tf, asObject(r.confirmed.filter(isPinnedTrack)), { colour: PIN_COLOUR });
         // pinned and out of view: an arrow at the edge towards it
-        drawOffscreen(overlayCtx, tf, r.tracks.filter(t => pinned.has(t.id)), g.w, g.h, PIN_COLOUR);
+        drawOffscreen(overlayCtx, tf, asObject(r.tracks.filter(isPinnedTrack)), g.w, g.h, PIN_COLOUR);
     }
     if (params.showZones || drawing) drawZones(overlayCtx, tf, params.zones, g.w, g.h, drawKind === 'exclude' ? draft : null);
     if (note) drawNote(overlayCtx, tf, note);
@@ -612,7 +613,7 @@ function bindZones() {
     stage.addEventListener('click', e => {
         if (drawing) return;
         const t = trackAt(e);
-        if (t) togglePin(t.id);
+        if (t) togglePin(objs.objectOfTrack(t.id));
     });
     stage.addEventListener('pointermove', e => {
         if (drawing || e.pointerType !== 'mouse') return;
@@ -753,81 +754,57 @@ function renderBookmarks() {
     }));
 }
 
-// --- objects: the latest confirmed tracks, details and pins ------------------------------------
+// --- objects: the latest confirmed objects, details, history and pins (objects.js) ------------
 
 const PIN_COLOUR = '#ff9f43';
-const OBJECTS_KEPT = 40;           // remembered (pinned ones always)
 const OBJECTS_SHOWN = 8;
-const objects = new Map();         // id → { id, first, last: { frame, time }, frames, w, h, contrast, speed }
-const pinned = new Set();
-let liveIds = new Set();
+const objs = createObjects({ kept: 40 });
 let objectsDirty = false;
+let historyOf = null;              // object id whose history is open
 
 function clearObjects() {
-    objects.clear();
-    pinned.clear();
+    objs.clear();
+    historyOf = null;
     if (pipeline) pipeline.setPinned([]);
-    liveIds = new Set();
     objectsDirty = true;
-}
-
-// Mean grey inside a box minus the mean of a 2 px ring around it, in a grey Mat (processing px).
-function contrastOf(mat, b) {
-    const W = mat.cols, H = mat.rows, d = mat.data;
-    let si = 0, ni = 0, sr = 0, nr = 0;
-    for (let y = Math.max(0, b.y - 2); y < Math.min(H, b.y + b.h + 2); y++) {
-        for (let x = Math.max(0, b.x - 2); x < Math.min(W, b.x + b.w + 2); x++) {
-            const inside = x >= b.x && x < b.x + b.w && y >= b.y && y < b.y + b.h;
-            if (inside) { si += d[y * W + x]; ni++; } else { sr += d[y * W + x]; nr++; }
-        }
-    }
-    return ni && nr ? si / ni - sr / nr : 0;
 }
 
 function noteObjects(out) {
     const r = out.result;
-    liveIds = new Set(r.confirmed.map(t => t.id));
-    if (!r.confirmed.length) { objectsDirty = true; return; }
-    const s = r.scale || 1;
-    for (const t of r.confirmed) {
-        const o = objects.get(t.id) || { id: t.id, first: { frame: r.frame, time: r.time }, frames: 0 };
-        o.last = { frame: r.frame, time: r.time };
-        o.frames++;
-        o.w = t.box.w / s; o.h = t.box.h / s;
-        o.speed = Math.hypot(t.vx, t.vy) / s;
-        o.contrast = contrastOf(out.slot.grey, t.box);
-        objects.delete(t.id);          // re-insert: the Map stays ordered by last sighting
-        objects.set(t.id, o);
-    }
-    while (objects.size > OBJECTS_KEPT) {
-        const old = [...objects.keys()].find(id => !pinned.has(id));
-        if (old === undefined) break;
-        objects.delete(old);
-    }
+    objs.update(r, out.slot.grey, { frameDuration: 1 / ((loop && loop.stats().sourceFps) || 25) });
+    // re-linking may move a pin to another track: the tracker watches the current ones
+    if (objs.pinnedCount) pipeline.setPinned(objs.pinnedTrackIds());
+    // tracks shown with their object's id
+    for (const t of r.tracks) t.objectId = objs.objectOfTrack(t.id);
     objectsDirty = true;
 }
 
-// Pin or unpin an object: pinned ones are drawn in orange, listed first, and kept watching by the
-// tracker (also stopped or out of view).
-function togglePin(id) {
-    if (pinned.has(id)) pinned.delete(id); else pinned.add(id);
-    if (pipeline) pipeline.setPinned([...pinned]);
+// object id of a track (for drawing and the export); the track id until it is an object
+const oidOf = t => (t.objectId ?? objs.objectOfTrack(t.id)) ?? t.id;
+const asObject = list => list.map(t => ({ ...t, id: oidOf(t) }));
+const isPinnedTrack = t => { const o = objs.objectOfTrack(t.id); return o !== null && objs.isPinned(o); };
+
+// Pin or unpin an object: pinned ones are drawn in orange, listed first, kept watching by the
+// tracker (also stopped or out of view), and re-linked when tracking loses them.
+function togglePin(oid) {
+    objs.pin(oid);
+    if (pipeline) pipeline.setPinned(objs.pinnedTrackIds());
     objectsDirty = true;
     renderObjects();
     render();
 }
 
-// What a pinned object's track is doing now.
-function pinStatus(id) {
+// What a pinned object is doing now.
+function pinStatus(o) {
     const r = lastOut && lastOut.result, g = pipeline && pipeline.geometry;
-    const t = r && r.tracks.find(x => x.id === id);
-    if (!t) return 'lost (tracking restarted)';
+    const t = r && o.trackId !== null && r.tracks.find(x => x.id === o.trackId);
+    if (!t) return o.lost ? `lost: ${o.lost}` : 'lost';
     if (t.state === 'confirmed' && t.matched) return 'on screen';
     const [x, y] = t.lastSeen;
     return g && x >= 0 && y >= 0 && x <= g.w - 1 && y <= g.h - 1 ? 'watching' : 'out of view';
 }
 
-// The confirmed (or pinned) track under a click on the video, within 14 screen px.
+// The object (confirmed or pinned track) under a click on the video, within 14 screen px.
 function trackAt(e) {
     const r = lastOut && lastOut.result, g = pipeline && pipeline.geometry, p = toFrame(e);
     if (!r || !g || !p) return null;
@@ -836,7 +813,8 @@ function trackAt(e) {
     const x = p[0] * g.w - 0.5, y = p[1] * g.h - 0.5;
     let best = null, bd = 14 / s;
     for (const t of r.tracks) {
-        if (!(t.state === 'confirmed' && t.matched) && !pinned.has(t.id)) continue;
+        if (objs.objectOfTrack(t.id) === null) continue;
+        if (!(t.state === 'confirmed' && t.matched) && !isPinnedTrack(t)) continue;
         const [tx, ty] = t.matched ? [t.box.cx, t.box.cy] : t.lastSeen;
         const d = Math.hypot(tx - x, ty - y);
         if (d < bd) { bd = d; best = t; }
@@ -847,11 +825,13 @@ function trackAt(e) {
 function renderObjects() {
     if (!objectsDirty) return;
     objectsDirty = false;
-    const all = [...objects.values()].reverse();         // latest first
-    const list = [...all.filter(o => pinned.has(o.id)), ...all.filter(o => !pinned.has(o.id))].slice(0, Math.max(OBJECTS_SHOWN, pinned.size));
+    const list = objs.list().filter(o => o.last).slice(0, Math.max(OBJECTS_SHOWN, objs.pinnedCount));
+    const r = lastOut && lastOut.result;
+    const live = new Set(r ? r.confirmed.map(t => objs.objectOfTrack(t.id)) : []);
     $('objectList').replaceChildren(...list.map(o => {
         const li = document.createElement('li');
-        li.className = `${pinned.has(o.id) ? 'pinned' : ''} ${liveIds.has(o.id) ? 'live' : ''}`;
+        const pin = objs.isPinned(o.id);
+        li.className = `${pin ? 'pinned' : ''} ${live.has(o.id) ? 'live' : ''} ${historyOf === o.id ? 'open' : ''}`;
         li.title = 'Go to the last frame it was seen';
         const id = document.createElement('span');
         id.className = 'oid mono';
@@ -862,22 +842,82 @@ function renderObjects() {
         size.textContent = `${o.w.toFixed(0)}×${o.h.toFixed(0)} px · ${c > 0 ? '+' : ''}${c} grey`;
         const data = document.createElement('span');
         data.className = 'odata mono';
-        const status = pinned.has(o.id) ? `${pinStatus(o.id)} · ` : '';
+        const status = pin ? `${pinStatus(o)} · ` : '';
         data.textContent = `${status}${o.speed.toFixed(1)} px/f · ${fmtTime(o.first.time)}–${fmtTime(o.last.time)} · ${o.frames} frames`;
-        const pin = document.createElement('button');
-        pin.type = 'button';
-        pin.className = 'pin';
-        pin.textContent = pinned.has(o.id) ? '★' : '☆';
-        pin.title = pinned.has(o.id) ? 'Unpin' : 'Pin to the top and draw in orange';
-        pin.addEventListener('click', e => {
-            e.stopPropagation();
-            togglePin(o.id);
-        });
-        li.append(id, size, pin, data);
+        const buttons = document.createElement('span');
+        buttons.className = 'obtn';
+        const hist = document.createElement('button');
+        hist.type = 'button';
+        hist.textContent = '≡';
+        hist.title = 'History: size, contrast, speed and why it was missed, frame by frame';
+        hist.addEventListener('click', e => { e.stopPropagation(); historyOf = historyOf === o.id ? null : o.id; objectsDirty = true; renderObjects(); });
+        const pb = document.createElement('button');
+        pb.type = 'button';
+        pb.className = 'pin';
+        pb.textContent = pin ? '★' : '☆';
+        pb.title = pin ? 'Unpin' : 'Pin: keep watching it, draw in orange';
+        pb.addEventListener('click', e => { e.stopPropagation(); togglePin(o.id); });
+        buttons.append(hist, pb);
+        li.append(id, size, buttons, data);
         li.addEventListener('click', () => goToTime(o.last.time));
         return li;
     }));
     $('objectsEmpty').hidden = list.length > 0;
+    renderHistory();
+}
+
+// The open object's history: the latest rows first, events highlighted.
+function renderHistory() {
+    const box = $('objectHistory');
+    const o = historyOf !== null ? objs.get(historyOf) : null;
+    box.hidden = !o;
+    if (!o) return;
+    const tracks = [...new Set(o.history.filter(e => e.track !== undefined).map(e => e.track))];
+    $('historyTitle').textContent = `#${o.id} · tracks ${tracks.map(t => `#${t}`).join(', ')} · ${o.history.length} rows`;
+    const rows = o.history.slice(-80).reverse();
+    $('historyRows').replaceChildren(...rows.map(e => {
+        const tr = document.createElement('tr');
+        if (e.event) {
+            tr.className = 'ev';
+            tr.innerHTML = `<td>${e.frame ?? ''}</td><td>${fmtTime(e.time)}</td><td colspan="4"></td>`;
+            tr.lastElementChild.textContent = e.event;
+        } else if (e.seen) {
+            const c = Math.round(e.contrast);
+            tr.innerHTML = `<td>${e.frame ?? ''}</td><td>${fmtTime(e.time)}</td><td></td><td></td><td></td><td></td>`;
+            const td = tr.children;
+            td[2].textContent = `${e.state[0]}${e.weak ? ' weak' : ''}`;
+            td[3].textContent = `${e.w}×${e.h}`;
+            td[4].textContent = `${c > 0 ? '+' : ''}${c}`;
+            td[5].textContent = `${e.speed}${e.score !== undefined ? ` · ${e.score}σ` : ''}`;
+        } else {
+            tr.className = 'miss';
+            tr.innerHTML = `<td>${e.frame ?? ''}</td><td>${fmtTime(e.time)}</td><td></td><td colspan="3"></td>`;
+            tr.children[2].textContent = e.state[0];
+            tr.children[3].textContent = e.why || 'not seen';
+        }
+        return tr;
+    }));
+}
+
+function exportHistory(kind) {
+    const o = historyOf !== null ? objs.get(historyOf) : null;
+    if (!o) return;
+    const base = `${(source && source.label ? source.label.replace(/\.[^.]+$/, '') : 'pixelhunter').replace(/[^\w.-]+/g, '_')}.object-${o.id}`;
+    if (kind === 'csv') {
+        const blob = new Blob([historyCsv(o)], { type: 'text/csv' });
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = `${base}.csv`;
+        document.body.append(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    } else {
+        download(`${base}.json`, { app: 'PixelHunter', version: APP_VERSION, source: source ? source.label : null, object: o.id,
+            units: 'x, y, w, h: source px; contrast: grey levels (box mean − 2 px ring mean); speed: px per frame against the background; score: σ (adaptive mode)',
+            params: Object.fromEntries(PARAM_DEFS.filter(d => !['view', 'showCandidates', 'showTruth', 'showZones', 'simLoad'].includes(d.key)).map(d => [d.key, params[d.key]])),
+            history: o.history.map(({ px, ...e }) => e) });
+    }
 }
 
 // --- panels: remember which are folded ---------------------------------------------------------
@@ -1009,6 +1049,19 @@ function bindTransport() {
         scrubbing = true;
         if (loop && Number.isFinite(loop.duration)) loop.seek(tl.value / 1000 * loop.duration);
     });
+    // hover: the time (and frame) under the pointer
+    const wrap = tl.parentElement;
+    wrap.addEventListener('pointermove', e => {
+        if (!loop || !Number.isFinite(loop.duration) || tl.disabled) return;
+        const r = tl.getBoundingClientRect();
+        const f = Math.min(1, Math.max(0, (e.clientX - r.left - 8) / Math.max(1, r.width - 16)));
+        const t = f * loop.duration, fps = loop.stats().sourceFps;
+        const tip = $('tlHover');
+        tip.textContent = `${fmtTime(t)}${fps ? ` #${Math.round(t * fps)}` : ''}`;
+        tip.style.left = `${e.clientX - wrap.getBoundingClientRect().left}px`;
+        tip.hidden = false;
+    });
+    wrap.addEventListener('pointerleave', () => { $('tlHover').hidden = true; });
     tl.addEventListener('change', () => {
         scrubbing = false;
         // paused: refill the history so the frame shows with its detection result
@@ -1088,7 +1141,9 @@ function updateStats() {
     $('stEgo').textContent = r ? `${r.timings.ego.toFixed(1)} ms` : '–';
     const area = r && r.detect.ok && r.detect.processedArea < 1 ? ` (${Math.round(r.detect.processedArea * 100)} % area)` : '';
     $('stDetect').textContent = r ? `${r.timings.detect.toFixed(1)} ms${area}` : '–';
-    const dropped = r && r.detect.ok && r.detect.shiftRejected ? ` (${r.detect.shiftRejected} shift)` : '';
+    const why = r && r.detect.ok ? [r.detect.shiftRejected && `${r.detect.shiftRejected} shift`, r.detect.sizeRejected && `${r.detect.sizeRejected} size`,
+        r.detect.slivers && `${r.detect.slivers} sliver`].filter(Boolean) : [];
+    const dropped = why.length ? ` (dropped: ${why.join(', ')})` : '';
     $('stCand').textContent = r ? (r.detect.ok ? `${r.candidates.length}${r.detect.noisy ? '+' : ''}${dropped}` : '–') : '–';
     const nState = st => (r ? r.tracks.filter(t => t.state === st).length : 0);
     $('stTracks').textContent = r ? `${r.confirmed.length} confirmed · ${nState('tentative')} tentative${nState('held') ? ` · ${nState('held')} held` : ''}` : '–';
@@ -1109,6 +1164,9 @@ function updateStats() {
 async function start() {
     renderParams();
     bindPanels();
+    $('historyCsv').addEventListener('click', () => exportHistory('csv'));
+    $('historyJson').addEventListener('click', () => exportHistory('json'));
+    $('historyClose').addEventListener('click', () => { historyOf = null; objectsDirty = true; renderObjects(); });
     renderPresets();
     bindUserPresets();
     bindTransport();
