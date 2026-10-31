@@ -27,6 +27,11 @@
 //     more than CROWD_EXPECTED unrelated blobs fall inside it (but not below gateBase + 2 px);
 //   - motionPause: on a frame without camera motion, tracks can't be carried into the new frame,
 //     so their paths are cleared and nothing starts or confirms until motion is back.
+//
+// Pinned tracks (setPinned: the user's objects of interest) are kept watching: never dropped
+// for being gone too long or for frames without camera motion, they wait at their last seen
+// position (carried with the scene, also out of view) and pick up movement there again under
+// the same id, after confirming afresh.
 
 import { project } from './homography.js';
 
@@ -58,6 +63,7 @@ const popcount = x => { let n = 0; while (x) { n += x & 1; x >>>= 1; } return n;
 export function createTracker(options = {}) {
     let p = { ...TRACK_DEFAULTS, ...options };
     let tracks = [];
+    let pinned = new Set();     // ids kept watching
     let nextId = 1;
     let skipped = 0;
     let clock = 0;             // frames since the start, for the sightings' times
@@ -115,7 +121,7 @@ export function createTracker(options = {}) {
             skipped = 0;
             for (const t of tracks) carry(t, H);
         } else if (++skipped > p.maxSkip) {
-            tracks = [];
+            tracks = tracks.filter(t => pinned.has(t.id));
         }
         if (paused) for (const t of tracks) { t.trail = [[t.x, t.y]]; t.pts = []; }
 
@@ -196,7 +202,7 @@ export function createTracker(options = {}) {
         }
         // drop tracks that can no longer confirm (tentative), and confirmed ones gone longer than
         // M frames and the hold (a re-acquired track keeps its hold until it gives up again)
-        tracks = tracks.filter(t => (t.confirmed ? t.misses <= Math.max(p.confirmM, p.holdFrames)
+        tracks = tracks.filter(t => pinned.has(t.id) || (t.confirmed ? t.misses <= Math.max(p.confirmM, p.holdFrames)
             : t.misses <= p.confirmM - p.confirmN || (t.reacquired && t.misses <= p.holdFrames)));
         for (const t of tracks) {
             if (!t.confirmed && !paused && popcount(t.hist) >= p.confirmN && Math.hypot(t.x - t.sx, t.y - t.sy) >= p.minTravel
@@ -217,12 +223,13 @@ export function createTracker(options = {}) {
     }
 
     // confirmed, but missed for more than M frames: waiting at its last seen position
-    const held_ = t => t.confirmed && t.misses > p.confirmM;
+    // (a pinned track waits there too while it is re-confirming)
+    const held_ = t => (t.confirmed || pinned.has(t.id)) && t.misses > p.confirmM;
 
     function snapshot() {
         return tracks.map(t => ({
             id: t.id, state: held_(t) ? 'held' : t.confirmed ? 'confirmed' : 'tentative', matched: t.matched,
-            lastSeen: [t.lx, t.ly], reacquired: t.reacquired || 0,
+            lastSeen: [t.lx, t.ly], reacquired: t.reacquired || 0, pinned: pinned.has(t.id),
             x: t.x, y: t.y, vx: t.vx, vy: t.vy, hits: t.hits, age: t.age, misses: t.misses,
             seen: popcount(t.hist), box: t.box, trail: t.trail.map(q => q.slice()),
         }));
@@ -232,6 +239,7 @@ export function createTracker(options = {}) {
         step,
         get tracks() { return snapshot(); },
         reset() { tracks = []; skipped = 0; clock = 0; },
+        setPinned(ids) { pinned = new Set(ids); },
         setParams(next) { p = { ...p, ...next }; },
         get params() { return p; },
     };

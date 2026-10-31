@@ -199,3 +199,36 @@ const confirmedIds = tracks => tracks.filter(t => t.state === 'confirmed' && t.m
     for (let k = 0; k < 6; k++) tr2.step([blob(100 + 4 * k, 50)], I);
     ok('… (without motionPause a new track starts there)', tr2.step([blob(124, 50), blob(300, 200)], null).length === 2);
 }
+{
+    // pinned: kept watching through a stop far longer than holdFrames, same id when it moves on
+    const tr = createTracker({ holdFrames: 20 });
+    let x = 100, s;
+    for (let k = 0; k < 10; k++) s = tr.step([blob(x += 4, 60)], I);
+    tr.setPinned([s[0].id]);
+    for (let k = 0; k < 300; k++) s = tr.step([], I);
+    ok('pinned: still held after 300 frames without a sighting (holdFrames 20)', s.length === 1 && s[0].state === 'held' && s[0].pinned, s.map(t => [t.state, t.pinned]));
+    let ids = new Set();
+    for (let k = 0; k < 8; k++) for (const t of tr.step([blob(x += 4, 60)], I)) if (t.state === 'confirmed' && t.matched) ids.add(t.id);
+    ok('… moving on there: the same id again', ids.size === 1 && ids.has(1), [...ids]);
+}
+{
+    // pinned tracks survive frames without camera motion (the others are dropped after maxSkip)
+    const tr = createTracker({ maxSkip: 3 });
+    for (let k = 0; k < 6; k++) tr.step([blob(100 + 4 * k, 50), blob(300 + 4 * k, 150)], I);
+    tr.setPinned([1]);
+    let s;
+    for (let k = 0; k < 10; k++) s = tr.step([], null);
+    ok('pinned: kept through frames without camera motion, the others dropped', s.length === 1 && s[0].id === 1, s.map(t => t.id));
+}
+{
+    // carried with the scene: the camera pans away (the scene moves 10 px/frame) and back
+    const tr = createTracker();
+    let s;
+    for (let k = 0; k < 6; k++) s = tr.step([blob(100 + 4 * k, 50)], I);
+    tr.setPinned([1]);
+    const away = [1, 0, -10, 0, 1, 0, 0, 0, 1], back = [1, 0, 10, 0, 1, 0, 0, 0, 1];
+    for (let k = 0; k < 30; k++) s = tr.step([], away);
+    ok('pinned: waits where it was, moving with the scene (out of view at −176 px)', Math.abs(s[0].lastSeen[0] - (120 - 300)) < 1e-6, s[0].lastSeen);
+    for (let k = 0; k < 30; k++) s = tr.step([], back);
+    ok('… and back in view where it was', Math.abs(s[0].lastSeen[0] - 120) < 1e-6 && s[0].id === 1, s[0].lastSeen);
+}

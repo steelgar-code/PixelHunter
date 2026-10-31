@@ -11,7 +11,7 @@ import { loadPresets, savePresets, presetFrom, upsert, remove, find, changesOf, 
 import { createPipeline } from './pipeline.js';
 import { createScore } from './score.js';
 import { createExportLog, download } from './exportLog.js';
-import { fitOverlay, clear, drawPoints, drawNote, drawBoxes, drawTruth, drawTracks, drawHeld, drawZones, drawInclude } from './overlay.js';
+import { fitOverlay, clear, drawPoints, drawNote, drawBoxes, drawTruth, drawTracks, drawHeld, drawOffscreen, drawZones, drawInclude } from './overlay.js';
 import { normalizeZone, normalizeZones, parseZones, formatZones, zoneRect, inZones, loadZones, saveZones, MAX_ZONES, ZONES_KEY, INCLUDE_KEY } from './zones.js';
 
 const $ = id => document.getElementById(id);
@@ -489,9 +489,13 @@ function render() {
         drawBoxes(overlayCtx, tf, r.candidates, { alpha: 0.55, width: 1 });
     }
     if (r && params.view !== 'points') {
-        drawHeld(overlayCtx, tf, r.held || []);
+        const held = r.held || [];
+        drawHeld(overlayCtx, tf, held.filter(t => !pinned.has(t.id)));
+        drawHeld(overlayCtx, tf, held.filter(t => pinned.has(t.id)), { colour: PIN_COLOUR });
         drawTracks(overlayCtx, tf, r.confirmed.filter(t => !pinned.has(t.id)));
         drawTracks(overlayCtx, tf, r.confirmed.filter(t => pinned.has(t.id)), { colour: PIN_COLOUR });
+        // pinned and out of view: an arrow at the edge towards it
+        drawOffscreen(overlayCtx, tf, r.tracks.filter(t => pinned.has(t.id)), g.w, g.h, PIN_COLOUR);
     }
     if (params.showZones || drawing) drawZones(overlayCtx, tf, params.zones, g.w, g.h, drawKind === 'exclude' ? draft : null);
     if (note) drawNote(overlayCtx, tf, note);
@@ -600,6 +604,16 @@ function bindZones() {
         else render();
     };
     stage.addEventListener('pointerup', end);
+    // a click on a confirmed object on the video pins or unpins it
+    stage.addEventListener('click', e => {
+        if (drawing) return;
+        const t = trackAt(e);
+        if (t) togglePin(t.id);
+    });
+    stage.addEventListener('pointermove', e => {
+        if (drawing || e.pointerType !== 'mouse') return;
+        stage.classList.toggle('over-object', !!trackAt(e));
+    });
     stage.addEventListener('pointercancel', () => { dragFrom = draft = null; render(); });
     renderZoneLists();
 }
@@ -702,6 +716,7 @@ let objectsDirty = false;
 function clearObjects() {
     objects.clear();
     pinned.clear();
+    if (pipeline) pipeline.setPinned([]);
     liveIds = new Set();
     objectsDirty = true;
 }
@@ -742,6 +757,43 @@ function noteObjects(out) {
     objectsDirty = true;
 }
 
+// Pin or unpin an object: pinned ones are drawn in orange, listed first, and kept watching by the
+// tracker (also stopped or out of view).
+function togglePin(id) {
+    if (pinned.has(id)) pinned.delete(id); else pinned.add(id);
+    if (pipeline) pipeline.setPinned([...pinned]);
+    objectsDirty = true;
+    renderObjects();
+    render();
+}
+
+// What a pinned object's track is doing now.
+function pinStatus(id) {
+    const r = lastOut && lastOut.result, g = pipeline && pipeline.geometry;
+    const t = r && r.tracks.find(x => x.id === id);
+    if (!t) return 'lost (tracking restarted)';
+    if (t.state === 'confirmed' && t.matched) return 'on screen';
+    const [x, y] = t.lastSeen;
+    return g && x >= 0 && y >= 0 && x <= g.w - 1 && y <= g.h - 1 ? 'watching' : 'out of view';
+}
+
+// The confirmed (or pinned) track under a click on the video, within 14 screen px.
+function trackAt(e) {
+    const r = lastOut && lastOut.result, g = pipeline && pipeline.geometry, p = toFrame(e);
+    if (!r || !g || !p) return null;
+    const rect = display.getBoundingClientRect();
+    const s = Math.min(rect.width / g.w, rect.height / g.h);
+    const x = p[0] * g.w - 0.5, y = p[1] * g.h - 0.5;
+    let best = null, bd = 14 / s;
+    for (const t of r.tracks) {
+        if (!(t.state === 'confirmed' && t.matched) && !pinned.has(t.id)) continue;
+        const [tx, ty] = t.matched ? [t.box.cx, t.box.cy] : t.lastSeen;
+        const d = Math.hypot(tx - x, ty - y);
+        if (d < bd) { bd = d; best = t; }
+    }
+    return best;
+}
+
 function renderObjects() {
     if (!objectsDirty) return;
     objectsDirty = false;
@@ -760,7 +812,8 @@ function renderObjects() {
         size.textContent = `${o.w.toFixed(0)}×${o.h.toFixed(0)} px · ${c > 0 ? '+' : ''}${c} grey`;
         const data = document.createElement('span');
         data.className = 'odata mono';
-        data.textContent = `${o.speed.toFixed(1)} px/f · ${fmtTime(o.first.time)}–${fmtTime(o.last.time)} · ${o.frames} frames`;
+        const status = pinned.has(o.id) ? `${pinStatus(o.id)} · ` : '';
+        data.textContent = `${status}${o.speed.toFixed(1)} px/f · ${fmtTime(o.first.time)}–${fmtTime(o.last.time)} · ${o.frames} frames`;
         const pin = document.createElement('button');
         pin.type = 'button';
         pin.className = 'pin';
@@ -768,10 +821,7 @@ function renderObjects() {
         pin.title = pinned.has(o.id) ? 'Unpin' : 'Pin to the top and draw in orange';
         pin.addEventListener('click', e => {
             e.stopPropagation();
-            if (pinned.has(o.id)) pinned.delete(o.id); else pinned.add(o.id);
-            objectsDirty = true;
-            renderObjects();
-            render();
+            togglePin(o.id);
         });
         li.append(id, size, pin, data);
         li.addEventListener('click', () => goToFrame(o.last.frame));

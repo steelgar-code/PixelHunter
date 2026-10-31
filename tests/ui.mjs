@@ -71,6 +71,34 @@ try {
     await page.waitForTimeout(1500);
     ok('clicking an object jumps to its last frame', (await shown()) <= firstFrame);
 
+    // pinning on the video, kept watching through a stop, then out of view
+    {
+        await page.selectOption('#scene', 'stop-go');
+        await page.click('#openScene');
+        await page.waitForFunction(() => __ph.results.length >= 1 && /stops/.test(document.getElementById('srcLabel').textContent), null, { timeout: 30000 });
+        for (let i = 0; i < 20; i++) await page.click('#step');
+        // the dot that will stop: started at 300,250 in frame 0
+        const where = await page.evaluate(() => {
+            const r = __ph.lastResult, t = r.confirmed.sort((a, b) => a.box.cy - b.box.cy)[0];
+            const c = document.getElementById('display').getBoundingClientRect(), s = Math.min(c.width / 960, c.height / 540);
+            return { id: t.id, x: c.left + (c.width - 960 * s) / 2 + (t.box.cx + 0.5) * s, y: c.top + (c.height - 540 * s) / 2 + (t.box.cy + 0.5) * s };
+        });
+        await page.mouse.click(where.x, where.y);
+        await page.waitForTimeout(300);
+        const status = () => page.evaluate(id => [...document.querySelectorAll('#objectList li')].find(li => li.querySelector('.oid').textContent === `#${id}`)?.textContent || '', where.id);
+        ok('a click on an object on the video pins it', /on screen/.test(await status()) && (await page.evaluate(id => document.querySelector('#objectList li:first-child .oid').textContent === `#${id}`, where.id)), await status());
+        for (let i = 0; i < 25; i++) await page.click('#step');
+        await page.waitForTimeout(300);
+        ok('… it stops: kept watching where it stopped', /watching/.test(await status()), await status());
+        for (let i = 0; i < 60; i++) await page.click('#step');
+        await page.waitForTimeout(300);
+        ok('… the camera pans on: out of view, still kept', /out of view/.test(await status()) && (await page.evaluate(id => __ph.lastResult.tracks.some(t => t.id === id && t.pinned), where.id)), await status());
+        await page.mouse.click(where.x, where.y);         // nothing there now: no change
+        ok('a click on empty video changes nothing', /out of view/.test(await status()));
+        await page.click(`#objectList li:first-child .pin`);
+        ok('★ unpins it', !(await page.evaluate(id => __ph.lastResult && document.querySelector('#objectList li.pinned'), where.id)));
+    }
+
     // speed
     await page.click('label:has(input[name=param-speed][value="3"])');
     ok('speed ×3 reaches the player', await page.evaluate(() => __ph.loop.speed === 3 && __ph.params.speed === '3'));

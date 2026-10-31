@@ -70,6 +70,14 @@ export const SCENES = {
             ],
         },
     },
+    'stop-go': {
+        label: 'Pan · a dot that stops (pin it: watched, then out of view)',
+        options: {
+            width: 960, height: 540, frames: 150, camera: 'pan', seed: 28, noise: 2,
+            // moves, stands still from frame 30 (the camera pans on, so it leaves the view)
+            targets: [dot(4, 60, 300, 250, 6 + 2.5, 2.5 + 0.5, { stops: [[30, 150]] }), dot(3, -50, 150, 400, 6 + 1.5, 2.5 - 0.8)],
+        },
+    },
     'exposure': {
         label: 'Pan · exposure steps, 3 px dot',
         options: {

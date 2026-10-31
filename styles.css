@@ -136,3 +136,4 @@ button[aria-pressed=true] { background: color-mix(in srgb, var(--danger) 25%, va
 .objects .odata { font-size: 12px; color: var(--muted); grid-column: 1 / 3; }
 .objects .pin { grid-row: 1 / 3; grid-column: 3; padding: 0 6px; font-size: 14px; }
 .objects li.pinned .pin { color: #ff9f43; border-color: #ff9f43; }
+.stage.over-object { cursor: pointer; }

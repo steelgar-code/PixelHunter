@@ -142,6 +142,44 @@ export function drawHeld(ctx, tf, tracks, { colour = '#ff4fd8' } = {}) {
     ctx.restore();
 }
 
+// Pinned tracks whose last seen position is outside the w×h frame: an arrow at the edge pointing
+// towards it, with the id and how far out it is (frame px).
+export function drawOffscreen(ctx, tf, tracks, w, h, colour = '#ff9f43') {
+    const inset = 14 * tf.dpr, size = 9 * tf.dpr;
+    ctx.save();
+    ctx.fillStyle = ctx.strokeStyle = colour;
+    ctx.font = `600 ${11 * tf.dpr}px system-ui, sans-serif`;
+    for (const t of tracks) {
+        const [x, y] = t.lastSeen;
+        if (x >= 0 && x <= w - 1 && y >= 0 && y <= h - 1) continue;
+        // where the line from the frame centre to it leaves the frame
+        const cx = (w - 1) / 2, cy = (h - 1) / 2, dx = x - cx, dy = y - cy;
+        const k = Math.min(Math.abs(cx / (dx || 1e-9)), Math.abs(cy / (dy || 1e-9)));
+        const ex = cx + dx * k, ey = cy + dy * k;
+        const px = Math.min(tf.x(w - 1) - inset, Math.max(tf.x(0) + inset, tf.x(ex)));
+        const py = Math.min(tf.y(h - 1) - inset, Math.max(tf.y(0) + inset, tf.y(ey)));
+        const a = Math.atan2(dy, dx);
+        ctx.beginPath();
+        ctx.moveTo(px + Math.cos(a) * size, py + Math.sin(a) * size);
+        ctx.lineTo(px + Math.cos(a + 2.5) * size, py + Math.sin(a + 2.5) * size);
+        ctx.lineTo(px + Math.cos(a - 2.5) * size, py + Math.sin(a - 2.5) * size);
+        ctx.closePath();
+        ctx.fill();
+        const out = Math.round(Math.hypot(x - ex, y - ey));
+        const label = `#${t.id} ${out} px`;
+        const tw = ctx.measureText(label).width;
+        ctx.textBaseline = 'middle';
+        // the label inwards from the arrow, on a dark backing
+        const lx = Math.min(tf.x(w - 1) - tw - 4, Math.max(tf.x(0) + 4, px - Math.cos(a) * (tw / 2 + size * 2) - tw / 2));
+        const ly = Math.min(tf.y(h - 1) - 8 * tf.dpr, Math.max(tf.y(0) + 8 * tf.dpr, py - Math.sin(a) * size * 2.4));
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
+        ctx.fillRect(lx - 3 * tf.dpr, ly - 8 * tf.dpr, tw + 6 * tf.dpr, 16 * tf.dpr);
+        ctx.fillStyle = colour;
+        ctx.fillText(label, lx, ly);
+    }
+    ctx.restore();
+}
+
 // Exclusion zones ({ x, y, w, h } fractions of a w×h frame): a hatched red rectangle with its
 // number. `draft` is the one being drawn (dashed outline, no number).
 export function drawZones(ctx, tf, zones, w, h, draft = null) {

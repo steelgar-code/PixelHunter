@@ -271,6 +271,8 @@ export function createPipeline(cv, params) {
             tracker.setParams(trackParams(p));
             if (cause && geom) setup(geom.srcW, geom.srcH, cause);
         },
+        // ids of tracks to keep watching (pinned by the user)
+        setPinned(ids) { tracker.setPinned(ids); },
         reset(cause = 'reset') { resetCause = cause; count = 0; ego.reset(); tracker.reset(); },
         dispose() {
             freeAll();
