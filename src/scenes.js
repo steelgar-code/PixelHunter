@@ -53,6 +53,8 @@ export const SCENES = {
     },
     'trees': {
         label: 'Pan · trees (parallax, wind), 3 px dots',
+        // the settings this scene is meant to be checked with (the trees need the shift check)
+        params: { shiftCheck: true },
         options: {
             width: 960, height: 540, frames: 150, camera: 'pan', seed: 27, noise: 2,
             trees: [
