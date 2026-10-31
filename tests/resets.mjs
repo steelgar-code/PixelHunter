@@ -31,11 +31,14 @@ try {
     await page.click('label:has(input[name=param-procWidth][value="640"])');
     let seen = await steps(4);
     ok('after changing the processing width', seen.some(r => /^no previous frame \(restarted: processing width changed\)$/.test(r || '')) && seen.at(-1) === null, seen);
+    const n0 = await page.evaluate(() => __ph.results.length);
     await page.locator('.param', { has: page.locator('#param-stride') }).locator('.step-btn', { hasText: '+' }).click();
     seen = await steps(6);
-    ok('after changing the frame stride, while the history refills', seen.some(r => /^no previous frame \(restarted: frame stride changed\)$/.test(r || ''))
-        && seen.some(r => /^waiting for 2 frames before \(restarted: frame stride changed\)$/.test(r || '')), seen);
-    ok('the note goes once the history is full again', seen.at(-1) === null, seen);
+    // Step refills the history silently after the reset: the notes are on the frames in between
+    const notes = await page.evaluate(n => __ph.results.slice(n).map(r => r.detectReason), n0);
+    ok('after changing the frame stride, while the history refills', notes.some(r => /^no previous frame \(restarted: frame stride changed\)$/.test(r || ''))
+        && notes.some(r => /^waiting for 2 frames before \(restarted: frame stride changed\)$/.test(r || '')), notes);
+    ok('… and Step shows the next frame with its detection result again', seen.every(r => r === null), seen);
     ok('no page errors', errors.length === 0, errors);
 } finally {
     await browser.close();
