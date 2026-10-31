@@ -1,5 +1,5 @@
-// Background-shift check: false detections on trees (parallax, wind) are dropped, real targets
-// are not, also in front of the trees, faint ones, when cropped and with blur.
+// Background-shift check (robust detector): false detections on trees (parallax, wind) are
+// dropped, real targets are not, also in front of the trees, faint ones, when cropped and with blur.
 import { launch, ok, openApp } from './lib/env.mjs';
 import { instrumentMats } from './lib/mats.mjs';
 import { SCENES } from '../src/scenes.js';
@@ -14,7 +14,9 @@ try {
         const { createScore } = await import('/src/score.js');
         window.run = (o, params) => {
             const s = createScene(o);
-            const pipe = createPipeline(cv, { ...window.__ph.params, ...params });
+            // the shift check is measured against the robust detector (adaptive mode is quiet on
+            // these trees without it); presets passed in bring their own detector
+            const pipe = createPipeline(cv, { ...window.__ph.params, detectMode: 'robust', ...params });
             const raw = createScore({ fps: s.fps }), conf = createScore({ fps: s.fps });
             const ms = [];
             for (let k = 0; k < s.frames; k++) {
