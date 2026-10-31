@@ -14,7 +14,8 @@ try {
     ok('then detection runs', (await reason()) === null, await reason());
 
     // a seek on the timeline
-    await page.$eval('#timeline', el => { el.value = 500; el.dispatchEvent(new Event('input')); el.dispatchEvent(new Event('change')); });
+    // dragging (not yet released) seeks directly; releasing while paused would refill the history
+    await page.$eval('#timeline', el => { el.value = 500; el.dispatchEvent(new Event('input')); });
     await page.waitForTimeout(200);
     await page.click('#step');
     await page.waitForFunction(() => __ph.lastResult && /restarted/.test(__ph.lastResult.detect.reason || ''), null, { timeout: 10000 });
