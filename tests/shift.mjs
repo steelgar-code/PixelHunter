@@ -94,7 +94,7 @@ try {
     await p.waitForFunction(() => __ph.results.length >= 1, null, { timeout: 30000 });
     for (let i = 0; i < 8; i++) await p.click('#step');
     await p.waitForTimeout(400);
-    ok('stats show how many were dropped', /\(\d+ shift\)/.test(await p.textContent('#stCand')), await p.textContent('#stCand'));
+    ok('stats show how many were dropped', /dropped: .*\d+ shift/.test(await p.textContent('#stCand')), await p.textContent('#stCand'));
     ok('turning a preset on leaves the check alone', await p.evaluate(() => { __ph.applyPreset('low'); return __ph.params.shiftCheck === true; }));
     ok('no page errors (app)', e2.length === 0, e2);
 } finally {
