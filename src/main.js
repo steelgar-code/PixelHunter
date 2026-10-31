@@ -449,8 +449,11 @@ function onFrame(f) {
     }
     if (r && r.confirmed.length) log.add(r);
     if (r) noteObjects(out);
-    render();
-    if (!f.video) updateTransport();
+    // while refilling the history for a jump (goToTime), only the target frame is drawn
+    if (!navigating) {
+        render();
+        if (!f.video) updateTransport();
+    }
 
     ph.frames.push({ seq: f.seq, frame: f.frame, time: f.time, gap: f.gap, jump: f.jump });
     if (ph.frames.length > FRAME_LOG) ph.frames.shift();
@@ -471,6 +474,7 @@ function onFrame(f) {
 // overlay.
 function render() {
     if (!lastOut) return;
+    ph.renders = (ph.renders || 0) + 1;
     const g = pipeline.geometry;
     if (display.width !== g.w || display.height !== g.h) {
         display.width = g.w;
@@ -628,31 +632,66 @@ const waitFor = (cond, ms) => new Promise(resolve => {
     tick();
 });
 
-// Shows frame F with its detection result: the frame history has to be refilled, so this seeks
-// 2 × stride frames earlier and steps forward until F is the frame on screen.
-async function goToFrame(F) {
-    if (!loop || navigating || !Number.isFinite(F)) return;
+// Frames processed before the target of a jump, beyond what detection itself needs, so tracks
+// are confirmed again by the time it is on screen.
+const WARM_UP = 5;
+
+// Shows the frame at media time T (s) with its detection result. A jump empties the frame
+// history (frame t needs t − s and t + s), so this seeks stride + WARM_UP frames earlier and steps
+// forward, without drawing, until the frame at T is shown; then draws it once. Tracking
+// restarts with the jump. By time, not frame number: with a variable frame rate, frame numbers
+// worked out from time don't count frames exactly.
+async function goToTime(T) {
+    if (!loop || navigating || !Number.isFinite(T)) return;
     navigating = true;
+    $('stage').classList.add('busy');
     try {
         loop.pause();
         const s = Math.max(1, Math.round(params.stride));
-        const fps = loop.stats().sourceFps || 25;
-        const F0 = Math.max(0, F - 2 * s);
+        const fd = 1 / (loop.stats().sourceFps || 25);
         const before = ph.lastFrame ? ph.lastFrame.seq : -1;
-        loop.seek((F0 + 0.5) / fps);
+        loop.seek(Math.max(0, T - (s + WARM_UP) * fd));
         await waitFor(() => ph.lastFrame && ph.lastFrame.seq > before, 3000);
-        for (let i = 0; i < 4 * s + 8 && !(ph.shown && ph.shown.frame >= F); i++) {
+        for (let i = 0; i < 2 * s + WARM_UP + 12 && !(ph.shown && ph.shown.time >= T - 1e-4); i++) {
             if (!(await loop.step())) break;
         }
     } finally {
         navigating = false;
+        $('stage').classList.remove('busy');
+        render();
         updateTransport();
     }
 }
 
+// The media time of the frame before the one shown: the latest frame time decoded so far that
+// is earlier (exact also with a variable frame rate), else one frame duration back.
+function previousFrameTime() {
+    const t = ph.shown && ph.shown.time;
+    if (!Number.isFinite(t)) return null;
+    let best = -Infinity;
+    for (const f of ph.frames) if (f.time < t - 1e-6 && f.time > best) best = f.time;
+    const fd = 1 / ((loop && loop.stats().sourceFps) || 25);
+    return best > t - 3 * fd ? best : t - fd;
+}
+
+// One frame forward. Right after a jump the history may still be short (the display waits for
+// t + s): then this goes to the next frame properly instead.
+function stepForward() {
+    if (!loop || navigating) return;
+    const r = lastOut && lastOut.result;
+    if (!r && ph.shown && Number.isFinite(ph.shown.time)) {
+        // the next frame after the one shown: step from the history's end until it is shown
+        const t = ph.shown.time;
+        const next = Math.min(...ph.frames.map(f => f.time).filter(x => x > t + 1e-6), Infinity);
+        if (Number.isFinite(next)) { goToTime(next); return; }
+    }
+    loop.step().then(updateTransport);
+}
+
 function stepBack() {
-    const F = ph.shown && ph.shown.frame !== null ? ph.shown.frame - 1 : null;
-    if (F !== null && F >= 0) goToFrame(F);
+    if (navigating) return;
+    const T = previousFrameTime();
+    if (T !== null && T >= 0) goToTime(T);
 }
 
 const BOOKMARKS_KEY = 'pixelhunter.bookmarks.v1';
@@ -691,7 +730,7 @@ function renderBookmarks() {
         go.className = 'go';
         go.textContent = `${fmtTime(b.time)} #${b.frame}`;
         go.title = 'Go to this frame';
-        go.addEventListener('click', () => goToFrame(b.frame));
+        go.addEventListener('click', () => goToTime(b.time));
         const del = document.createElement('button');
         del.type = 'button';
         del.textContent = '×';
@@ -701,6 +740,17 @@ function renderBookmarks() {
         return chip;
     }));
     host.hidden = !list.length;
+    // and as ticks on the timeline
+    const dur = loop && loop.duration;
+    $('tlMarks').replaceChildren(...(Number.isFinite(dur) && dur > 0 ? list : []).map(b => {
+        const m = document.createElement('button');
+        m.type = 'button';
+        m.style.left = `${Math.min(100, Math.max(0, b.time / dur * 100))}%`;
+        m.title = `Bookmark ${fmtTime(b.time)} #${b.frame}`;
+        m.setAttribute('aria-label', m.title);
+        m.addEventListener('click', () => goToTime(b.time));
+        return m;
+    }));
 }
 
 // --- objects: the latest confirmed tracks, details and pins ------------------------------------
@@ -824,7 +874,7 @@ function renderObjects() {
             togglePin(o.id);
         });
         li.append(id, size, pin, data);
-        li.addEventListener('click', () => goToFrame(o.last.frame));
+        li.addEventListener('click', () => goToTime(o.last.time));
         return li;
     }));
     $('objectsEmpty').hidden = list.length > 0;
@@ -933,7 +983,8 @@ function updateTransport() {
     $('play').textContent = loop && loop.playing ? 'Pause' : 'Play';
     if (!loop) return;
     const shown = lastOut ? lastOut.slot.meta.time : loop.time;
-    $('time').textContent = `${fmtTime(shown)} / ${fmtTime(loop.duration)}`;
+    const fr = lastOut && lastOut.slot.meta.frame;
+    $('time').textContent = `${fmtTime(shown)}${fr !== null && fr !== undefined ? ` #${fr}` : ''} / ${fmtTime(loop.duration)}`;
     if (!scrubbing && Number.isFinite(loop.duration) && loop.duration > 0) {
         $('timeline').value = Math.round(loop.time / loop.duration * 1000);
     }
@@ -950,7 +1001,7 @@ let scrubbing = false;
 
 function bindTransport() {
     $('play').addEventListener('click', togglePlay);
-    $('step').addEventListener('click', () => loop && loop.step().then(updateTransport));
+    $('step').addEventListener('click', stepForward);
     $('back').addEventListener('click', stepBack);
     $('bookmark').addEventListener('click', addBookmark);
     const tl = $('timeline');
@@ -958,13 +1009,17 @@ function bindTransport() {
         scrubbing = true;
         if (loop && Number.isFinite(loop.duration)) loop.seek(tl.value / 1000 * loop.duration);
     });
-    tl.addEventListener('change', () => { scrubbing = false; });
+    tl.addEventListener('change', () => {
+        scrubbing = false;
+        // paused: refill the history so the frame shows with its detection result
+        if (loop && !loop.playing && Number.isFinite(loop.duration)) goToTime(tl.value / 1000 * loop.duration);
+    });
     for (const ev of ['play', 'pause', 'timeupdate', 'seeked', 'ended']) video.addEventListener(ev, updateTransport);
 
     document.addEventListener('keydown', e => {
         if (e.target instanceof HTMLInputElement && e.target.type !== 'range') return;
         if (e.code === 'Space') { e.preventDefault(); togglePlay(); }
-        else if (e.code === 'ArrowRight' && loop) { e.preventDefault(); loop.step().then(updateTransport); }
+        else if (e.code === 'ArrowRight' && loop) { e.preventDefault(); stepForward(); }
         else if (e.code === 'ArrowLeft' && loop) { e.preventDefault(); stepBack(); }
         else if (e.code === 'KeyB' && loop && !e.ctrlKey && !e.metaKey) addBookmark();
         else if (e.code === 'Escape' && drawing) setDrawing(false);

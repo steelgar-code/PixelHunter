@@ -215,14 +215,18 @@ export function createFrameLoop({ video, onFrame, mode = 'realtime' }) {
     }
 
     // Seeks to the next frame; resolves true once it has been delivered, false at the end.
-    // A seek that lands on the same frame (rounding) is retried further on.
+    // Frames can differ in length (variable frame rate), so the seek moves on from the last
+    // delivered frame in steps shorter than the shortest frame interval seen: it can't jump over
+    // a short frame, and a seek that lands on the same frame is retried a little further on.
     async function stepOnce() {
         const d = dur || 1 / 30;
+        const shortest = dtSamples.length ? Math.max(PROBE_STEP, Math.min(...dtSamples.filter(x => x > 1e-6), d)) : d;
         const from = last !== null ? last : video.currentTime;
-        for (let attempt = 0; attempt < 4; attempt++) {
-            const target = from + d * (1.25 + attempt);    // inside the next frame, clear of rounding
+        let target = from + Math.min(d, shortest) * 1.02;
+        for (let attempt = 0; attempt < 12; attempt++) {
             if (Number.isFinite(video.duration) && target >= video.duration) return false;
             if ((await seekAndWait(target)) === 'ok') return true;
+            target += shortest * 0.5;
         }
         return false;
     }

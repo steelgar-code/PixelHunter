@@ -38,7 +38,14 @@ body { background: var(--bg); color: var(--text); display: flex; flex-direction:
 .empty { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; color: var(--muted); }
 
 .transport { display: flex; align-items: center; gap: 8px; }
-.transport input[type=range] { flex: 1; min-width: 0; }
+.transport .timeline-wrap { flex: 1; min-width: 0; position: relative; display: flex; align-items: center; }
+.transport input[type=range] { flex: 1; min-width: 0; width: 100%; }
+/* bookmark ticks over the timeline (8 px in from each end: the thumb's travel) */
+.tl-marks { position: absolute; left: 8px; right: 8px; top: 0; bottom: 0; pointer-events: none; }
+.tl-marks button { position: absolute; top: -2px; width: 10px; height: 10px; margin-left: -5px; padding: 0; border: 0; border-radius: 2px 2px 50% 50%;
+    background: #ffcf5c; pointer-events: auto; cursor: pointer; }
+.tl-marks button:hover { background: #fff; }
+.view-params { margin-top: 10px; }
 
 button { font: inherit; color: var(--text); background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 5px 12px; cursor: pointer; }
 button:hover:not(:disabled) { border-color: var(--accent); }
@@ -137,3 +144,4 @@ button[aria-pressed=true] { background: color-mix(in srgb, var(--danger) 25%, va
 .objects .pin { grid-row: 1 / 3; grid-column: 3; padding: 0 6px; font-size: 14px; }
 .objects li.pinned .pin { color: #ff9f43; border-color: #ff9f43; }
 .stage.over-object { cursor: pointer; }
+.stage.busy { cursor: progress; }

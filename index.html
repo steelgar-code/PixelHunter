@@ -30,7 +30,10 @@
             <button type="button" id="back" disabled title="One frame back (←)">‹ Back</button>
             <button type="button" id="play" disabled title="Play / pause (Space)">Play</button>
             <button type="button" id="step" disabled title="Step one frame (→)">Step ›</button>
-            <input type="range" id="timeline" min="0" max="1000" value="0" step="1" disabled aria-label="Position">
+            <div class="timeline-wrap">
+                <input type="range" id="timeline" min="0" max="1000" value="0" step="1" disabled aria-label="Position">
+                <div id="tlMarks" class="tl-marks"></div>
+            </div>
             <span id="time" class="mono">0:00.000</span>
             <button type="button" id="bookmark" disabled title="Bookmark this frame (B)">☆ Mark</button>
         </div>
@@ -51,52 +54,6 @@
                 <button type="button" id="openScene">Load</button>
             </div>
             <p id="srcLabel" class="muted">No video</p>
-        </details>
-        <details open id="pProcessing">
-            <summary>Processing</summary>
-            <div id="params-playback" class="params"></div>
-        </details>
-        <details open id="pView">
-            <summary>View</summary>
-            <div id="params-view" class="params"></div>
-        </details>
-        <details open id="pStats">
-            <summary>Stats</summary>
-            <dl class="stats mono">
-                <dt>Source</dt><dd id="stSource">–</dd>
-                <dt>Processed</dt><dd id="stFps">–</dd>
-                <dt>Dropped</dt><dd id="stDropped">–</dd>
-                <dt>Rate</dt><dd id="stRate">–</dd>
-                <dt>Frame</dt><dd id="stFrame">–</dd>
-                <dt>Frame cost</dt><dd id="stCost">–</dd>
-                <dt>Points</dt><dd id="stPoints">–</dd>
-                <dt>Inliers</dt><dd id="stInliers">–</dd>
-                <dt>Fit error</dt><dd id="stFit" title="90 % of the points used for camera motion are within this distance of where the fit puts them (processing px), and the share of the frame they cover">–</dd>
-                <dt>Skipped</dt><dd id="stSkipped">–</dd>
-                <dt>Grab</dt><dd id="stGrab">–</dd>
-                <dt>Motion</dt><dd id="stEgo">–</dd>
-                <dt>Detect</dt><dd id="stDetect">–</dd>
-                <dt>Candidates</dt><dd id="stCand">–</dd>
-                <dt>Tracks</dt><dd id="stTracks">–</dd>
-                <div id="rowScore" class="contents" hidden><dt>Truth (raw)</dt><dd id="stScore">–</dd>
-                    <dt>Truth (confirmed)</dt><dd id="stScoreConf">–</dd></div>
-                <dt>OpenCV.js</dt><dd id="stCv">–</dd>
-            </dl>
-            <p id="stReason" class="muted"></p>
-        </details>
-        <details open id="pDetections">
-            <summary>Detections</summary>
-            <p id="logCount" class="muted">No confirmed detections yet</p>
-            <div class="row">
-                <button type="button" id="exportJson" disabled>Export JSON</button>
-                <button type="button" id="clearLog" disabled>Clear</button>
-            </div>
-        </details>
-        <details open id="pObjects">
-            <summary data-help="objects">Objects</summary>
-            <div class="help-host"></div>
-            <ol id="objectList" class="objects"></ol>
-            <p id="objectsEmpty" class="muted">No confirmed objects yet</p>
         </details>
         <details open id="pPresets">
             <summary data-help="presets">Presets</summary>
@@ -125,6 +82,47 @@
                 <button type="button" id="importPresets">Import…</button>
                 <input type="file" id="presetFile" accept=".json,application/json" hidden>
             </div>
+        </details>
+        <details open id="pPlayback">
+            <summary>Playback and view</summary>
+            <div id="params-playback" class="params"></div>
+            <div id="params-view" class="params view-params"></div>
+        </details>
+        <details open id="pStats">
+            <summary>Stats</summary>
+            <dl class="stats mono">
+                <dt>Source</dt><dd id="stSource">–</dd>
+                <dt>Processed</dt><dd id="stFps">–</dd>
+                <dt>Dropped</dt><dd id="stDropped">–</dd>
+                <dt>Rate</dt><dd id="stRate">–</dd>
+                <dt>Frame</dt><dd id="stFrame">–</dd>
+                <dt>Frame cost</dt><dd id="stCost">–</dd>
+                <dt>Points</dt><dd id="stPoints">–</dd>
+                <dt>Inliers</dt><dd id="stInliers">–</dd>
+                <dt>Fit error</dt><dd id="stFit" title="90 % of the points used for camera motion are within this distance of where the fit puts them (processing px), and the share of the frame they cover">–</dd>
+                <dt>Skipped</dt><dd id="stSkipped">–</dd>
+                <dt>Grab</dt><dd id="stGrab">–</dd>
+                <dt>Motion</dt><dd id="stEgo">–</dd>
+                <dt>Detect</dt><dd id="stDetect">–</dd>
+                <dt>Candidates</dt><dd id="stCand">–</dd>
+                <dt>Tracks</dt><dd id="stTracks">–</dd>
+                <div id="rowScore" class="contents" hidden><dt>Truth (raw)</dt><dd id="stScore">–</dd>
+                    <dt>Truth (confirmed)</dt><dd id="stScoreConf">–</dd></div>
+                <dt>OpenCV.js</dt><dd id="stCv">–</dd>
+            </dl>
+            <p id="stReason" class="muted"></p>
+            <h3>Detections</h3>
+            <p id="logCount" class="muted">No confirmed detections yet</p>
+            <div class="row">
+                <button type="button" id="exportJson" disabled>Export JSON</button>
+                <button type="button" id="clearLog" disabled>Clear</button>
+            </div>
+        </details>
+        <details open id="pObjects">
+            <summary data-help="objects">Objects</summary>
+            <div class="help-host"></div>
+            <ol id="objectList" class="objects"></ol>
+            <p id="objectsEmpty" class="muted">No confirmed objects yet</p>
         </details>
         <details open id="pArea">
             <summary data-help="area">Detection area</summary>

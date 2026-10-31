@@ -24,6 +24,16 @@ export function frameNumberClip({ fps = 25, seconds = 4, gop = 50 } = {}) {
         '-c:v', 'libx264', '-crf', '18', '-g', String(gop), '-pix_fmt', 'yuv420p', '-movflags', '+faststart'], out);
 }
 
+// The same frame-number pattern with a variable frame rate: every third frame lasts 1.5 frame
+// times (as phones and many drones record). Frame numbers count frames, not time.
+export function vfrFrameNumberClip({ fps = 30, seconds = 3 } = {}) {
+    const out = path.join(CACHE, `framenum-vfr-${fps}fps-${seconds}s.mp4`);
+    if (fs.existsSync(out)) return out;
+    const geq = "lum='if(lt(Y,120),if(eq(mod(floor(N/pow(2,floor(X/40))),2),1),235,16),128)'";
+    return ffmpeg(['-f', 'lavfi', '-i', `color=c=gray:s=320x240:r=${fps}:d=${seconds},format=gray,geq=${geq},setpts='(N+floor(N/3)*0.5)/${fps}/TB',format=yuv420p`,
+        '-fps_mode', 'passthrough', '-c:v', 'libx264', '-crf', '18', '-g', '30', '-pix_fmt', 'yuv420p', '-video_track_timescale', '600', '-movflags', '+faststart'], out);
+}
+
 // Runs in the page: reads the frame number drawn on the display canvas.
 export const readFrameNumber = () => {
     const c = document.getElementById('display');

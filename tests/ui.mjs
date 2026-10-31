@@ -1,6 +1,7 @@
 // The side panel and player: folding panels (remembered), playback speed, one frame back,
 // bookmarks, the objects panel (details, pin), and updating a saved preset.
 import { launch, ok, BASE_URL } from './lib/env.mjs';
+import { frameNumberClip, vfrFrameNumberClip, readFrameNumber } from './lib/clips.mjs';
 
 const browser = await launch();
 try {
@@ -32,11 +33,14 @@ try {
     const shown = () => page.evaluate(() => __ph.shown.frame);
     const f0 = await shown();
 
-    // one frame back: the previous frame, with its detection result
+    // one frame back: the previous frame, with its detection result, drawn once (no rewind / replay)
+    const r0 = await page.evaluate(() => __ph.renders);
     await page.click('#back');
     await page.waitForFunction(f => __ph.shown.frame === f - 1, f0, { timeout: 15000 });
     ok('‹ Back shows the previous frame', (await shown()) === f0 - 1, [f0, await shown()]);
     ok('… with its detection result', await page.evaluate(() => __ph.lastResult && __ph.lastResult.frame === __ph.shown.frame && __ph.lastResult.detect.ok));
+    ok('… drawn once, not rewound and played forward', (await page.evaluate(() => __ph.renders)) - r0 <= 2, (await page.evaluate(() => __ph.renders)) - r0);
+    ok('… and the tracks are confirmed again', await page.evaluate(() => __ph.lastResult.confirmed.length >= 2), await page.evaluate(() => __ph.lastResult.confirmed.length));
     await page.keyboard.press('ArrowLeft');
     await page.waitForFunction(f => __ph.shown.frame === f - 2, f0, { timeout: 15000 });
     ok('← does the same', (await shown()) === f0 - 2);
@@ -51,6 +55,11 @@ try {
     ok('one click on a bookmark goes back to it', (await shown()) === mark);
     await page.click('#bookmark');
     ok('the same frame is not bookmarked twice', (await page.locator('#bookmarks .chip').count()) === 1);
+    ok('the bookmark is a tick on the timeline', (await page.locator('#tlMarks button').count()) === 1);
+    for (let i = 0; i < 8; i++) await page.click('#step');
+    await page.click('#tlMarks button');
+    await page.waitForFunction(f => __ph.shown.frame === f, mark, { timeout: 15000 });
+    ok('… one click on it goes there', (await shown()) === mark);
 
     // objects
     for (let i = 0; i < 6; i++) await page.click('#step');
@@ -97,6 +106,36 @@ try {
         ok('a click on empty video changes nothing', /out of view/.test(await status()));
         await page.click(`#objectList li:first-child .pin`);
         ok('★ unpins it', !(await page.evaluate(id => __ph.lastResult && document.querySelector('#objectList li.pinned'), where.id)));
+    }
+
+    // stepping a video file one frame at a time: constant and variable frame rate
+    for (const [name, clip] of [['constant 25 fps', frameNumberClip({ fps: 25, seconds: 4 })], ['variable frame rate', vfrFrameNumberClip()]]) {
+        await page.setInputFiles('#file', clip);
+        const file = clip.split('/').pop();
+        await page.waitForFunction(f => document.getElementById('srcLabel').textContent.startsWith(f + ' ·') && __ph.results.length >= 1 && !document.getElementById('step').disabled, file, { timeout: 30000 });
+        const seen = [await page.evaluate(readFrameNumber)];
+        for (let i = 0; i < 14; i++) {
+            await page.click('#step');
+            await page.waitForTimeout(120);
+            seen.push(await page.evaluate(readFrameNumber));
+        }
+        ok(`${name}: every Step is exactly one frame`, seen.every((v, i) => i === 0 || v === seen[i - 1] + 1), seen);
+        await page.click('#back');
+        await page.waitForFunction(n => !document.getElementById('stage').classList.contains('busy'), null, { timeout: 15000 });
+        await page.waitForTimeout(150);
+        const b = await page.evaluate(readFrameNumber);
+        ok(`${name}: ‹ Back is exactly one frame`, b === seen[seen.length - 1] - 1, [seen[seen.length - 1], b]);
+        await page.click('#step');
+        await page.waitForTimeout(200);
+        ok(`${name}: … and Step right after it one frame forward again`, (await page.evaluate(readFrameNumber)) === b + 1, await page.evaluate(readFrameNumber));
+        const backs = [await page.evaluate(readFrameNumber)];
+        for (let i = 0; i < 5; i++) {
+            await page.click('#back');
+            await page.waitForFunction(() => !document.getElementById('stage').classList.contains('busy'), null, { timeout: 15000 });
+            await page.waitForTimeout(150);
+            backs.push(await page.evaluate(readFrameNumber));
+        }
+        ok(`${name}: five ‹ Backs in a row, one frame each`, backs.every((v, i) => i === 0 || v === backs[i - 1] - 1), backs);
     }
 
     // speed
