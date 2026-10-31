@@ -90,7 +90,7 @@ try {
         const [download] = await Promise.all([p.waitForEvent('download'), p.click('#exportJson')]);
         const data = JSON.parse(fs.readFileSync(await download.path(), 'utf8'));
         ok(`export (processing ${procWidth === '0' ? 'source' : procWidth}): file name, meta`, download.suggestedFilename().endsWith('.detections.json')
-            && data.meta.app === 'PixelHunter' && data.meta.width === 960 && data.meta.height === 540 && data.meta.params.detectMode === 'robust'
+            && data.meta.app === 'PixelHunter' && data.meta.width === 960 && data.meta.height === 540 && data.meta.params.detectMode === 'adaptive'
             && Math.abs(data.meta.fps - 25) < 0.01, { name: download.suggestedFilename(), meta: { ...data.meta, params: undefined } });
         ok(`export (${procWidth}): every logged detection, as shown in the panel`, data.detections.length === count && count > 50 && label.startsWith(`${count} confirmed`), { count, label });
         const d = data.detections[data.detections.length - 1];
