@@ -712,6 +712,7 @@ const WARM_UP = 5;
 // worked out from time don't count frames exactly.
 async function goToTime(T, why = 'seek') {
     if (!loop || navigating || !Number.isFinite(T)) return;
+    view.manual();
     navigating = true;
     $('stage').classList.add('busy');
     const shown = setTimeout(() => setLoading('jump', `Going to ${fmtTime(T)}…`), 300);
@@ -749,6 +750,7 @@ function previousFrameTime() {
 // One frame forward. Right after a jump the history may still be short (the display waits for
 // t + s): then this goes to the next frame properly instead.
 function stepForward() {
+    view.manual();
     if (!loop || navigating) return;
     const r = lastOut && lastOut.result;
     if (!r && ph.shown && Number.isFinite(ph.shown.time)) {
@@ -763,6 +765,7 @@ function stepForward() {
 }
 
 function stepBack() {
+    view.manual();
     if (navigating) return;
     const T = previousFrameTime();
     if (T !== null && T >= 0) goToTime(T);
@@ -891,7 +894,9 @@ const view = createObjectsView({
     goToTime: t => goToTime(t),
     togglePin,
     onChange: () => render(),
-    pause: () => { if (loop && loop.playing) { loop.pause(); updateTransport(); } },
+    // true when it paused (it was playing)
+    pause: () => { if (loop && loop.playing) { loop.pause(); updateTransport(); return true; } return false; },
+    resume: () => { if (loop && !loop.playing) { loop.play().catch(e => showBanner(`Playback failed: ${e.message}`)); updateTransport(); } },
     download,
     fileBase,
     exportMeta: () => ({ app: 'PixelHunter', version: APP_VERSION, source: source ? source.label : null, params: exportedParams() }),
@@ -1081,6 +1086,7 @@ function updateTransport() {
 
 function togglePlay() {
     if (!loop) return;
+    view.manual();
     if (loop.playing) loop.pause();
     else loop.play().catch(e => showBanner(`Playback failed: ${e.message}`));
     updateTransport();
@@ -1134,6 +1140,7 @@ function bindTransport() {
     $('bookmark').addEventListener('click', addBookmark);
     const tl = $('timeline');
     tl.addEventListener('input', () => {
+        view.manual();
         scrubbing = true;
         if (loop && Number.isFinite(loop.duration)) loop.seek(tl.value / 1000 * loop.duration);
     });

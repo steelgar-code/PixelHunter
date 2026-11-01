@@ -151,6 +151,25 @@ try {
         await p.waitForFunction(() => __ph.loop && !__ph.loop.playing, null, { timeout: 60000 });
         const at = await p.evaluate(() => ({ frame: __ph.shown.frame, objects: __ph.lastResult.confirmed.length }));
         ok('Pause on new object: playback stops at the first confirmation', at.objects >= 1 && at.frame < 20, at);
+        // "Not an object" on the card(s) of what it paused for: playback goes on by itself
+        // (it may pause again right away for the next new object: playback has moved on then)
+        const pf = await p.evaluate(() => __ph.objectsView.pausedFor);
+        const n = await p.locator('#cards .card:not(.leaving)').count();
+        for (let i = 0; i < n; i++) await p.click('#cards .card:not(.leaving) button:has-text("Not an object")');
+        await p.waitForFunction(f => __ph.shown.frame > f, at.frame, { timeout: 10000 }).catch(() => {});
+        const after = await p.evaluate(() => ({ frame: __ph.shown.frame, playing: __ph.loop.playing, pf: __ph.objectsView.pausedFor }));
+        ok('… "Not an object" on its card(s) resumes playback', pf && pf.length >= 1 && after.frame > at.frame && (after.playing || (after.pf && !after.pf.some(o => pf.includes(o)))), { pf, n, after });
+        if (await p.evaluate(() => __ph.loop.playing)) await p.click('#play');
+        // after a pause by hand, no automatic resume
+        await p.click('#play');
+        await p.waitForFunction(() => __ph.loop && !__ph.loop.playing, null, { timeout: 60000 }).catch(() => {});
+        if (await p.evaluate(() => !__ph.loop.playing)) {
+            await p.click('#step');
+            const m = await p.locator('#cards .card:not(.leaving)').count();
+            if (m) await p.click('#cards .card:not(.leaving) button:has-text("Not an object")');
+            await p.waitForTimeout(300);
+            ok('… not after playback was paused or stepped by hand', !(await p.evaluate(() => __ph.loop.playing)));
+        }
         ok('no page errors (pause)', e2.length === 0, e2);
         await p.close();
     }

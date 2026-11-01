@@ -28,6 +28,9 @@ export function createObjectsView(d) {
     let historyOf = null;              // oid in the history drawer
     let maxTime = -Infinity;           // latest media time processed: newer frames are new footage
     let dirty = true;
+    // new objects playback was paused for (pause on a new object): once all of them are marked
+    // "Not an object", playback resumes; any play / pause / step / seek by hand forgets them
+    let pausedFor = null;
     let saved = {};
     try { saved = JSON.parse(localStorage.getItem(STATE_KEY) || '{}') || {}; } catch { /* defaults */ }
     let zoom = ZOOMS.includes(saved.zoom) ? saved.zoom : 8;
@@ -94,7 +97,10 @@ export function createObjectsView(d) {
             if (shown.length && d.params.cards) for (const oid of shown) addCard(oid);
             // open the newest in the inspector, unless it shows an object being kept track of
             if (shown.length && d.params.autoInspect && (open === null || !objs.isPinned(open))) inspect(shown[shown.length - 1]);
-            if (shown.length && d.params.pauseOnNew) d.pause();
+            if (shown.length && d.params.pauseOnNew) {
+                if (d.pause()) pausedFor = new Set(shown);
+                else if (pausedFor) for (const oid of shown) pausedFor.add(oid);
+            }
         }
         dirty = true;
     }
@@ -398,6 +404,7 @@ export function createObjectsView(d) {
             if (open === null) return;
             const o = objs.get(open);
             objs.label(open, o.label === 'not' ? null : 'not');
+            if (o.label === 'not') dismissed(open);
             d.togglePin(open, objs.isPinned(open));          // keeps the tracker's pins in step
             dirty = true;
             renderList();
@@ -406,6 +413,14 @@ export function createObjectsView(d) {
         $('inspFirst').addEventListener('click', () => { const o = objs.get(open); if (o) d.goToTime(o.first.time); });
         $('inspLast').addEventListener('click', () => { const o = objs.get(open); if (o) d.goToTime(o.last.time); });
         $('inspHistory').addEventListener('click', () => showHistory(historyOf === open ? null : open));
+    }
+
+    // An object marked "Not an object": if playback paused for it (and only for new objects
+    // dismissed the same way), it plays on.
+    function dismissed(oid) {
+        if (!pausedFor || !pausedFor.delete(oid) || pausedFor.size) return;
+        pausedFor = null;
+        d.resume();
     }
 
     // --- cards for new objects ---------------------------------------------------------------
@@ -437,7 +452,7 @@ export function createObjectsView(d) {
         const not = document.createElement('button');
         not.type = 'button';
         not.textContent = 'Not an object';
-        not.addEventListener('click', e => { e.stopPropagation(); objs.label(oid, 'not'); d.togglePin(oid, false); dirty = true; renderList(); d.onChange(); close(); });
+        not.addEventListener('click', e => { e.stopPropagation(); objs.label(oid, 'not'); d.togglePin(oid, false); dirty = true; renderList(); d.onChange(); close(); dismissed(oid); });
         const x = document.createElement('button');
         x.type = 'button';
         x.className = 'icon';
@@ -620,6 +635,9 @@ export function createObjectsView(d) {
         laneAt,
         renderLanes,
         get laneCount() { return lanes.length; },
+        // playback was paused or moved by hand: no automatic resume
+        manual() { pausedFor = null; },
+        get pausedFor() { return pausedFor ? [...pausedFor] : null; },
         // a new source or Clear: everything goes
         clear() {
             thumbs.clear();
