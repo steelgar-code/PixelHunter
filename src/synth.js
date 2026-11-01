@@ -123,6 +123,10 @@ export const DEFAULT_SCENE = {
     // [{ x, y (world, or fx, fy in frame 0), r (px), parallax? (0.1 = 10 % closer-than-ground
     // drift), sway? (px), swayPeriod? (frames), dark? }]
     trees: [],
+    // { fy (horizon: row in frame 0), level (grey at the horizon), gradient (grey levels brighter
+    // per 100 px up), haze (amplitude of faint large-scale clouds) }: above the horizon the
+    // world is smooth sky instead of texture, the flat kind of area video compression flattens
+    sky: null,
     // { size, contrast, vx, vy, ax?, ay?, from?, to?, stops? } plus a start position: x, y in
     // world coordinates or fx, fy in frame `from`'s coordinates. Velocities in world px per
     // frame. stops: [[k0, k1], …] frames during which the target stands still (stop and go).
@@ -179,6 +183,15 @@ export function createScene(options = {}) {
     const ox = Math.floor(minX) - 4, oy = Math.floor(minY) - 4;
     const ww = Math.ceil(maxX) + 4 - ox, wh = Math.ceil(maxY) + 4 - oy;
     const world = makeWorld(ww, wh, rand, s);
+    if (s.sky) {
+        const { fy, level = 175, gradient = 6, haze = 3 } = s.sky;
+        const horizon = project(inv(pose(0)), (W - 1) / 2, fy)[1] - oy;      // raster row
+        const clouds = makeWorld(ww, wh, rand, { octaves: [[128, haze], [48, haze / 2]], shapes: 0 });
+        for (let y = 0; y < Math.min(wh, Math.floor(horizon)); y++) {
+            const v = level + gradient * (horizon - y) / 100;
+            for (let x = 0; x < ww; x++) world[y * ww + x] = v + clouds[y * ww + x] - 128;
+        }
+    }
     const noiseSeed = Math.floor(rand() * 2 ** 32);
     const trees = s.trees.map((t, n) => makeTree(t, n, s.seed, inv(pose(0)), camera));
 

@@ -68,6 +68,18 @@ export const SCENARIOS = {
         scene: seed => SCENARIOS.J.scene(seed) },
     'G-h264': { what: 'G through H.264 (CRF 26)', goal: 'quiet', h264: 26,
         scene: seed => SCENARIOS.G.scene(seed) },
+    // compressed footage (§ noise): flat sky over textured ground, keyframes every 30 frames
+    'S-h264': { what: 'no target, handheld, sky over ground, H.264 CRF 28, keyframe every 30', goal: 'quiet', h264: 28, gop: 30,
+        scene: seed => ({ ...base, frames: 250, camera: 'handheld', seed, sky: { fy: 170 }, targets: [] }) },
+    'S-h264-32': { what: 'S through H.264 CRF 32', goal: 'quiet', h264: 32, gop: 30,
+        scene: seed => SCENARIOS['S-h264'].scene(seed) },
+    'T-h264': { what: '3×3 px −20 and 2×2 px −30 in the sky, handheld, H.264 CRF 28', goal: 'recall', h264: 28, gop: 30,
+        scene: seed => ({ ...base, frames: 150, camera: 'handheld', seed, sky: { fy: 170 },
+            targets: [dot(3, -20, 120, 70, 3 + 3.5, 0.6), dot(2, -30, 420, 120, 3 + 2.5, -0.4)] }) },
+    'C-h264-28': { what: 'C through H.264 CRF 28, keyframe every 30', h264: 28, gop: 30,
+        scene: seed => SCENARIOS.C.scene(seed) },
+    'F-h264': { what: 'F through H.264 CRF 28, keyframe every 30', goal: 'quiet', h264: 28, gop: 30,
+        scene: seed => SCENARIOS.F.scene(seed) },
     K: { what: '1 px, contrast 25, slow (0.8 px/frame)', goal: 'recall',
         scene: seed => ({ ...base, frames: 150, camera: 'pan', seed, targets: [dot(1, 25, 200, 120, 6 + 0.8, 2.5), dot(1, -25, 380, 260, 6 - 0.6, 2.5 + 0.5)] }) },
 };
@@ -178,8 +190,8 @@ async function runInPage({ scene, raw, params }) {
 }
 
 // H.264 version of a scene, decoded to raw grey frames the page can fetch.
-async function rawClip(scene, crf) {
-    const clip = await sceneClip(scene, { crf });
+async function rawClip(scene, crf, gop) {
+    const clip = await sceneClip(scene, { crf, gop });
     const out = `${clip.path}.gray`;
     if (!fs.existsSync(out)) {
         const r = spawnSync('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-y', '-i', clip.path, '-f', 'rawvideo', '-pix_fmt', 'gray', out]);
@@ -205,7 +217,7 @@ await Promise.all(pages.map(async ({ page }) => {
         const sc = SCENARIOS[w.s];
         const scene = sc.scene(w.seed);
         const params = { ...CONFIGS[w.c], ...extra };
-        const spec = sc.h264 ? { raw: await rawClip(scene, sc.h264), params } : { scene, params };
+        const spec = sc.h264 ? { raw: await rawClip(scene, sc.h264, sc.gop), params } : { scene, params };
         if (spec.raw) spec.raw.url = new URL(spec.raw.url, page.url()).href;
         const r = await page.evaluate(runInPage, spec);
         (results[`${w.s}|${w.c}`] ??= []).push(r);
