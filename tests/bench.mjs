@@ -94,6 +94,7 @@ export const CONFIGS = {
     mid: {},
     highest: PRESETS.highest.values,
     low: PRESETS.low.values,
+    compressed: PRESETS.compressed.values,
     'mid+shift': { shiftCheck: true },
     'highest+shift': { ...PRESETS.highest.values, shiftCheck: true },
     // the tracking guards (path check, crowd gate, motion pause) off, for comparison
