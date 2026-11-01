@@ -68,6 +68,18 @@ export const SCENARIOS = {
         scene: seed => SCENARIOS.J.scene(seed) },
     'G-h264': { what: 'G through H.264 (CRF 26)', goal: 'quiet', h264: 26,
         scene: seed => SCENARIOS.G.scene(seed) },
+    // compressed footage (§ noise): flat sky over textured ground, keyframes every 30 frames
+    'S-h264': { what: 'no target, handheld, sky over ground, H.264 CRF 28, keyframe every 30', goal: 'quiet', h264: 28, gop: 30,
+        scene: seed => ({ ...base, frames: 250, camera: 'handheld', seed, sky: { fy: 170 }, targets: [] }) },
+    'S-h264-32': { what: 'S through H.264 CRF 32', goal: 'quiet', h264: 32, gop: 30,
+        scene: seed => SCENARIOS['S-h264'].scene(seed) },
+    'T-h264': { what: '3×3 px −20 and 2×2 px −30 in the sky, handheld, H.264 CRF 28', goal: 'recall', h264: 28, gop: 30,
+        scene: seed => ({ ...base, frames: 150, camera: 'handheld', seed, sky: { fy: 170 },
+            targets: [dot(3, -20, 120, 70, 3 + 3.5, 0.6), dot(2, -30, 420, 120, 3 + 2.5, -0.4)] }) },
+    'C-h264-28': { what: 'C through H.264 CRF 28, keyframe every 30', h264: 28, gop: 30,
+        scene: seed => SCENARIOS.C.scene(seed) },
+    'F-h264': { what: 'F through H.264 CRF 28, keyframe every 30', goal: 'quiet', h264: 28, gop: 30,
+        scene: seed => SCENARIOS.F.scene(seed) },
     K: { what: '1 px, contrast 25, slow (0.8 px/frame)', goal: 'recall',
         scene: seed => ({ ...base, frames: 150, camera: 'pan', seed, targets: [dot(1, 25, 200, 120, 6 + 0.8, 2.5), dot(1, -25, 380, 260, 6 - 0.6, 2.5 + 0.5)] }) },
 };
@@ -82,6 +94,7 @@ export const CONFIGS = {
     mid: {},
     highest: PRESETS.highest.values,
     low: PRESETS.low.values,
+    compressed: PRESETS.compressed.values,
     'mid+shift': { shiftCheck: true },
     'highest+shift': { ...PRESETS.highest.values, shiftCheck: true },
     // the tracking guards (path check, crowd gate, motion pause) off, for comparison
@@ -96,6 +109,26 @@ export const CONFIGS = {
     'adaptive6': { detectMode: 'adaptive', sigmas: 6 },
     'adaptive6+shift': { detectMode: 'adaptive', sigmas: 6, shiftCheck: true },
     'adaptive7': { detectMode: 'adaptive', sigmas: 7, weakMargin: 2.5 },
+    // confirmation by evidence (age + summed strength) against stricter N of M
+    'mid-5of8': { confirmN: 5, confirmM: 8 },
+    'mid-8of12': { confirmN: 8, confirmM: 12 },
+    'mid+ev': { confirmBy: 'evidence' },
+    'mid+ev-1s': { confirmBy: 'evidence', minAge: 1, minEvidence: 10 },
+    'mid+ev-gap5': { confirmBy: 'evidence', maxGap: 5 },
+    'highest+ev': { ...PRESETS.highest.values, confirmBy: 'evidence' },
+    // compressed footage: a floor for the patch sums (minMean) against a higher min contrast
+    'mid+mean2': { minMean: 2 },
+    'mid+mean3': { minMean: 3 },
+    'mid+mc8': { minContrast: 8 },
+    'mid+mc10': { minContrast: 10 },
+    'mid+mean3+mc6': { minMean: 3, minContrast: 6 },
+    'highest+mean3': { ...PRESETS.highest.values, minMean: 3 },
+    'mid+mean0': { minMean: 0 },
+    // candidates for a Compressed preset
+    comp1: { minMean: 3, confirmBy: 'evidence' },
+    comp2: { minMean: 3, minContrast: 8, confirmBy: 'evidence' },
+    comp3: { minMean: 3, minContrast: 8, confirmN: 4, confirmM: 6 },
+    comp4: { minMean: 3, minContrast: 8, sigmas: 8, minArea: 2, confirmBy: 'evidence' },
     // slow faint targets: the Highest preset's stride and confirmation with the adaptive detector
     'adaptive-slow': { ...PRESETS.highest.values, detectMode: 'adaptive', sigmas: 6 },
 };
@@ -171,8 +204,8 @@ async function runInPage({ scene, raw, params }) {
 }
 
 // H.264 version of a scene, decoded to raw grey frames the page can fetch.
-async function rawClip(scene, crf) {
-    const clip = await sceneClip(scene, { crf });
+async function rawClip(scene, crf, gop) {
+    const clip = await sceneClip(scene, { crf, gop });
     const out = `${clip.path}.gray`;
     if (!fs.existsSync(out)) {
         const r = spawnSync('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-y', '-i', clip.path, '-f', 'rawvideo', '-pix_fmt', 'gray', out]);
@@ -198,7 +231,7 @@ await Promise.all(pages.map(async ({ page }) => {
         const sc = SCENARIOS[w.s];
         const scene = sc.scene(w.seed);
         const params = { ...CONFIGS[w.c], ...extra };
-        const spec = sc.h264 ? { raw: await rawClip(scene, sc.h264), params } : { scene, params };
+        const spec = sc.h264 ? { raw: await rawClip(scene, sc.h264, sc.gop), params } : { scene, params };
         if (spec.raw) spec.raw.url = new URL(spec.raw.url, page.url()).href;
         const r = await page.evaluate(runInPage, spec);
         (results[`${w.s}|${w.c}`] ??= []).push(r);

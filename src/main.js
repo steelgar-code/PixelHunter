@@ -11,8 +11,9 @@ import { loadPresets, savePresets, presetFrom, upsert, remove, find, changesOf, 
 import { createPipeline } from './pipeline.js';
 import { createScore } from './score.js';
 import { createExportLog, download } from './exportLog.js';
-import { createObjects, historyCsv } from './objects.js';
-import { fitOverlay, clear, drawPoints, drawNote, drawBoxes, drawTruth, drawTracks, drawHeld, drawOffscreen, drawZones, drawInclude } from './overlay.js';
+import { createObjects } from './objects.js';
+import { createObjectsView } from './objectsView.js';
+import { fitOverlay, clear, drawPoints, drawNote, drawBoxes, drawTruth, drawTracks, drawBuilding, drawHeld, drawOffscreen, drawZones, drawInclude } from './overlay.js';
 import { normalizeZone, normalizeZones, parseZones, formatZones, zoneRect, inZones, loadZones, saveZones, MAX_ZONES, ZONES_KEY, INCLUDE_KEY } from './zones.js';
 
 const $ = id => document.getElementById(id);
@@ -46,12 +47,22 @@ const skipped = { count: 0, reasons: {} };
 let score = null;                // synthetic sources: candidates against ground truth
 let confScore = null;            // … and confirmed detections
 const log = createExportLog();
-const APP_VERSION = '0.6.0';
+const APP_VERSION = '0.7.0';
 
 // Test hook (see tests/): recent frames and state, no effect on the UI.
 const FRAME_LOG = 5000;
 const ph = window.__ph = { params, frames: [], results: [], cvState, ready: false, error: null, setZones: (kind, z) => setZones(kind, z), applyPreset: k => applyPreset(k),
     get userPresets() { return userPresets; } };
+
+// A busy state over the player (spinner and text), or null to clear it. Several can overlap
+// (keyed by what is busy); the latest one's text shows.
+const busyStates = new Map();
+function setLoading(key, text) {
+    if (text) busyStates.set(key, text); else busyStates.delete(key);
+    const last = [...busyStates.values()].pop();
+    $('loading').hidden = !last;
+    $('loadingText').textContent = last || '';
+}
 
 function showBanner(text) {
     const b = $('banner');
@@ -68,6 +79,10 @@ function fatal(text) {
 // --- parameter controls -------------------------------------------------------------------
 
 const syncers = new Map();       // key → puts params[key] into its control
+// display-only settings: a change redraws, nothing is recomputed
+const VIEW_KEYS = ['view', 'showCandidates', 'showBuilding', 'showTruth', 'showZones', 'showHud'];
+// settings of the app itself (what is shown, cards): not part of a detection run's settings
+const UI_GROUPS = ['view', 'objects'];
 
 // A "?" button that shows / hides `text` in a paragraph appended to `host`.
 function helpToggle(host, text, name) {
@@ -229,14 +244,23 @@ function renderParams() {
             row.append(guardSlider(input, def));
         }
         if (HELP[def.key]) head.append(helpToggle(row, HELP[def.key], def.label));
+        if (def.when) {
+            const note = document.createElement('span');
+            note.className = 'when-note';
+            note.textContent = `Not used now: only ${whenText(def.when)}`;
+            row.append(note);
+            conditional.push([row, def.when]);
+        }
         host.append(row);
     }
+    updateConditional();
     // section explanations
     for (const [key, text] of Object.entries(SECTION_HELP)) {
         const h = document.querySelector(`[data-help=${key}]`);
-        if (h) h.append(helpToggle(h.parentElement.querySelector('.help-host') || h.parentElement, text, h.textContent.trim()));
+        if (h) h.append(helpToggle(h.closest('details, .tab-panel').querySelector('.help-host') || h.parentElement, text, h.textContent.trim() || key));
     }
     $('helpAll').addEventListener('click', () => {
+        showTab('settings');
         const show = [...document.querySelectorAll('.help-btn')].some(b => b.getAttribute('aria-expanded') === 'false');
         for (const b of document.querySelectorAll('.help-btn')) if ((b.getAttribute('aria-expanded') === 'true') !== show) b.click();
         $('helpAll').textContent = show ? 'Hide explanations' : 'Explain settings';
@@ -245,12 +269,33 @@ function renderParams() {
     });
 }
 
+const DEF_GROUP = new Map(PARAM_DEFS.map(d => [d.key, d.group]));
+
+// Settings that only apply when another has a given value (def.when) are shown only then.
+const conditional = [];
+// (shown dimmed, with a note saying when they apply, so it is clear what has an effect now)
+const applies = when => Object.entries(when).every(([k, v]) => (Array.isArray(v) ? v : [v]).some(x => String(params[k]) === String(x)));
+function updateConditional() {
+    for (const [row, when] of conditional) row.classList.toggle('inactive', !applies(when));
+}
+// "with Detection: Robust or Basic", "with “Confirm steady paths only” on"
+function whenText(when) {
+    return Object.entries(when).map(([k, v]) => {
+        const d = PARAM_DEFS.find(x => x.key === k);
+        if (d.type === 'bool') return `with “${d.label}” ${v ? 'on' : 'off'}`;
+        const names = (Array.isArray(v) ? v : [v]).map(x => (d.choices.find(c => c[0] === x) || [x, x])[1].replace(/\s*\(.*\)$/, ''));
+        return `with ${d.label}: ${names.join(' or ')}`;
+    }).join(', ');
+}
+
 function setParam(key, value) {
     params[key] = value;
     save(localStorage, params);
+    updateConditional();
     if (key === 'mode') { if (loop) loop.setMode(value); }
     else if (key === 'speed') { if (loop) loop.setSpeed(Number(value)); }
-    else if (['view', 'showCandidates', 'showTruth', 'showZones'].includes(key)) render();
+    else if (VIEW_KEYS.includes(key)) { render(); updateStats(); }
+    else if (DEF_GROUP.get(key) === 'objects') { /* read when needed */ }
     else settingsChanged();
 }
 
@@ -293,6 +338,7 @@ function renderUserPresets(selected) {
     disarmDelete();
     showUserPresetInfo();
     updateSaveButton();
+    if ($('quickUser').options.length) renderQuickUser();
 }
 
 function showUserPresetInfo(text) {
@@ -329,6 +375,7 @@ function applyUserPreset(name) {
     Object.assign(params, ch.values);
     save(localStorage, params);
     for (const sync of syncers.values()) sync();
+    updateConditional();
     for (const [kind, k] of Object.entries(ZONE_KINDS)) if (ch[k.param]) setZones(kind, ch[k.param]);
     settingsChanged();
     showUserPresetInfo(`Applied “${p.name}”: ${describe(p)}.`);
@@ -403,12 +450,14 @@ function applyPreset(key) {
     Object.assign(params, PRESETS[key].values);
     save(localStorage, params);
     for (const sync of syncers.values()) sync();
+    updateConditional();
     settingsChanged();
 }
 
 function updatePresets() {
     const current = matchingPreset(params);
     for (const key of Object.keys(PRESETS)) $(`preset-${key}`).setAttribute('aria-pressed', String(key === current));
+    for (const b of document.querySelectorAll('#quickPresets button')) b.setAttribute('aria-pressed', String(b.dataset.preset === current));
     $('presetHint').textContent = current ? `${PRESETS[current].label}: ${PRESETS[current].hint}.` : 'Custom settings. A preset sets detection, confirmation and camera motion as a starting point to tune from.';
 }
 
@@ -495,16 +544,23 @@ function render() {
     }
     if (r && params.view !== 'points') {
         const held = r.held || [];
-        drawHeld(overlayCtx, tf, asObject(held.filter(t => !isPinnedTrack(t))));
+        drawHeld(overlayCtx, tf, asObject(held.filter(t => !isPinnedTrack(t) && !isHiddenTrack(t))));
         drawHeld(overlayCtx, tf, asObject(held.filter(isPinnedTrack)), { colour: PIN_COLOUR });
-        drawTracks(overlayCtx, tf, asObject(r.confirmed.filter(t => !isPinnedTrack(t))));
-        drawTracks(overlayCtx, tf, asObject(r.confirmed.filter(isPinnedTrack)), { colour: PIN_COLOUR });
+        // tracks building up: seen at least twice, matched this frame, not confirmed yet
+        if (params.showBuilding) drawBuilding(overlayCtx, tf, r.tracks.filter(t => t.state === 'tentative' && t.matched && t.hits >= 2 && t.box && !isHiddenTrack(t)));
+        const shown = r.confirmed.filter(t => !isHiddenTrack(t));
+        drawTracks(overlayCtx, tf, asObject(shown.filter(t => !isPinnedTrack(t))));
+        drawTracks(overlayCtx, tf, asObject(shown.filter(isPinnedTrack)), { colour: PIN_COLOUR });
+        // the object in the inspector: a second, wider box
+        const open = view.open !== null && shown.find(t => objs.objectOfTrack(t.id) === view.open);
+        if (open) drawBoxes(overlayCtx, tf, [open.box], { colour: '#3ea6ff', minScreen: 26, width: 1.5 });
         // pinned and out of view: an arrow at the edge towards it
         drawOffscreen(overlayCtx, tf, asObject(r.tracks.filter(isPinnedTrack)), g.w, g.h, PIN_COLOUR);
     }
     if (params.showZones || drawing) drawZones(overlayCtx, tf, params.zones, g.w, g.h, drawKind === 'exclude' ? draft : null);
     if (note) drawNote(overlayCtx, tf, note);
     ph.note = note;
+    view.frameDrawn();
 }
 
 // --- detection area: inclusion and exclusion zones ---------------------------------------
@@ -575,6 +631,9 @@ function toFrame(e) {
     return [Math.min(1, Math.max(0, fx)), Math.min(1, Math.max(0, fy))];
 }
 
+// an event on something floating over the video (inspector, cards), not on the video itself
+const onPanel = e => !!(e.target && e.target.closest && e.target.closest('.inspector, .card'));
+
 function bindZones() {
     $('drawZone').addEventListener('click', () => setDrawing(!drawing));
     $('clearZones').addEventListener('click', () => { setZones('include', []); setZones('exclude', []); });
@@ -583,7 +642,7 @@ function bindZones() {
     }
     for (const [kind, k] of Object.entries(ZONE_KINDS)) $(k.text).addEventListener('change', e => setZones(kind, parseZones(e.target.value)));
     stage.addEventListener('pointerdown', e => {
-        if (!drawing || e.button !== 0) return;
+        if (!drawing || e.button !== 0 || onPanel(e)) return;
         const p = toFrame(e);
         if (!p) return;
         e.preventDefault();
@@ -609,15 +668,24 @@ function bindZones() {
         else render();
     };
     stage.addEventListener('pointerup', end);
-    // a click on a confirmed object on the video pins or unpins it
+    // a click on a confirmed object on the video opens it in the inspector; a double click keeps
+    // tracking it (or stops)
     stage.addEventListener('click', e => {
-        if (drawing) return;
+        if (drawing || onPanel(e)) return;
         const t = trackAt(e);
-        if (t) togglePin(objs.objectOfTrack(t.id));
+        if (t) view.inspect(objs.objectOfTrack(t.id));
+    });
+    stage.addEventListener('dblclick', e => {
+        if (drawing || onPanel(e)) return;
+        const t = trackAt(e);
+        if (!t) return;
+        const oid = objs.objectOfTrack(t.id);
+        if (!objs.isPinned(oid)) objs.label(oid, 'object');
+        togglePin(oid);
     });
     stage.addEventListener('pointermove', e => {
         if (drawing || e.pointerType !== 'mouse') return;
-        stage.classList.toggle('over-object', !!trackAt(e));
+        stage.classList.toggle('over-object', !onPanel(e) && !!trackAt(e));
     });
     stage.addEventListener('pointercancel', () => { dragFrom = draft = null; render(); });
     renderZoneLists();
@@ -644,8 +712,10 @@ const WARM_UP = 5;
 // worked out from time don't count frames exactly.
 async function goToTime(T, why = 'seek') {
     if (!loop || navigating || !Number.isFinite(T)) return;
+    view.manual();
     navigating = true;
     $('stage').classList.add('busy');
+    const shown = setTimeout(() => setLoading('jump', `Going to ${fmtTime(T)}…`), 300);
     try {
         loop.pause();
         const s = Math.max(1, Math.round(params.stride));
@@ -658,6 +728,8 @@ async function goToTime(T, why = 'seek') {
         }
     } finally {
         navigating = false;
+        clearTimeout(shown);
+        setLoading('jump', null);
         $('stage').classList.remove('busy');
         render();
         updateTransport();
@@ -678,6 +750,7 @@ function previousFrameTime() {
 // One frame forward. Right after a jump the history may still be short (the display waits for
 // t + s): then this goes to the next frame properly instead.
 function stepForward() {
+    view.manual();
     if (!loop || navigating) return;
     const r = lastOut && lastOut.result;
     if (!r && ph.shown && Number.isFinite(ph.shown.time)) {
@@ -692,6 +765,7 @@ function stepForward() {
 }
 
 function stepBack() {
+    view.manual();
     if (navigating) return;
     const T = previousFrameTime();
     if (T !== null && T >= 0) goToTime(T);
@@ -713,97 +787,84 @@ function saveBookmarks(label, list) {
     } catch { /* not remembered */ }
 }
 
+// Bookmarks the frame shown, or removes its bookmark if it has one.
 function addBookmark() {
     if (!source || !ph.shown || ph.shown.frame === null) return;
-    const list = bookmarksOf(source.label);
-    if (!list.some(b => b.frame === ph.shown.frame)) list.push({ frame: ph.shown.frame, time: ph.shown.time });
+    let list = bookmarksOf(source.label);
+    if (list.some(b => b.frame === ph.shown.frame)) list = list.filter(b => b.frame !== ph.shown.frame);
+    else list.push({ frame: ph.shown.frame, time: ph.shown.time });
     list.sort((a, b) => a.frame - b.frame);
     saveBookmarks(source.label, list);
     renderBookmarks();
 }
 
+// The Mark button says whether the frame shown is bookmarked.
+function updateMarkButton() {
+    const on = !!(source && ph.shown && ph.shown.frame !== null && bookmarksOf(source.label).some(b => b.frame === ph.shown.frame));
+    $('bookmark').textContent = on ? '★ Marked' : '☆ Mark';
+    $('bookmark').setAttribute('aria-pressed', String(on));
+    $('bookmark').title = on ? 'Remove the bookmark of this frame (B)' : 'Bookmark this frame (B)';
+}
+
+// Bookmarks are ticks on the timeline: click goes there, right-click (or a long press) removes.
 function renderBookmarks() {
-    const host = $('bookmarks');
     const list = source ? bookmarksOf(source.label) : [];
-    host.replaceChildren(...list.map(b => {
-        const chip = document.createElement('span');
-        chip.className = 'chip mono';
-        const go = document.createElement('button');
-        go.type = 'button';
-        go.className = 'go';
-        go.textContent = `${fmtTime(b.time)} #${b.frame}`;
-        go.title = 'Go to this frame';
-        go.addEventListener('click', () => goToTime(b.time));
-        const del = document.createElement('button');
-        del.type = 'button';
-        del.textContent = '×';
-        del.title = 'Remove this bookmark';
-        del.addEventListener('click', () => { saveBookmarks(source.label, bookmarksOf(source.label).filter(x => x.frame !== b.frame)); renderBookmarks(); });
-        chip.append(go, del);
-        return chip;
-    }));
-    host.hidden = !list.length;
-    // and as ticks on the timeline
     const dur = loop && loop.duration;
+    const remove = b => { saveBookmarks(source.label, bookmarksOf(source.label).filter(x => x.frame !== b.frame)); renderBookmarks(); };
     $('tlMarks').replaceChildren(...(Number.isFinite(dur) && dur > 0 ? list : []).map(b => {
         const m = document.createElement('button');
         m.type = 'button';
         m.style.left = `${Math.min(100, Math.max(0, b.time / dur * 100))}%`;
-        m.title = `Bookmark ${fmtTime(b.time)} #${b.frame}`;
-        m.setAttribute('aria-label', m.title);
+        m.title = `Bookmark ${fmtTime(b.time)} #${b.frame}: click to go there, right-click to remove`;
+        m.setAttribute('aria-label', `Bookmark ${fmtTime(b.time)} #${b.frame}`);
         m.addEventListener('click', () => goToTime(b.time));
+        m.addEventListener('contextmenu', e => { e.preventDefault(); remove(b); });
+        let press = null;
+        m.addEventListener('pointerdown', e => { if (e.pointerType !== 'mouse') press = setTimeout(() => { press = null; remove(b); }, 700); });
+        m.addEventListener('pointerup', () => clearTimeout(press));
+        m.addEventListener('pointerleave', () => clearTimeout(press));
         return m;
     }));
+    updateMarkButton();
 }
 
-// --- objects: the latest confirmed objects, details, history and pins (objects.js) ------------
+// --- objects: the list, inspector, cards, timeline lanes and history (objectsView.js) -----------
 
 const PIN_COLOUR = '#ff9f43';
-const OBJECTS_SHOWN = 8;
 const objs = createObjects({ kept: 40 });
-let objectsDirty = false;
-let historyOf = null;              // object id whose history is open
 
 function clearObjects() {
     objs.clear();
-    historyOf = null;
+    if (view) view.clear();
     if (pipeline) pipeline.setPinned([]);
-    objectsDirty = true;
 }
 
 function noteObjects(out) {
     const r = out.result;
-    objs.update(r, out.slot.grey, { frameDuration: 1 / ((loop && loop.stats().sourceFps) || 25) });
+    const changes = objs.update(r, out.slot.grey, { frameDuration: 1 / ((loop && loop.stats().sourceFps) || 25) });
     // re-linking may move a pin to another track: the tracker watches the current ones
     if (objs.pinnedCount) pipeline.setPinned(objs.pinnedTrackIds());
     // tracks shown with their object's id
     for (const t of r.tracks) t.objectId = objs.objectOfTrack(t.id);
-    objectsDirty = true;
+    view.noteFrame(r, out.slot, changes);
 }
 
 // object id of a track (for drawing and the export); the track id until it is an object
 const oidOf = t => (t.objectId ?? objs.objectOfTrack(t.id)) ?? t.id;
 const asObject = list => list.map(t => ({ ...t, id: oidOf(t) }));
 const isPinnedTrack = t => { const o = objs.objectOfTrack(t.id); return o !== null && objs.isPinned(o); };
+// tracks of objects labelled "not an object" are not drawn
+const isHiddenTrack = t => { const o = objs.objectOfTrack(t.id); return o !== null && objs.isHidden(o); };
 
-// Pin or unpin an object: pinned ones are drawn in orange, listed first, kept watching by the
-// tracker (also stopped or out of view), and re-linked when tracking loses them.
-function togglePin(oid) {
-    objs.pin(oid);
+// Pin or unpin an object (on: true / false, or toggle): pinned ones are drawn in orange, listed
+// first, kept watching by the tracker (also stopped or out of view), and re-linked when tracking
+// loses them.
+function togglePin(oid, on) {
+    objs.pin(oid, on);
     if (pipeline) pipeline.setPinned(objs.pinnedTrackIds());
-    objectsDirty = true;
-    renderObjects();
+    view.markDirty();
+    view.render();
     render();
-}
-
-// What a pinned object is doing now.
-function pinStatus(o) {
-    const r = lastOut && lastOut.result, g = pipeline && pipeline.geometry;
-    const t = r && o.trackId !== null && r.tracks.find(x => x.id === o.trackId);
-    if (!t) return o.lost ? `lost: ${o.lost}` : 'lost';
-    if (t.state === 'confirmed' && t.matched) return 'on screen';
-    const [x, y] = t.lastSeen;
-    return g && x >= 0 && y >= 0 && x <= g.w - 1 && y <= g.h - 1 ? 'watching' : 'out of view';
 }
 
 // The object (confirmed or pinned track) under a click on the video, within 14 screen px.
@@ -815,7 +876,7 @@ function trackAt(e) {
     const x = p[0] * g.w - 0.5, y = p[1] * g.h - 0.5;
     let best = null, bd = 14 / s;
     for (const t of r.tracks) {
-        if (objs.objectOfTrack(t.id) === null) continue;
+        if (objs.objectOfTrack(t.id) === null || isHiddenTrack(t)) continue;
         if (!(t.state === 'confirmed' && t.matched) && !isPinnedTrack(t)) continue;
         const [tx, ty] = t.matched ? [t.box.cx, t.box.cy] : t.lastSeen;
         const d = Math.hypot(tx - x, ty - y);
@@ -824,102 +885,81 @@ function trackAt(e) {
     return best;
 }
 
-function renderObjects() {
-    if (!objectsDirty) return;
-    objectsDirty = false;
-    const list = objs.list().filter(o => o.last).slice(0, Math.max(OBJECTS_SHOWN, objs.pinnedCount));
-    const r = lastOut && lastOut.result;
-    const live = new Set(r ? r.confirmed.map(t => objs.objectOfTrack(t.id)) : []);
-    $('objectList').replaceChildren(...list.map(o => {
-        const li = document.createElement('li');
-        const pin = objs.isPinned(o.id);
-        li.className = `${pin ? 'pinned' : ''} ${live.has(o.id) ? 'live' : ''} ${historyOf === o.id ? 'open' : ''}`;
-        li.title = 'Go to the last frame it was seen';
-        const id = document.createElement('span');
-        id.className = 'oid mono';
-        id.textContent = `#${o.id}`;
-        const size = document.createElement('span');
-        size.className = 'mono';
-        const c = Math.round(o.contrast);
-        size.textContent = `${o.w.toFixed(0)}×${o.h.toFixed(0)} px · ${c > 0 ? '+' : ''}${c} grey`;
-        const data = document.createElement('span');
-        data.className = 'odata mono';
-        const status = pin ? `${pinStatus(o)} · ` : '';
-        data.textContent = `${status}${o.speed.toFixed(1)} px/f · ${fmtTime(o.first.time)}–${fmtTime(o.last.time)} · ${o.frames} frames`;
-        const buttons = document.createElement('span');
-        buttons.className = 'obtn';
-        const hist = document.createElement('button');
-        hist.type = 'button';
-        hist.textContent = '≡';
-        hist.title = 'History: size, contrast, speed and why it was missed, frame by frame';
-        hist.addEventListener('click', e => { e.stopPropagation(); historyOf = historyOf === o.id ? null : o.id; objectsDirty = true; renderObjects(); });
-        const pb = document.createElement('button');
-        pb.type = 'button';
-        pb.className = 'pin';
-        pb.textContent = pin ? '★' : '☆';
-        pb.title = pin ? 'Unpin' : 'Pin: keep watching it, draw in orange';
-        pb.addEventListener('click', e => { e.stopPropagation(); togglePin(o.id); });
-        buttons.append(hist, pb);
-        li.append(id, size, buttons, data);
-        li.addEventListener('click', () => goToTime(o.last.time));
-        return li;
-    }));
-    $('objectsEmpty').hidden = list.length > 0;
-    renderHistory();
-}
+const fileBase = () => (source && source.label ? source.label.replace(/\.[^.]+$/, '') : 'pixelhunter').replace(/[^\w.-]+/g, '_');
+const exportedParams = () => Object.fromEntries(PARAM_DEFS.filter(d => !UI_GROUPS.includes(d.group) && d.key !== 'simLoad').map(d => [d.key, params[d.key]]));
 
-// The open object's history: the latest rows first, events highlighted.
-function renderHistory() {
-    const box = $('objectHistory');
-    const o = historyOf !== null ? objs.get(historyOf) : null;
-    box.hidden = !o;
-    if (!o) return;
-    const tracks = [...new Set(o.history.filter(e => e.track !== undefined).map(e => e.track))];
-    $('historyTitle').textContent = `#${o.id} · tracks ${tracks.map(t => `#${t}`).join(', ')} · ${o.history.length} rows`;
-    const rows = o.history.slice(-80).reverse();
-    $('historyRows').replaceChildren(...rows.map(e => {
-        const tr = document.createElement('tr');
-        if (e.event) {
-            tr.className = 'ev';
-            tr.innerHTML = `<td>${e.frame ?? ''}</td><td>${fmtTime(e.time)}</td><td colspan="4"></td>`;
-            tr.lastElementChild.textContent = e.event;
-        } else if (e.seen) {
-            const c = Math.round(e.contrast);
-            tr.innerHTML = `<td>${e.frame ?? ''}</td><td>${fmtTime(e.time)}</td><td></td><td></td><td></td><td></td>`;
-            const td = tr.children;
-            td[2].textContent = `${e.state[0]}${e.weak ? ' weak' : ''}`;
-            td[3].textContent = `${e.w}×${e.h}`;
-            td[4].textContent = `${c > 0 ? '+' : ''}${c}`;
-            td[5].textContent = `${e.speed}${e.score !== undefined ? ` · ${e.score}σ` : ''}`;
-        } else {
-            tr.className = 'miss';
-            tr.innerHTML = `<td>${e.frame ?? ''}</td><td>${fmtTime(e.time)}</td><td></td><td colspan="3"></td>`;
-            tr.children[2].textContent = e.state[0];
-            tr.children[3].textContent = e.why || 'not seen';
-        }
-        return tr;
-    }));
-}
+const view = createObjectsView({
+    objs, params, $, fmtTime, display, stage, wrap: document.querySelector('.stage-wrap'),
+    current: () => ({ r: lastOut && lastOut.result, slot: lastOut && lastOut.slot, geometry: pipeline && pipeline.geometry, loop }),
+    goToTime: t => goToTime(t),
+    togglePin,
+    onChange: () => render(),
+    // true when it paused (it was playing)
+    pause: () => { if (loop && loop.playing) { loop.pause(); updateTransport(); return true; } return false; },
+    resume: () => { if (loop && !loop.playing) { loop.play().catch(e => showBanner(`Playback failed: ${e.message}`)); updateTransport(); } },
+    download,
+    fileBase,
+    exportMeta: () => ({ app: 'PixelHunter', version: APP_VERSION, source: source ? source.label : null, params: exportedParams() }),
+});
+ph.objectsView = view;
 
-function exportHistory(kind) {
-    const o = historyOf !== null ? objs.get(historyOf) : null;
-    if (!o) return;
-    const base = `${(source && source.label ? source.label.replace(/\.[^.]+$/, '') : 'pixelhunter').replace(/[^\w.-]+/g, '_')}.object-${o.id}`;
-    if (kind === 'csv') {
-        const blob = new Blob([historyCsv(o)], { type: 'text/csv' });
-        const a = document.createElement('a');
-        a.href = URL.createObjectURL(blob);
-        a.download = `${base}.csv`;
-        document.body.append(a);
-        a.click();
-        a.remove();
-        setTimeout(() => URL.revokeObjectURL(a.href), 1000);
-    } else {
-        download(`${base}.json`, { app: 'PixelHunter', version: APP_VERSION, source: source ? source.label : null, object: o.id,
-            units: 'x, y, w, h: source px; contrast: grey levels (box mean − 2 px ring mean); speed: px per frame against the background; score: σ (adaptive mode)',
-            params: Object.fromEntries(PARAM_DEFS.filter(d => !['view', 'showCandidates', 'showTruth', 'showZones', 'simLoad'].includes(d.key)).map(d => [d.key, params[d.key]])),
-            history: o.history.map(({ px, ...e }) => e) });
+// --- side panel tabs, the source menu, quick presets ------------------------------------------
+
+const TAB_KEY = 'pixelhunter.tab.v1';
+
+function showTab(name) {
+    for (const tab of document.querySelectorAll('.tabs [role=tab]')) {
+        const on = tab.id === `tab-${name}`;
+        tab.setAttribute('aria-selected', String(on));
+        $(tab.getAttribute('aria-controls')).hidden = !on;
     }
+    try { localStorage.setItem(TAB_KEY, name); } catch { /* not remembered */ }
+    if (name === 'objects') { view.markDirty(); view.render(); }
+}
+
+function bindTabs() {
+    for (const tab of document.querySelectorAll('.tabs [role=tab]')) tab.addEventListener('click', () => showTab(tab.id.replace('tab-', '')));
+    let name = 'objects';
+    try { name = localStorage.getItem(TAB_KEY) || 'objects'; } catch { /* default */ }
+    showTab($(`tab-${name}`) ? name : 'objects');
+}
+
+function setMenu(open) {
+    $('sourceMenu').hidden = !open;
+    $('openMenu').setAttribute('aria-expanded', String(open));
+}
+
+function bindSourceMenu() {
+    $('openMenu').addEventListener('click', e => { e.stopPropagation(); setMenu($('sourceMenu').hidden); });
+    document.addEventListener('pointerdown', e => {
+        if (!$('sourceMenu').hidden && !e.target.closest('.source-pick')) setMenu(false);
+    });
+}
+
+// Highest / Mid / Low and the user's presets, in the top bar (the full preset controls are in
+// Settings).
+function renderQuickPresets() {
+    const host = $('quickPresets');
+    host.replaceChildren(...Object.entries(PRESETS).map(([key, pr]) => {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.dataset.preset = key;
+        b.textContent = pr.label;
+        b.title = pr.hint;
+        b.addEventListener('click', () => applyPreset(key));
+        return b;
+    }));
+    renderQuickUser();
+    $('quickUser').addEventListener('change', e => {
+        if (e.target.value) applyUserPreset(e.target.value);
+        e.target.value = '';
+    });
+}
+
+function renderQuickUser() {
+    const sel = $('quickUser');
+    sel.replaceChildren(new Option(userPresets.length ? 'My presets…' : 'My presets: none', ''), ...userPresets.map(p => new Option(p.name, p.name)));
+    sel.disabled = !userPresets.length;
 }
 
 // --- panels: remember which are folded ---------------------------------------------------------
@@ -942,6 +982,16 @@ function bindPanels() {
 
 // next: a video source (sources.js), or { kind: 'synthetic', label, scene }
 async function openSource(next) {
+    setMenu(false);
+    setLoading('source', `Opening ${next.label}…`);
+    try {
+        await openSourceNow(next);
+    } finally {
+        setLoading('source', null);
+    }
+}
+
+async function openSourceNow(next) {
     if (loop) { loop.destroy(); loop = null; }
     if (source && source.stop) source.stop(video);
     source = null;
@@ -1009,6 +1059,7 @@ function openFile(file) {
 function openScene(key) {
     if (!cvState.ready || !SCENES[key]) return;
     $('srcLabel').textContent = `Rendering ${SCENES[key].label}…`;
+    setLoading('source', `Rendering the synthetic scene “${SCENES[key].label}”…`);
     // let the label paint before the (synchronous) world texture is built
     setTimeout(() => openSource({ kind: 'synthetic', label: SCENES[key].label, isLive: false, scene: createScene(SCENES[key].options) }), 20);
 }
@@ -1024,6 +1075,7 @@ function fmtTime(t) {
 function updateTransport() {
     $('play').textContent = loop && loop.playing ? 'Pause' : 'Play';
     if (!loop) return;
+    updateMarkButton();
     const shown = lastOut ? lastOut.slot.meta.time : loop.time;
     const fr = lastOut && lastOut.slot.meta.frame;
     $('time').textContent = `${fmtTime(shown)}${fr !== null && fr !== undefined ? ` #${fr}` : ''} / ${fmtTime(loop.duration)}`;
@@ -1034,6 +1086,7 @@ function updateTransport() {
 
 function togglePlay() {
     if (!loop) return;
+    view.manual();
     if (loop.playing) loop.pause();
     else loop.play().catch(e => showBanner(`Playback failed: ${e.message}`));
     updateTransport();
@@ -1041,13 +1094,53 @@ function togglePlay() {
 
 let scrubbing = false;
 
+// "1:23.4", "83.4" (seconds) or "#250" (a frame) → media time in s, or null.
+function parseGoTo(text, fps) {
+    const t = String(text).trim();
+    let m;
+    if ((m = /^#\s*(\d+)$/.exec(t))) return fps > 0 ? Number(m[1]) / fps : null;
+    if ((m = /^(\d+):(\d{1,2}(?:\.\d*)?)$/.exec(t))) return Number(m[1]) * 60 + Number(m[2]);
+    if ((m = /^\d+(?:\.\d*)?$/.exec(t))) return Number(t);
+    return null;
+}
+
+// Click on the time (or G): a field to type a time or a frame number to go to.
+function bindGoTo() {
+    const form = $('goToForm'), input = $('goTo'), time = $('time');
+    const open = () => {
+        if (!loop || !Number.isFinite(loop.duration)) return;
+        form.hidden = false;
+        time.hidden = true;
+        input.value = '';
+        input.focus();
+    };
+    const close = () => { form.hidden = true; time.hidden = false; };
+    time.addEventListener('click', open);
+    time.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); } });
+    input.addEventListener('keydown', e => { if (e.key === 'Escape') { e.stopPropagation(); close(); } });
+    input.addEventListener('blur', () => setTimeout(close, 150));
+    form.addEventListener('submit', e => {
+        e.preventDefault();
+        const fps = loop && loop.stats().sourceFps;
+        const t = parseGoTo(input.value, fps);
+        close();
+        if (t === null || !loop || !Number.isFinite(loop.duration)) return;
+        // a frame number: its time less a quarter frame, so rounding can't land on the next one
+        const to = /^#/.test(input.value.trim()) && fps ? t - 0.25 / fps : t;
+        goToTime(Math.min(Math.max(0, to), loop.duration - 1e-3), 'go to');
+    });
+    return open;
+}
+
 function bindTransport() {
+    const openGoTo = bindGoTo();
     $('play').addEventListener('click', togglePlay);
     $('step').addEventListener('click', stepForward);
     $('back').addEventListener('click', stepBack);
     $('bookmark').addEventListener('click', addBookmark);
     const tl = $('timeline');
     tl.addEventListener('input', () => {
+        view.manual();
         scrubbing = true;
         if (loop && Number.isFinite(loop.duration)) loop.seek(tl.value / 1000 * loop.duration);
     });
@@ -1059,7 +1152,8 @@ function bindTransport() {
         const f = Math.min(1, Math.max(0, (e.clientX - r.left - 8) / Math.max(1, r.width - 16)));
         const t = f * loop.duration, fps = loop.stats().sourceFps;
         const tip = $('tlHover');
-        tip.textContent = `${fmtTime(t)}${fps ? ` #${Math.round(t * fps)}` : ''}`;
+        const lane = e.target === $('tlLanes') ? view.laneAt(e) : null;
+        tip.textContent = lane ? `#${lane.o.id}${lane.t !== null ? ` · ${fmtTime(lane.t)}` : ''}` : `${fmtTime(t)}${fps ? ` #${Math.round(t * fps)}` : ''}`;
         tip.style.left = `${e.clientX - wrap.getBoundingClientRect().left}px`;
         tip.hidden = false;
     });
@@ -1077,7 +1171,12 @@ function bindTransport() {
         else if (e.code === 'ArrowRight' && loop) { e.preventDefault(); stepForward(); }
         else if (e.code === 'ArrowLeft' && loop) { e.preventDefault(); stepBack(); }
         else if (e.code === 'KeyB' && loop && !e.ctrlKey && !e.metaKey) addBookmark();
-        else if (e.code === 'Escape' && drawing) setDrawing(false);
+        else if (e.code === 'KeyG' && loop && !e.ctrlKey && !e.metaKey) { e.preventDefault(); openGoTo(); }
+        else if (e.code === 'Escape') {
+            if (!$('sourceMenu').hidden) setMenu(false);
+            else if (drawing) setDrawing(false);
+            else if (view.open !== null) view.inspect(null);
+        }
     });
 
     for (const b of document.querySelectorAll('[data-open]')) b.addEventListener('click', () => $('file').click());
@@ -1089,6 +1188,7 @@ function bindTransport() {
     $('openScene').addEventListener('click', () => openScene(pick.value));
     $('exportJson').addEventListener('click', exportJson);
     $('clearLog').addEventListener('click', () => { log.clear(); clearObjects(); updateStats(); });
+    $('clearObjects').addEventListener('click', () => { log.clear(); clearObjects(); updateStats(); });
     stage.addEventListener('dragover', e => { e.preventDefault(); stage.classList.add('dragover'); });
     stage.addEventListener('dragleave', () => stage.classList.remove('dragover'));
     stage.addEventListener('drop', e => {
@@ -1104,7 +1204,7 @@ function bindTransport() {
 function exportJson() {
     if (!log.count || !pipeline.geometry) return;
     const g = pipeline.geometry;
-    const keys = PARAM_DEFS.filter(d => !['view', 'showCandidates', 'showTruth', 'showZones', 'simLoad'].includes(d.key)).map(d => d.key);
+    const keys = PARAM_DEFS.filter(d => !UI_GROUPS.includes(d.group) && d.key !== 'simLoad').map(d => d.key);
     const meta = {
         app: 'PixelHunter', version: APP_VERSION, source: source ? source.label : null,
         width: g.srcW, height: g.srcH, fps: loop && loop.stats().sourceFps,
@@ -1115,15 +1215,15 @@ function exportJson() {
         created: new Date().toISOString(),
         units: 'source-video pixels; box = [x, y, w, h] of pixel edges; time = media time, s; vx / vy = px per frame against the background',
     };
-    const base = (source && source.label ? source.label.replace(/\.[^.]+$/, '') : 'pixelhunter').replace(/[^\w.-]+/g, '_');
-    download(`${base}.detections.json`, log.toJSON(meta));
+    download(`${fileBase()}.detections.json`, log.toJSON(meta, view.summary()));
 }
 
 // --- stats --------------------------------------------------------------------------------
 
 function updateStats() {
-    renderObjects();
-    if (!loop) return;
+    view.render();
+    $('clearObjects').disabled = !objs.list().length && !log.count;
+    if (!loop) { $('hud').hidden = true; return; }
     const s = loop.stats();
     const fps = v => (v === null ? '–' : v.toFixed(1));
     $('stSource').textContent = s.sourceFps === null ? '–' : `${fps(s.sourceFps)} fps`;
@@ -1156,6 +1256,12 @@ function updateStats() {
         $('stScore').textContent = sc.frames ? `${hit(sc.hitRate)} hit · ${sc.fpPerFrame.toFixed(2)} FP/frame` : '–';
         $('stScoreConf').textContent = cs.frames ? `${hit(cs.hitRate)} hit · ${cs.fpPer10s.toFixed(1)} FP/10 s` : '–';
     }
+    const hud = $('hud');
+    hud.hidden = !params.showHud || !r;
+    if (!hud.hidden) {
+        const live = r.confirmed.filter(t => !isHiddenTrack(t)).length;
+        hud.textContent = `${s.processedFps} fps · ${s.costMs === null ? '–' : s.costMs.toFixed(0)} ms · ${r.detect.ok ? r.candidates.length : '–'} candidates · ${live} object${live === 1 ? '' : 's'}${r.detect.ok ? '' : ' · no detection'}`;
+    }
     $('logCount').textContent = log.count ? `${log.count} confirmed detections, ${log.tracks} tracks` : 'No confirmed detections yet';
     $('exportJson').disabled = $('clearLog').disabled = !log.count;
     ph.stats = { ...s, skipped: skipped.count, skippedReasons: { ...skipped.reasons }, score: sc, confScore: cs };
@@ -1166,10 +1272,11 @@ function updateStats() {
 async function start() {
     renderParams();
     bindPanels();
-    $('historyCsv').addEventListener('click', () => exportHistory('csv'));
-    $('historyJson').addEventListener('click', () => exportHistory('json'));
-    $('historyClose').addEventListener('click', () => { historyOf = null; objectsDirty = true; renderObjects(); });
+    bindTabs();
+    bindSourceMenu();
+    view.bind();
     renderPresets();
+    renderQuickPresets();
     bindUserPresets();
     bindTransport();
     bindZones();
@@ -1179,8 +1286,10 @@ async function start() {
         return;
     }
     const status = $('cvStatus');
+    setLoading('cv', 'Loading OpenCV.js, the image-processing library (3.5 MB, once per visit)…');
     try {
         const { cv, ms } = await loadCv();
+        setLoading('cv', null);
         const missing = checkCv(cv);
         if (missing.functions.length || missing.constants.length) {
             const names = [...missing.functions, ...missing.constants];
@@ -1201,6 +1310,7 @@ async function start() {
         // #src=<URL-encoded link> opens that video at once (repeatable test runs)
         if (hash.src) openUrl(hash.src);
     } catch (e) {
+        setLoading('cv', null);
         status.textContent = 'OpenCV.js failed';
         status.className = 'pill error';
         fatal(`OpenCV.js could not be loaded: ${e.message}`);

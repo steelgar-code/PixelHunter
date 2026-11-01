@@ -1,6 +1,6 @@
 // Background-shift check (robust detector): false detections on trees (parallax, wind) are
 // dropped, real targets are not, also in front of the trees, faint ones, when cropped and with blur.
-import { launch, ok, openApp } from './lib/env.mjs';
+import { launch, ok, openApp, loadScene } from './lib/env.mjs';
 import { instrumentMats } from './lib/mats.mjs';
 import { SCENES } from '../src/scenes.js';
 
@@ -19,6 +19,7 @@ try {
             const pipe = createPipeline(cv, { ...window.__ph.params, detectMode: 'robust', ...params });
             const raw = createScore({ fps: s.fps }), conf = createScore({ fps: s.fps });
             const ms = [];
+            let onTarget = 0, lost = 0, was = false;
             for (let k = 0; k < s.frames; k++) {
                 const f = s.frame(k);
                 const r = pipe.push({ imageData: new ImageData(greyToRgba(f.grey), s.width, s.height), width: s.width, height: s.height,
@@ -27,12 +28,18 @@ try {
                 const sc = r.scale, tt = r.truth.targets.map(t => ({ ...t, cx: (t.cx + 0.5) * sc - 0.5, cy: (t.cy + 0.5) * sc - 0.5 }));
                 raw.add(r.frame, r.candidates, tt);
                 conf.add(r.frame, r.confirmed.map(t => t.box), tt);
+                // candidates on a target dropped by the shift check, and confirmed targets lost
+                const near = q => tt.some(t => Math.hypot(q.cx - t.cx, q.cy - t.cy) < 3);
+                onTarget += (r.detect.rejected || []).filter(q => q.why === 'background shift' && near(q)).length;
+                const now = r.confirmed.some(t => near(t.box));
+                if (was && !now) lost++;
+                was = now;
                 ms.push(r.timings.detect);
             }
             pipe.dispose();
             ms.sort((a, b) => a - b);
             const a = raw.summary(), c = conf.summary();
-            return { hit: a.hitRate, fp: +a.fpPerFrame.toFixed(2), conf: c.hitRate, confFp10s: +c.fpPer10s.toFixed(1), ms: +ms[ms.length >> 1].toFixed(1) };
+            return { hit: a.hitRate, fp: +a.fpPerFrame.toFixed(2), conf: c.hitRate, confFp10s: +c.fpPer10s.toFixed(1), ms: +ms[ms.length >> 1].toFixed(1), onTarget, lost };
         };
     });
     const run = (o, p) => page.evaluate(([o, p]) => window.run(o, p), [o, p]);
@@ -58,6 +65,17 @@ try {
         ] };
         const a = await run(o, {}), b = await run(o, { shiftCheck: true });
         ok('targets crossing in front of trees: none lost', b.hit >= a.hit - 0.02 && b.conf >= a.conf - 0.02, { off: [a.hit, a.conf], on: [b.hit, b.conf] });
+    }
+    // a tracked high-contrast object is not dropped (seen on real footage: a confirmed 4×5 px object,
+    // contrast −84, lost with "a candidate 0.4 px away was dropped: background shift"); its soft
+    // edge spilled into the ring, whose best shift then followed the object
+    // (before the fix, the slow 5 px case at stride 4 lost 17 of its sightings to the check)
+    for (const [size, speed, stride] of [[5, 0.54, 4], [4, 1.5, 1]]) for (const contrast of [-84, 84]) {
+        const o = { width: 640, height: 360, frames: 100, camera: 'handheld', seed: 91, noise: 2,
+            targets: [{ size, contrast, fx: 420, fy: 200, vx: speed * 0.93, vy: speed * 0.37 }] };
+        const a = await run(o, { detectMode: 'adaptive', stride }), b = await run(o, { detectMode: 'adaptive', stride, shiftCheck: true });
+        ok(`tracked ${size} px object, contrast ${contrast}, ${speed} px/frame, stride ${stride}: never dropped by the check, kept at least as long as without it`,
+            b.onTarget === 0 && b.conf >= a.conf - 0.01 && b.lost <= a.lost, { off: [a.conf, a.lost], on: [b.conf, b.lost, b.onTarget] });
     }
     // the other presets' scenes: nothing changes
     for (const key of ['pan-dots', 'drone-edges', 'exposure']) {
@@ -89,8 +107,7 @@ try {
 
     // the app: grey boxes for dropped candidates, count in the stats
     const { page: p, errors: e2 } = await openApp(browser, { hash: 'mode=everyFrame&stride=2&shiftCheck=true' });
-    await p.selectOption('#scene', 'trees');
-    await p.click('#openScene');
+    await loadScene(p, 'trees');
     await p.waitForFunction(() => __ph.results.length >= 1, null, { timeout: 30000 });
     for (let i = 0; i < 8; i++) await p.click('#step');
     await p.waitForTimeout(400);

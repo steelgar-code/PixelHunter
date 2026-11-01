@@ -48,12 +48,13 @@ export const readFrameNumber = () => {
 
 // A synthetic scene (src/synth.js options) encoded with tools/make-clip.mjs, cached by its
 // options. Resolves with { path, truth }.
-export async function sceneClip(options, { crf = 18, codec = 'libx264' } = {}) {
+// gop: frames between keyframes (default: the encoder's).
+export async function sceneClip(options, { crf = 18, codec = 'libx264', gop = null } = {}) {
     const { createHash } = await import('crypto');
     const { makeClip } = await import('../../tools/make-clip.mjs');
-    const key = createHash('sha1').update(JSON.stringify({ options, crf, codec })).digest('hex').slice(0, 12);
+    const key = createHash('sha1').update(JSON.stringify({ options, crf, codec, ...(gop ? { gop } : {}) })).digest('hex').slice(0, 12);
     const out = path.join(CACHE, `scene-${key}.${codec === 'y4m' ? 'y4m' : codec === 'libvpx-vp9' ? 'webm' : 'mp4'}`);
     fs.mkdirSync(CACHE, { recursive: true });
-    if (!fs.existsSync(out) || !fs.existsSync(`${out}.truth.json`)) await makeClip(options, out, { crf, codec });
+    if (!fs.existsSync(out) || !fs.existsSync(`${out}.truth.json`)) await makeClip(options, out, { crf, codec, gop });
     return { path: out, truth: JSON.parse(fs.readFileSync(`${out}.truth.json`, 'utf8')).truth };
 }

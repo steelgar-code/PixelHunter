@@ -58,6 +58,7 @@ const browser = await launch();
 try {
     const { page, errors } = await openApp(browser, { hash: 'mode=everyFrame' });
     const openUrl = async url => {
+        if (await page.isHidden('#sourceMenu')) await page.click('#openMenu');
         await page.fill('#srcUrl', url);
         await page.click('#urlForm button[type=submit]');
     };
@@ -105,6 +106,7 @@ try {
         await p.goto(BASE_URL);
         await p.waitForFunction(() => window.__ph && window.__ph.ready, null, { timeout: 90000 });
         await p.evaluate(() => { __ph.applyPreset('highest'); __ph.setZones('exclude', [{ x: 0, y: 0.9, w: 1, h: 0.1 }]); __ph.setZones('include', [{ x: 0.1, y: 0.1, w: 0.5, h: 0.5 }]); });
+        await p.click('#tab-settings');
         ok('Save is off until there is a name', await p.isDisabled('#savePreset'));
         await p.fill('#presetName', 'Sky, faint');
         await p.click('#savePreset');

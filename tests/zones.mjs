@@ -1,7 +1,7 @@
 // Detection-area zones: zones.js (Node); exclusion zones on synthetic scenes (an OSD overlay
 // fixed on screen); inclusion zones (cropped detection: same results inside, less time);
 // drawing zones in the app, the hash and the export.
-import { launch, ok, openApp } from './lib/env.mjs';
+import { launch, ok, openApp, loadScene } from './lib/env.mjs';
 import { instrumentMats } from './lib/mats.mjs';
 import { SCENES } from '../src/scenes.js';
 import { normalizeZone, parseZones, formatZones, zoneRect, inZones, loadZones, saveZones, regionRects, ZONES_KEY, INCLUDE_KEY } from '../src/zones.js';
@@ -180,10 +180,10 @@ try {
         }
         const { page: p, errors: e2 } = await openApp(browser, { hash: 'mode=everyFrame&exclude=0.0125,0.018519,0.195833,0.066667' });
         ok('zones from the hash', (await p.evaluate(() => __ph.params.zones.length)) === 1);
-        await p.selectOption('#scene', 'osd');
-        await p.click('#openScene');
+        await loadScene(p, 'osd');
         await p.waitForFunction(() => __ph.results.length >= 1, null, { timeout: 30000 });
         ok('zone list shows source pixels', (await p.textContent('#zoneList')).includes('12,10 188×36 px'), await p.textContent('#zoneList'));
+        await p.click('#tab-settings');
         await p.click('#drawZone');
         const box = await p.evaluate(() => {
             const r = document.getElementById('display').getBoundingClientRect();
@@ -205,7 +205,9 @@ try {
         for (let i = 0; i < 40; i++) await p.click('#step');
         const st = await p.evaluate(() => __ph.stats.score), cs = await p.evaluate(() => __ph.stats.confScore);
         ok('OSD scene in the app with both zones: no confirmed false positives, little raw noise', st && st.fpPerFrame < 0.15 && st.hitRate >= 0.9 && cs.fpPer10s === 0, { raw: st, confirmed: cs });
+        await p.click('#tab-stats');
         const [dl] = await Promise.all([p.waitForEvent('download'), p.click('#exportJson')]);
+        await p.click('#tab-settings');
         const json = JSON.parse(await (await import('fs')).promises.readFile(await dl.path(), 'utf8'));
         ok('export records the zones in source pixels', json.meta.excludeZones.length === 2 && JSON.stringify(json.meta.excludeZones[0].px) === '[12,10,188,36]' && Array.isArray(json.meta.includeZones), json.meta.excludeZones);
         await p.click('#zoneList li:first-child button');

@@ -10,6 +10,28 @@
 <body>
 <header class="bar">
     <h1>PixelHunter</h1>
+    <div class="source-pick">
+        <button type="button" id="openMenu" class="primary" aria-haspopup="true" aria-expanded="false" aria-controls="sourceMenu">Open ▾</button>
+        <div id="sourceMenu" class="menu" hidden>
+            <input type="file" id="file" accept="video/*" hidden>
+            <button type="button" data-open>Video file…</button>
+            <form id="urlForm" class="row">
+                <input type="url" id="srcUrl" class="mono" placeholder="https://…/video.mp4" aria-label="Video URL" spellcheck="false">
+                <button type="submit">Open URL</button>
+            </form>
+            <div class="row">
+                <select id="scene" aria-label="Synthetic scene"></select>
+                <button type="button" id="openScene">Load</button>
+            </div>
+            <p class="muted">Synthetic scenes come with ground truth and a live score. A video file can also be dropped on the player.</p>
+        </div>
+        <span id="srcLabel" class="src-label muted">No video</span>
+    </div>
+    <div class="quick-presets" role="group" aria-label="Preset">
+        <span class="muted">Preset</span>
+        <div id="quickPresets" class="segmented"></div>
+        <select id="quickUser" aria-label="Apply one of my presets"></select>
+    </div>
     <span id="cvStatus" class="pill">Loading OpenCV.js…</span>
     <button type="button" id="helpAll" class="help-all">Explain settings</button>
 </header>
@@ -21,11 +43,38 @@
             <video id="video" muted playsinline preload="auto"></video>
             <canvas id="display"></canvas>
             <canvas id="overlay"></canvas>
+            <div id="hud" class="hud mono" hidden></div>
+            <div id="cards" class="cards" aria-live="polite"></div>
+            <div id="loading" class="loading" role="status" aria-live="polite" hidden>
+                <span class="spinner" aria-hidden="true"></span>
+                <span id="loadingText"></span>
+            </div>
             <div id="empty" class="empty">
                 <p>Open a video file, or drop one here.</p>
                 <button type="button" class="primary" data-open>Open video file…</button>
             </div>
         </div>
+        <aside id="inspector" class="inspector" hidden aria-label="Object">
+            <header class="insp-head" title="Drag to move">
+                <span id="inspTitle" class="insp-title mono"></span>
+                <span id="inspStatus" class="chip"></span>
+                <button type="button" id="inspClose" class="icon" title="Close (Esc)">×</button>
+            </header>
+            <div class="insp-zoom">
+                <canvas id="inspZoom" width="200" height="200"></canvas>
+                <p id="inspNote" class="insp-note" hidden></p>
+            </div>
+            <div id="inspZoomLevel" class="segmented small" role="group" aria-label="Zoom"></div>
+            <dl id="inspData" class="insp-data mono"></dl>
+            <canvas id="inspSpark" class="insp-spark" width="232" height="84"></canvas>
+            <div class="insp-actions">
+                <button type="button" id="inspPin">☆ Keep tracking</button>
+                <button type="button" id="inspNot">Not an object</button>
+                <button type="button" id="inspFirst" title="Go to the first frame it was seen">⏮ First seen</button>
+                <button type="button" id="inspLast" title="Go to the last frame it was seen">Last seen ⏭</button>
+                <button type="button" id="inspHistory" title="Frame-by-frame history under the player">History</button>
+            </div>
+        </aside>
         <div class="transport">
             <button type="button" id="back" disabled title="One frame back (←)">‹ Back</button>
             <button type="button" id="play" disabled title="Play / pause (Space)">Play</button>
@@ -33,65 +82,129 @@
             <div class="timeline-wrap">
                 <input type="range" id="timeline" min="0" max="1000" value="0" step="1" disabled aria-label="Position">
                 <div id="tlMarks" class="tl-marks"></div>
+                <canvas id="tlLanes" class="tl-lanes" aria-label="When each object was seen"></canvas>
                 <span id="tlHover" class="tl-hover mono" hidden></span>
             </div>
-            <span id="time" class="mono">0:00.000</span>
+            <span id="time" class="mono time" role="button" tabindex="0" title="Go to a time or a frame (click, or G)">0:00.000</span>
+            <form id="goToForm" class="goto" hidden>
+                <input type="text" id="goTo" class="mono" placeholder="1:23.4 · 83.4 · #250" aria-label="Go to a time (m:ss.s or seconds) or a frame (#number)" spellcheck="false" autocomplete="off">
+            </form>
             <button type="button" id="bookmark" disabled title="Bookmark this frame (B)">☆ Mark</button>
         </div>
-        <div id="bookmarks" class="bookmarks" hidden></div>
-        <p class="keys muted"><kbd>Space</kbd> play / pause · <kbd>←</kbd> <kbd>→</kbd> one frame · <kbd>B</kbd> bookmark · click an object on the video to pin it · <kbd>Esc</kbd> stop drawing zones</p>
+        <p class="keys muted"><kbd>Space</kbd> play / pause · <kbd>←</kbd> <kbd>→</kbd> one frame · <kbd>B</kbd> bookmark (ticks on the timeline; right-click one to remove it) · <kbd>G</kbd> go to a time or frame · click an object on the video to inspect it, double-click to keep tracking it · <kbd>Esc</kbd> close / stop drawing zones</p>
+        <section id="objectHistory" class="drawer" hidden aria-label="Object history">
+            <div class="row history-head">
+                <span id="historyTitle" class="mono"></span>
+                <button type="button" id="historyCsv" title="Download the whole history as CSV">CSV</button>
+                <button type="button" id="historyJson" title="Download the whole history as JSON, with the settings">JSON</button>
+                <button type="button" id="historyClose" class="icon" title="Close">×</button>
+            </div>
+            <div class="history-scroll">
+                <table class="mono"><thead><tr><th>frame</th><th>time</th><th>state</th><th>size px</th><th>contrast</th><th>speed px/f</th><th>σ</th><th>position</th><th>note</th></tr></thead>
+                <tbody id="historyRows"></tbody></table>
+            </div>
+        </section>
     </section>
 
     <aside class="panel">
-        <details open id="pSource">
-            <summary>Source</summary>
-            <input type="file" id="file" accept="video/*" hidden>
-            <button type="button" data-open>Open file…</button>
-            <form id="urlForm" class="row">
-                <input type="url" id="srcUrl" class="mono" placeholder="https://…/video.mp4" aria-label="Video URL" spellcheck="false">
-                <button type="submit">Open URL</button>
-            </form>
-            <div class="row">
-                <select id="scene" aria-label="Synthetic scene"></select>
-                <button type="button" id="openScene">Load</button>
+        <nav class="tabs" role="tablist" aria-label="Side panel">
+            <button type="button" role="tab" id="tab-objects" aria-controls="panel-objects" aria-selected="true">Objects <span id="objBadge" class="badge" hidden></span></button>
+            <button type="button" role="tab" id="tab-settings" aria-controls="panel-settings" aria-selected="false">Settings</button>
+            <button type="button" role="tab" id="tab-stats" aria-controls="panel-stats" aria-selected="false">Stats</button>
+        </nav>
+
+        <div id="panel-objects" class="tab-panel" role="tabpanel" aria-labelledby="tab-objects">
+            <div class="objects-head">
+                <div id="objFilter" class="segmented small" role="group" aria-label="Show"></div>
+                <span data-help="objects" class="objects-help"></span>
             </div>
-            <p id="srcLabel" class="muted">No video</p>
-        </details>
-        <details open id="pPresets">
-            <summary data-help="presets">Presets</summary>
-            <div id="presets" class="segmented" role="group" aria-label="Sensitivity preset"></div>
-            <p id="presetHint" class="muted">Sets detection, confirmation and camera motion as a starting point to tune from.</p>
             <div class="help-host"></div>
-            <h3>My presets</h3>
+            <ol id="objectList" class="objects"></ol>
+            <p id="objectsEmpty" class="muted">No confirmed objects yet</p>
+            <div id="params-objects" class="params objects-options"></div>
             <div class="row">
-                <select id="userPreset" aria-label="My presets"></select>
-                <button type="button" id="applyUserPreset" disabled>Apply</button>
-                <button type="button" id="updateUserPreset" disabled>Update</button>
-                <button type="button" id="deleteUserPreset" disabled title="Delete this preset">×</button>
+                <button type="button" id="exportObjects" disabled title="One row per object, with your labels (Keep tracking / Not an object)">Objects CSV</button>
+                <button type="button" id="clearObjects" disabled title="Forget the objects (and the detections log)">Clear</button>
             </div>
-            <p id="userPresetInfo" class="muted" hidden></p>
-            <form id="savePresetForm" class="row">
-                <input type="text" id="presetName" placeholder="Name, e.g. DJI OSD, faint" aria-label="Preset name" maxlength="60">
-                <button type="submit" id="savePreset" disabled>Save</button>
-            </form>
-            <div class="row checks">
-                <span class="muted">Save:</span>
-                <label class="check"><input type="checkbox" id="saveSettings" checked>settings</label>
-                <label class="check"><input type="checkbox" id="saveZones" checked>zones</label>
-            </div>
-            <div class="row">
-                <button type="button" id="exportPresets" disabled>Export…</button>
-                <button type="button" id="importPresets">Import…</button>
-                <input type="file" id="presetFile" accept=".json,application/json" hidden>
-            </div>
-        </details>
-        <details open id="pPlayback">
-            <summary>Playback and view</summary>
-            <div id="params-playback" class="params"></div>
-            <div id="params-view" class="params view-params"></div>
-        </details>
-        <details open id="pStats">
-            <summary>Stats</summary>
+        </div>
+
+        <div id="panel-settings" class="tab-panel" role="tabpanel" aria-labelledby="tab-settings" hidden>
+            <details open id="pPresets">
+                <summary data-help="presets">Presets</summary>
+                <div id="presets" class="segmented" role="group" aria-label="Sensitivity preset"></div>
+                <p id="presetHint" class="muted">Sets detection, confirmation and camera motion as a starting point to tune from.</p>
+                <div class="help-host"></div>
+                <h3>My presets</h3>
+                <div class="row">
+                    <select id="userPreset" aria-label="My presets"></select>
+                    <button type="button" id="applyUserPreset" disabled>Apply</button>
+                    <button type="button" id="updateUserPreset" disabled>Update</button>
+                    <button type="button" id="deleteUserPreset" disabled title="Delete this preset">×</button>
+                </div>
+                <p id="userPresetInfo" class="muted" hidden></p>
+                <form id="savePresetForm" class="row">
+                    <input type="text" id="presetName" placeholder="Name, e.g. DJI OSD, faint" aria-label="Preset name" maxlength="60">
+                    <button type="submit" id="savePreset" disabled>Save</button>
+                </form>
+                <div class="row checks">
+                    <span class="muted">Save:</span>
+                    <label class="check"><input type="checkbox" id="saveSettings" checked>settings</label>
+                    <label class="check"><input type="checkbox" id="saveZones" checked>zones</label>
+                </div>
+                <div class="row">
+                    <button type="button" id="exportPresets" disabled>Export…</button>
+                    <button type="button" id="importPresets">Import…</button>
+                    <input type="file" id="presetFile" accept=".json,application/json" hidden>
+                </div>
+            </details>
+            <details open id="pPlayback">
+                <summary>Playback and view</summary>
+                <div id="params-playback" class="params"></div>
+                <div id="params-view" class="params view-params"></div>
+            </details>
+            <details open id="pArea">
+                <summary data-help="area">Detection area</summary>
+                <div class="segmented" role="radiogroup" aria-label="A drag adds">
+                    <label><input type="radio" name="zoneKind" value="include">Include (crop)</label>
+                    <label><input type="radio" name="zoneKind" value="exclude" checked>Exclude</label>
+                </div>
+                <div class="help-host"></div>
+                <div class="row">
+                    <button type="button" id="drawZone" aria-pressed="false" title="Drag rectangles on the video (Esc to stop)">Draw zones</button>
+                    <button type="button" id="clearZones" disabled>Clear all</button>
+                </div>
+                <h3>Include <span class="muted">· only these areas are processed</span></h3>
+                <ol id="includeList" class="zones mono include"></ol>
+                <label class="field">
+                    <input type="text" id="includeText" class="mono" spellcheck="false" placeholder="none: the whole frame" aria-label="Inclusion zones as text">
+                </label>
+                <h3>Exclude <span class="muted">· never detected</span></h3>
+                <ol id="zoneList" class="zones mono"></ol>
+                <label class="field">
+                    <input type="text" id="zoneText" class="mono" spellcheck="false" placeholder="0.02,0.9,0.3,0.08" aria-label="Exclusion zones as text">
+                    <span class="muted">x,y,w,h as fractions of the frame, ; between zones</span>
+                </label>
+                <div id="params-zones" class="params"></div>
+            </details>
+            <details id="pDetection" open>
+                <summary>Detection</summary>
+                <div id="params-detect" class="params"></div>
+            </details>
+            <details id="pConfirmation">
+                <summary>Confirmation</summary>
+                <div id="params-track" class="params"></div>
+            </details>
+            <details id="pMotion">
+                <summary>Camera motion</summary>
+                <div id="params-motion" class="params"></div>
+            </details>
+            <details id="pDebug">
+                <summary>Debug</summary>
+                <div id="params-debug" class="params"></div>
+            </details>
+        </div>
+
+        <div id="panel-stats" class="tab-panel" role="tabpanel" aria-labelledby="tab-stats" hidden>
             <dl class="stats mono">
                 <dt>Source</dt><dd id="stSource">–</dd>
                 <dt>Processed</dt><dd id="stFps">–</dd>
@@ -119,65 +232,7 @@
                 <button type="button" id="exportJson" disabled>Export JSON</button>
                 <button type="button" id="clearLog" disabled>Clear</button>
             </div>
-        </details>
-        <details open id="pObjects">
-            <summary data-help="objects">Objects</summary>
-            <div class="help-host"></div>
-            <ol id="objectList" class="objects"></ol>
-            <p id="objectsEmpty" class="muted">No confirmed objects yet</p>
-            <div id="objectHistory" class="history" hidden>
-                <div class="row history-head">
-                    <span id="historyTitle" class="mono"></span>
-                    <button type="button" id="historyCsv" title="Download the whole history as CSV">CSV</button>
-                    <button type="button" id="historyJson" title="Download the whole history as JSON, with the settings">JSON</button>
-                    <button type="button" id="historyClose" title="Close">×</button>
-                </div>
-                <div class="history-scroll">
-                    <table class="mono"><thead><tr><th>frame</th><th>time</th><th>state</th><th>size px</th><th>contrast</th><th>speed · σ</th></tr></thead>
-                    <tbody id="historyRows"></tbody></table>
-                </div>
-            </div>
-        </details>
-        <details open id="pArea">
-            <summary data-help="area">Detection area</summary>
-            <div class="segmented" role="radiogroup" aria-label="A drag adds">
-                <label><input type="radio" name="zoneKind" value="include">Include (crop)</label>
-                <label><input type="radio" name="zoneKind" value="exclude" checked>Exclude</label>
-            </div>
-            <div class="help-host"></div>
-            <div class="row">
-                <button type="button" id="drawZone" aria-pressed="false" title="Drag rectangles on the video (Esc to stop)">Draw zones</button>
-                <button type="button" id="clearZones" disabled>Clear all</button>
-            </div>
-            <h3>Include <span class="muted">· only these areas are processed</span></h3>
-            <ol id="includeList" class="zones mono include"></ol>
-            <label class="field">
-                <input type="text" id="includeText" class="mono" spellcheck="false" placeholder="none: the whole frame" aria-label="Inclusion zones as text">
-            </label>
-            <h3>Exclude <span class="muted">· never detected</span></h3>
-            <ol id="zoneList" class="zones mono"></ol>
-            <label class="field">
-                <input type="text" id="zoneText" class="mono" spellcheck="false" placeholder="0.02,0.9,0.3,0.08" aria-label="Exclusion zones as text">
-                <span class="muted">x,y,w,h as fractions of the frame, ; between zones</span>
-            </label>
-            <div id="params-zones" class="params"></div>
-        </details>
-        <details id="pDetection" open>
-            <summary>Detection</summary>
-            <div id="params-detect" class="params"></div>
-        </details>
-        <details id="pConfirmation">
-            <summary>Confirmation</summary>
-            <div id="params-track" class="params"></div>
-        </details>
-        <details id="pMotion">
-            <summary>Camera motion</summary>
-            <div id="params-motion" class="params"></div>
-        </details>
-        <details id="pDebug">
-            <summary>Debug</summary>
-            <div id="params-debug" class="params"></div>
-        </details>
+        </div>
     </aside>
 </main>
 

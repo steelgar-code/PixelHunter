@@ -38,6 +38,7 @@ const detectParams = p => ({ ...pick(DETECT_DEFAULTS, p), zones: p.zones || [], 
 const trackParams = p => pick(TRACK_DEFAULTS, p);
 
 export const MAX_STRIDE = 12;
+const MAX_FPS = 120;             // highest source frame rate assumed when checking frame gaps
 
 export function createPipeline(cv, params) {
     let p = { ...params };
@@ -160,6 +161,13 @@ export function createPipeline(cv, params) {
         if (count < s + 1) return { slot: at(count - 1), result: null };
 
         const cur = at(s);
+        const egoPrev = count >= s + 2 ? cur.egoIn : null;
+        // frames since the previous one processed: never more than the time between them allows
+        // at MAX_FPS, so a wrong frame-duration estimate can't widen the tracker's gates (which
+        // grow with it) over half the frame
+        let dt = (cur.meta.gap || 0) + 1;
+        const prevT = count >= s + 2 ? at(s + 1).meta?.time : null;
+        if (Number.isFinite(prevT) && Number.isFinite(cur.meta.time) && cur.meta.time > prevT) dt = Math.min(dt, Math.max(1, Math.round((cur.meta.time - prevT) * MAX_FPS)));
         let detect;
         if (count < 2 * s + 1) {
             detect = { ok: false, reason: (count === s + 1 ? 'no previous frame' : `waiting for ${s} frames before`) + restarted(), candidates: [] };
@@ -170,18 +178,26 @@ export function createPipeline(cv, params) {
             else if (!fwd.H && p.detectMode !== 'basic') detect = { ok: false, reason: fwd.reason, candidates: [] };
             else {
                 const prev = at(2 * s), next = slot;
+                // where the objects the user keeps tracking should be in frame t: the
+                // background-shift check must not drop them
+                const tracked = p.shiftCheck && egoPrev && egoPrev.ok
+                    ? tracker.predict(egoPrev.Hfull, dt, { onlyPinned: true }).map(t => ({ x: t.x, y: t.y }))
+                    : [];
                 detect = detector.detect({ prev: prev.grey, cur: cur.grey, next: next.grey, Hprev: back.H, Hnext: fwd.H || null,
-                    fitErr: Math.max(back.err, fwd.err || 0),
+                    fitErr: Math.max(back.err, fwd.err || 0), tracked,
                     small: { prev: prev.small, cur: cur.small, next: next.small, Hprev: back.Hs, Hnext: fwd.Hs || null } });
             }
         }
         // tracks: a step per frame with detections; without camera motion they coast
-        const egoPrev = count >= s + 2 ? cur.egoIn : null;
         let tracks = null;
         // weak candidates (adaptive mode) can only continue tracks, never start them
-        if (detect.ok) tracks = tracker.step(detect.weak && detect.weak.length ? [...detect.candidates, ...detect.weak] : detect.candidates,
-            egoPrev && egoPrev.ok ? egoPrev.Hfull : null, (cur.meta.gap || 0) + 1);
-        else if (count >= 2 * s + 1) tracks = tracker.step([], null, (cur.meta.gap || 0) + 1);
+        const meta = { time: cur.meta.time, frame: cur.meta.frame };
+        if (detect.ok) {
+            const blobs = detect.weak && detect.weak.length ? [...detect.candidates, ...detect.weak] : detect.candidates;
+            // a sighting's strength for confirmation by evidence: its score in units of the threshold
+            for (const b of blobs) if (b.score !== undefined) b.strength = b.score / p.sigmas;
+            tracks = tracker.step(blobs, egoPrev && egoPrev.ok ? egoPrev.Hfull : null, dt, meta);
+        } else if (count >= 2 * s + 1) tracks = tracker.step([], null, dt, meta);
         const t3 = performance.now();
 
         const result = {

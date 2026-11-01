@@ -1,7 +1,7 @@
 // Temporal confirmation (M4) on synthetic scenes: confirmed within 5 frames of appearing, one id
 // per target while visible, < 1 confirmed false detection per 10 s; the JSON export.
 import fs from 'fs';
-import { launch, ok, openApp, sleep } from './lib/env.mjs';
+import { launch, ok, openApp, sleep, loadScene } from './lib/env.mjs';
 import { instrumentMats } from './lib/mats.mjs';
 import { SCENES } from '../src/scenes.js';
 
@@ -78,8 +78,7 @@ try {
     // export from the app
     for (const procWidth of ['0', '640']) {
         const { page: p, errors: e2 } = await openApp(browser, { hash: `mode=everyFrame&procWidth=${procWidth}` });
-        await p.selectOption('#scene', 'pan-dots');
-        await p.click('#openScene');
+        await loadScene(p, 'pan-dots');
         await p.waitForFunction(() => __ph.results.length >= 1, null, { timeout: 30000 });
         await p.click('#play');
         await p.waitForFunction(() => __ph.shown.frame >= 40, null, { timeout: 60000 });
@@ -87,6 +86,7 @@ try {
         await sleep(300);
         const count = await p.evaluate(() => __ph.log.count);
         const label = await p.evaluate(() => document.getElementById('logCount').textContent);
+        await p.click('#tab-stats');
         const [download] = await Promise.all([p.waitForEvent('download'), p.click('#exportJson')]);
         const data = JSON.parse(fs.readFileSync(await download.path(), 'utf8'));
         ok(`export (processing ${procWidth === '0' ? 'source' : procWidth}): file name, meta`, download.suggestedFilename().endsWith('.detections.json')

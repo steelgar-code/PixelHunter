@@ -1,11 +1,10 @@
 // When the frame history starts over mid-playback, the note names the cause.
-import { launch, ok, openApp } from './lib/env.mjs';
+import { launch, ok, openApp, loadScene } from './lib/env.mjs';
 
 const browser = await launch();
 try {
     const { page, errors } = await openApp(browser, { hash: 'mode=everyFrame&stride=1&procWidth=0&estWidth=320' });
-    await page.selectOption('#scene', 'pan-dots');
-    await page.click('#openScene');
+    await loadScene(page, 'pan-dots');
     await page.waitForFunction(() => __ph.results.length >= 1, null, { timeout: 30000 });
     const reason = () => page.evaluate(() => __ph.lastResult && __ph.lastResult.detect.reason);
     const first = await page.evaluate(() => __ph.results[0].detectReason);
@@ -28,6 +27,7 @@ try {
         for (let i = 0; i < n; i++) { await page.click('#step'); out.push(await reason()); }
         return out;
     };
+    await page.click('#tab-settings');
     await page.click('label:has(input[name=param-procWidth][value="640"])');
     let seen = await steps(4);
     ok('after changing the processing width', seen.some(r => /^no previous frame \(restarted: processing width changed\)$/.test(r || '')) && seen.at(-1) === null, seen);

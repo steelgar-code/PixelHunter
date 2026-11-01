@@ -68,3 +68,29 @@ const paint = (cx, cy) => { grey.data.fill(100); for (let y = cy - 1; y <= cy + 
     objs2.update(result(21, [waiting, big]), grey);
     ok('… but not one of a very different size', objs2.objectOfTrack(11) === 2);
 }
+{
+    // a track that confirms with earlier sightings (tracker `early`): the history is back-filled
+    const objs = createObjects();
+    const early = [0, 1, 2].map(k => ({ frame: k, time: k / 25, box: box(40 + 2 * k, 50), vx: 2, vy: 0, score: 8 }));
+    paint(46, 50);
+    const out = objs.update(result(3, [track(4, 46, 50, { early })]), grey);
+    const o = objs.get(1);
+    ok('back-filled: first seen at the first early sighting, confirmed later', o.first.frame === 0 && o.confirmedAt.frame === 3, [o.first, o.confirmedAt]);
+    ok('… the early rows come first, marked, then the event, then this frame', o.history.slice(0, 3).every(e => e.early && e.seen) && /confirmed \(track #4\), seen 3 times before/.test(o.history[3].event) && o.history[4].frame === 3,
+        o.history.map(e => e.event || e.frame));
+    ok('… update reports the new object and its best sighting', out.created.join() === '1' && out.improved.join() === '1', out);
+    // labels: not an object hides it and unpins it
+    objs.pin(1);
+    objs.label(1, 'not');
+    ok('labelled not an object: hidden, unpinned, an event in the history', objs.isHidden(1) && !objs.isPinned(1) && /not an object/.test(o.history.at(-1).event));
+}
+{
+    // after a jump, unpinned objects are re-linked too: same id and label when watched again
+    const objs = createObjects();
+    for (let k = 0; k < 20; k++) objs.update(result(k, [track(3, 40 + 3 * k, 60), track(4, 150, 20 + 2 * k)]), grey);
+    objs.label(2, 'not');
+    objs.update(result(9, [], { jump: true, jumpReason: 'seek' }), grey);
+    const out = objs.update(result(10, [track(51, 40 + 3 * 10, 61), track(52, 150, 40)]), grey);
+    ok('after a jump: unpinned objects continue under their ids', objs.objectOfTrack(51) === 1 && objs.objectOfTrack(52) === 2 && out.created.length === 0, [objs.objectOfTrack(51), objs.objectOfTrack(52), out.created]);
+    ok('… and one labelled not an object stays hidden', objs.isHidden(2));
+}

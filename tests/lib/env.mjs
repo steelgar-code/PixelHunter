@@ -25,3 +25,15 @@ export async function openApp(browser, { hash = '', query = '', viewport = { wid
 }
 
 export const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+// Opens a side-panel tab: 'objects', 'settings' or 'stats'.
+export async function showTab(page, name) {
+    await page.click(`#tab-${name}`);
+}
+
+// Loads a synthetic scene through the Open menu in the top bar.
+export async function loadScene(page, key) {
+    if (await page.isHidden('#sourceMenu')) await page.click('#openMenu');
+    await page.selectOption('#scene', key);
+    await page.click('#openScene');
+}

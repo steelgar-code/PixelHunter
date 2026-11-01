@@ -63,6 +63,14 @@
 // object is somewhere else in the other frames. Surroundings without texture (sky) give no shift
 // to go by, so candidates there are kept.
 //
+// The check must not drop an object being tracked. A slow object moves less than shiftMax
+// between the compared frames, and a high-contrast one's soft edge spills around its box, so a
+// ring close to it would follow the object and "explain" it. So the ring starts shiftRingGap px
+// (3) out from the candidate's box, clear of that edge; and a candidate within TRACKED_NEAR px of
+// where an object the user keeps tracking is predicted (`tracked`, from the tracker) is never
+// dropped. (Protecting every confirmed track was tried: it keeps false tracks on trees alive,
+// since parallax moves an edge and its surroundings steadily, just like an object.)
+//
 // Inclusion zones crop detection: only the box around each zone (plus REGION_PAD, overlapping
 // boxes merged) is processed, so the cost falls with the area watched. Neighbours are warped
 // straight into the box (H composed with a translation), and only pixels inside an inclusion
@@ -75,7 +83,8 @@ const SHIFT = 4;               // fillConvexPoly fractional bits: vertices to 1/
 const MAX_EXPLAINED = 50;      // blobs dropped by size kept per region, to show and explain
 const ZONE_PAD = 2;            // px around a zone: interpolation and the 3×3 min / max reach
 const REGION_PAD = 4;          // px of context around an inclusion zone (3×3 blur, min / max)
-const RING = 5;                // px of background around a candidate for the shift check
+const RING = 4;                // px of background around a candidate for the shift check
+const TRACKED_NEAR = 1.5;      // px from where a kept-tracking object is expected: never dropped by the shift check
 const RING_TEXTURE = 1.5;      // grey levels: ring cost must vary at least this much over shifts
 const SHIFT_KEEP = 0.25;       // a candidate stays if more than this share of its pixels still differ
 const SHIFT_TOL = 1;           // px: min / max reach when testing the shifted pixels (2 loses real targets)
@@ -93,6 +102,7 @@ export const DETECT_DEFAULTS = {
     threshold: 20,         // grey levels (robust, basic)
     sigmas: 7,             // adaptive: threshold in units of the local noise
     minContrast: 4,        // adaptive: lowest threshold, grey levels
+    minMean: 3,            // adaptive: 2×2 and 3×3 sums must average this many grey levels a pixel (0: off)
     weakMargin: 2.5,       // adaptive: weak candidates down to sigmas − this (0: none)
     noiseFrom: 'plain',    // adaptive: noise scaled from the plain difference ('plain', calibrated),
                            // or each k×k sum's own RMS ('sums': underestimates the tails of these
@@ -110,6 +120,7 @@ export const DETECT_DEFAULTS = {
     open: false,           // 3×3 opening of the final mask (removes 1–2 px blobs!)
     shiftCheck: false,     // drop candidates explained by a small local shift of the background
     shiftMax: 2,           // px: largest local shift tried
+    shiftRingGap: 3,       // px between a candidate's box and the ring the shift check aligns (was 1)
     zones: [],             // exclusion zones, { x, y, w, h } fractions of the frame
     include: [],           // inclusion zones: when set, only these areas are processed
 };
@@ -155,6 +166,7 @@ export function createDetector(cv, options = {}) {
     let lastMode = null;       // mode of the last detection, for the debug views
     let lastCropped = false;   // last detection ran on inclusion regions (views in m.vMask / m.vDiff)
     let lastTol = null;        // adaptive mode: misalignment allowance of the last detection, px
+    let tracked = [];          // objects the user keeps tracking, expected in this frame (shift check)
 
     function setup(w, h) {
         for (const k of Object.keys(m)) { m[k].delete(); delete m[k]; }
@@ -277,22 +289,24 @@ export function createDetector(cv, options = {}) {
         const S = Math.max(1, Math.round(p.shiftMax));
         const bx0 = c.x - r.x, by0 = c.y - r.y, bx1 = bx0 + c.w, by1 = by0 + c.h;     // box, exclusive end
         // the window must leave room for the shifts and the 3×3 min / max inside the region
-        const lo = S + SHIFT_TOL;
-        const wx0 = Math.max(lo, bx0 - RING), wy0 = Math.max(lo, by0 - RING);
-        const wx1 = Math.min(r.w - lo, bx1 + RING), wy1 = Math.min(r.h - lo, by1 + RING);
-        if (wx0 > bx0 - 2 || wy0 > by0 - 2 || wx1 < bx1 + 2 || wy1 < by1 + 2) return false;  // at the edge: keep
+        const gap = Math.max(1, Math.round(p.shiftRingGap ?? 3));
+        const lo = S + SHIFT_TOL, out = gap + RING;
+        const wx0 = Math.max(lo, bx0 - out), wy0 = Math.max(lo, by0 - out);
+        const wx1 = Math.min(r.w - lo, bx1 + out), wy1 = Math.min(r.h - lo, by1 + out);
+        const g = gap + 1;          // at least one ring pixel on every side, else (at the edge): keep
+        if (wx0 > bx0 - g || wy0 > by0 - g || wx1 < bx1 + g || wy1 < by1 + g) return false;
         const cd = cur.data, cs = cur.step, M = mask.data;
         const C = (x, y) => cd[(y + cur.oy) * cs + x + cur.ox];
-        for (const n of ns) {
-            const nd = n.data, W = r.w;
+        for (let i = 0; i < ns.length; i++) {
+            const nd = ns[i].data, W = r.w;
             let best = Infinity, worst = 0, bdx = 0, bdy = 0;
             for (let dy = -S; dy <= S; dy++) {
                 for (let dx = -S; dx <= S; dx++) {
                     let sum = 0, cnt = 0;
                     for (let y = wy0; y < wy1; y++) {
-                        const inRows = y >= by0 - 1 && y <= by1;
+                        const inRows = y >= by0 - gap && y < by1 + gap;
                         for (let x = wx0; x < wx1; x++) {
-                            if (inRows && x >= bx0 - 1 && x <= bx1) continue;            // the ring only
+                            if (inRows && x >= bx0 - gap && x < bx1 + gap) continue;  // the ring only
                             sum += Math.abs(C(x, y) - nd[(y + dy) * W + x + dx]);
                             cnt++;
                         }
@@ -394,6 +408,8 @@ export function createDetector(cv, options = {}) {
             : { data: src.__full.data, step: size.w, ox: r.x, oy: r.y };
         const kept = [], rejected = [];
         for (const c of b.candidates) {
+            // where an object the user keeps tracking is expected: kept
+            if (tracked.some(q => Math.hypot(c.cx - q.x, c.cy - q.y) <= TRACKED_NEAR)) { kept.push(c); continue; }
             if (shiftExplained(c, r, cur, ns, m.mask, thrAt)) rejected.push({ ...c, why: 'background shift' }); else kept.push(c);
         }
         return { ...b, candidates: kept, rejected: [...rejected, ...(b.sized || [])] };
@@ -628,6 +644,14 @@ export function createDetector(cv, options = {}) {
                     cv.absdiff(m.S, m.zero, m.S);
                     cv.divide(m.S, m.sig, m.Zk, 1 / (SUM_NOISE * k));
                 }
+                // compressed footage: in flat areas the measured noise is ~0 and the floor rules,
+                // but compression changes whole blocks by a grey level or two at once (noise
+                // correlated over the block), so a 2×2 or 3×3 sum must also average minMean per
+                // pixel: Zk is capped below `sigmas` where it doesn't
+                if (k > 1 && p.minMean > 0) {
+                    m.S.convertTo(m.tmp2, cv.CV_32F, p.sigmas / (k * k * p.minMean));
+                    cv.min(m.Zk, m.tmp2, m.Zk);
+                }
                 if (k === 1) m.Zk.copyTo(m.Z); else cv.max(m.Z, m.Zk, m.Z);
             }
             const weakAt = Math.max(1, p.sigmas - Math.max(0, p.weakMargin || 0));
@@ -712,8 +736,11 @@ export function createDetector(cv, options = {}) {
         // frames and H at estimation size (for brightness matching). Returns
         // { ok, reason, mode, candidates, components, noisy, brightness?, timings }.
         // fitErr: the camera-motion fits' error over the compared frames (processing px; adaptive).
-        detect({ prev, cur, next, Hprev, Hnext, small, fitErr }) {
+        // tracked: where the objects the user keeps tracking should be in frame t, [{ x, y }]
+        // (processing px): kept by the background-shift check.
+        detect({ prev, cur, next, Hprev, Hnext, small, fitErr, tracked: tr = [] }) {
             if (!size || size.w !== cur.cols || size.h !== cur.rows) setup(cur.cols, cur.rows);
+            tracked = tr || [];
             if (!prev || !Hprev) return { ok: false, reason: 'no camera motion for t−1 → t', candidates: [] };
             lastMode = p.detectMode;
             if (p.detectMode === 'basic') return { ok: true, reason: null, mode: 'basic', ...run('basic', { prev, cur, Hprev }) };

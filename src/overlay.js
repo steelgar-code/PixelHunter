@@ -124,6 +124,35 @@ export function drawTracks(ctx, tf, tracks, { colour = '#ff4fd8' } = {}) {
     }
 }
 
+// Tracks building up (seen a few times, not confirmed yet): a dashed box and a ring that fills
+// as the track gets closer to confirming (t.progress, 0–1).
+export function drawBuilding(ctx, tf, tracks, { colour = '#ff4fd8' } = {}) {
+    const min = 14 * tf.dpr, r = 4 * tf.dpr;
+    ctx.save();
+    ctx.lineWidth = 1.25 * tf.dpr;
+    ctx.strokeStyle = colour;
+    for (const t of tracks) {
+        const b = t.box;
+        let x0 = tf.x(b.x - 0.5), y0 = tf.y(b.y - 0.5), x1 = tf.x(b.x + b.w - 0.5), y1 = tf.y(b.y + b.h - 0.5);
+        if (x1 - x0 < min) { const c = (x0 + x1) / 2; x0 = c - min / 2; x1 = c + min / 2; }
+        if (y1 - y0 < min) { const c = (y0 + y1) / 2; y0 = c - min / 2; y1 = c + min / 2; }
+        ctx.globalAlpha = 0.55;
+        ctx.setLineDash([2 * tf.dpr, 3 * tf.dpr]);
+        ctx.strokeRect(x0, y0, x1 - x0, y1 - y0);
+        ctx.setLineDash([]);
+        const cx = x1 + r + 2 * tf.dpr, cy = y0 + r;
+        ctx.globalAlpha = 0.3;
+        ctx.beginPath();
+        ctx.arc(cx, cy, r, 0, 2 * Math.PI);
+        ctx.stroke();
+        ctx.globalAlpha = 0.9;
+        ctx.beginPath();
+        ctx.arc(cx, cy, r, -Math.PI / 2, -Math.PI / 2 + 2 * Math.PI * Math.min(1, Math.max(0, t.progress ?? 0)));
+        ctx.stroke();
+    }
+    ctx.restore();
+}
+
 // Held tracks (confirmed, not seen for a while): a dashed box at the last seen position.
 export function drawHeld(ctx, tf, tracks, { colour = '#ff4fd8' } = {}) {
     const half = 8 * tf.dpr;

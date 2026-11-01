@@ -1,4 +1,5 @@
 // Tunable parameters: one definition list drives defaults, ranges, the sliders and persistence.
+// when: { key: value or [values] }: the setting only has an effect then (shown dimmed otherwise).
 // Values are saved in localStorage and can be overridden from the URL hash
 // (e.g. #mode=everyFrame&threshold=30) for repeatable runs. Pure: no DOM except the two
 // storage helpers, which take their inputs as arguments.
@@ -11,8 +12,15 @@ export const PARAM_DEFS = [
     { key: 'view', label: 'View', group: 'view', type: 'choice', default: 'original',
       choices: [['original', 'Original'], ['stabilised', 'Stabilised'], ['points', 'Points'], ['diff', 'Raw diff'], ['mask', 'Mask']] },
     { key: 'showCandidates', label: 'Unconfirmed candidates', group: 'view', type: 'bool', default: true },
+    { key: 'showBuilding', label: 'Tracks building up (dashed, with progress)', group: 'view', type: 'bool', default: true },
     { key: 'showTruth', label: 'Ground truth (synthetic)', group: 'view', type: 'bool', default: true },
     { key: 'showZones', label: 'Detection-area zones', group: 'view', type: 'bool', default: true },
+    { key: 'showHud', label: 'Readout on the video (fps, candidates, objects)', group: 'view', type: 'bool', default: true },
+
+    // the objects panel
+    { key: 'cards', label: 'A card on the video for each new object', group: 'objects', type: 'bool', default: true },
+    { key: 'autoInspect', label: 'Open the zoomed view for each new object', group: 'objects', type: 'bool', default: false },
+    { key: 'pauseOnNew', label: 'Pause when a new object is confirmed', group: 'objects', type: 'bool', default: false },
 
     // detection (detect.js)
     { key: 'detectMode', label: 'Detection', group: 'detect', type: 'choice', default: 'adaptive',
@@ -20,29 +28,36 @@ export const PARAM_DEFS = [
     { key: 'procWidth', label: 'Processing width', group: 'detect', type: 'choice', default: '0',
       choices: [['0', 'Source'], ['1920', '1920'], ['1280', '1280'], ['960', '960'], ['640', '640']] },
     { key: 'stride', label: 'Frame stride', group: 'detect', type: 'number', default: 1, min: 1, max: 12, step: 1, unit: 'frames' },
-    { key: 'threshold', label: 'Diff threshold', group: 'detect', type: 'number', default: 20, min: 5, max: 100, step: 1, unit: 'grey' },
-    { key: 'sigmas', label: 'Adaptive threshold', group: 'detect', type: 'number', default: 7, min: 3, max: 12, step: 0.5, unit: 'σ' },
-    { key: 'weakMargin', label: 'Adaptive weak margin', group: 'detect', type: 'number', default: 2.5, min: 0, max: 4, step: 0.5, unit: 'σ' },
-    { key: 'minContrast', label: 'Adaptive min contrast', group: 'detect', type: 'number', default: 4, min: 1, max: 30, step: 1, unit: 'grey' },
+    { key: 'threshold', label: 'Diff threshold', group: 'detect', type: 'number', default: 20, min: 5, max: 100, step: 1, unit: 'grey' , when: { detectMode: ['robust', 'basic'] } },
+    { key: 'sigmas', label: 'Adaptive threshold', group: 'detect', type: 'number', default: 7, min: 3, max: 12, step: 0.5, unit: 'σ' , when: { detectMode: 'adaptive' } },
+    { key: 'weakMargin', label: 'Adaptive weak margin', group: 'detect', type: 'number', default: 2.5, min: 0, max: 4, step: 0.5, unit: 'σ' , when: { detectMode: 'adaptive' } },
+    { key: 'minContrast', label: 'Adaptive min contrast', group: 'detect', type: 'number', default: 4, min: 1, max: 30, step: 1, unit: 'grey' , when: { detectMode: 'adaptive' } },
+    { key: 'minMean', label: 'Adaptive min mean contrast', group: 'detect', type: 'number', default: 3, min: 0, max: 8, step: 0.5, unit: 'grey' , when: { detectMode: 'adaptive' } },
     { key: 'minArea', label: 'Min blob area', group: 'detect', type: 'number', default: 1, min: 1, max: 50, step: 1, unit: 'px' },
     { key: 'maxArea', label: 'Max blob area', group: 'detect', type: 'number', default: 400, min: 10, max: 5000, step: 10, unit: 'px' },
     { key: 'borderMargin', label: 'Border margin', group: 'detect', type: 'number', default: 3, min: 0, max: 20, step: 1, unit: 'px' },
-    { key: 'brightness', label: 'Match brightness', group: 'detect', type: 'bool', default: true },
-    { key: 'blur', label: '3×3 blur', group: 'detect', type: 'bool', default: false },
-    { key: 'open', label: '3×3 opening (drops 1–2 px blobs)', group: 'detect', type: 'bool', default: false },
+    { key: 'brightness', label: 'Match brightness', group: 'detect', type: 'bool', default: true , when: { detectMode: ['robust', 'adaptive'] } },
+    { key: 'blur', label: '3×3 blur', group: 'detect', type: 'bool', default: false , when: { detectMode: 'robust' } },
+    { key: 'open', label: '3×3 opening (drops 1–2 px blobs)', group: 'detect', type: 'bool', default: false , when: { detectMode: ['robust', 'adaptive'] } },
     { key: 'shiftCheck', label: 'Drop background-shift edges (trees, branches)', group: 'detect', type: 'bool', default: false, preset: false },
-    { key: 'shiftMax', label: 'Max background shift', group: 'detect', type: 'number', default: 2, min: 1, max: 5, step: 1, unit: 'px', preset: false },
+    { key: 'shiftMax', label: 'Max background shift', group: 'detect', type: 'number', default: 2, min: 1, max: 5, step: 1, unit: 'px', preset: false , when: { shiftCheck: true } },
     { key: 'zonesMotion', label: 'Also ignore zones for camera motion', group: 'zones', type: 'bool', default: true },
 
     // temporal confirmation (tracker.js)
-    { key: 'confirmN', label: 'Confirm: seen in N', group: 'track', type: 'number', default: 3, min: 1, max: 10, step: 1, unit: 'frames' },
-    { key: 'confirmM', label: '… of the last M', group: 'track', type: 'number', default: 5, min: 2, max: 20, step: 1, unit: 'frames' },
+    { key: 'confirmBy', label: 'Confirm by', group: 'track', type: 'choice', default: 'count',
+      choices: [['count', 'N of M frames'], ['evidence', 'Evidence']] },
+    { key: 'minAge', label: 'Min track age', group: 'track', type: 'number', default: 0.5, min: 0, max: 3, step: 0.1, unit: 's', when: { confirmBy: 'evidence' } },
+    { key: 'minEvidence', label: 'Min evidence', group: 'track', type: 'number', default: 6, min: 1, max: 40, step: 0.5, unit: '×', when: { confirmBy: 'evidence' } },
+    { key: 'maxGap', label: 'Max gap while building', group: 'track', type: 'number', default: 3, min: 0, max: 15, step: 1, unit: 'frames', when: { confirmBy: 'evidence' } },
+    { key: 'confirmN', label: 'Confirm: seen in N', group: 'track', type: 'number', default: 3, min: 1, max: 10, step: 1, unit: 'frames', when: { confirmBy: 'count' } },
+    { key: 'confirmM', label: '… of the last M', group: 'track', type: 'number', default: 5, min: 2, max: 20, step: 1, unit: 'frames', when: { confirmBy: 'count' } },
     { key: 'gateBase', label: 'Association gate', group: 'track', type: 'number', default: 4, min: 1, max: 30, step: 1, unit: 'px' },
     { key: 'maxSpeed', label: 'Max speed (new tracks)', group: 'track', type: 'number', default: 12, min: 2, max: 60, step: 1, unit: 'px/frame' },
     { key: 'minTravel', label: 'Min travel to confirm', group: 'track', type: 'number', default: 3, min: 0, max: 30, step: 1, unit: 'px' },
     { key: 'holdFrames', label: 'Keep lost tracks', group: 'track', type: 'number', default: 50, min: 0, max: 250, step: 5, unit: 'frames' },
     { key: 'pathCheck', label: 'Confirm steady paths only', group: 'track', type: 'bool', default: true },
-    { key: 'pathTolerance', label: 'Path tolerance', group: 'track', type: 'number', default: 1.5, min: 0.5, max: 6, step: 0.1, unit: 'px' },
+    { key: 'pathTolerance', label: 'Path tolerance', group: 'track', type: 'number', default: 1.5, min: 0.5, max: 6, step: 0.1, unit: 'px' , when: { pathCheck: true } },
+    { key: 'screenFixed', label: 'Ignore spots fixed on the screen (dust, compression blocks)', group: 'track', type: 'bool', default: true },
     { key: 'crowdGate', label: 'Tighter matching where crowded', group: 'track', type: 'bool', default: true },
     { key: 'motionPause', label: 'Pause tracks without camera motion', group: 'track', type: 'bool', default: true },
 
@@ -96,6 +111,11 @@ export const PRESETS = {
             confirmN: 3, confirmM: 5, gateBase: 6, maxSpeed: 30, minTravel: 5, holdFrames: 25,
             estWidth: 320, features: 400, lkWin: 25, lkLevels: 4, ransacPx: 2.5,
         },
+    },
+    compressed: {
+        label: 'Compressed',
+        hint: 'streams, phone recordings, re-encoded clips: Mid with confirmation by evidence (0.5 s), so short-lived compression artefacts in flat areas (sky) never confirm; objects show 0.5 s later, the history and export go back to their first sighting',
+        values: { ...MID, confirmBy: 'evidence' },
     },
 };
 
