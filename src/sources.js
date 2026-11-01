@@ -49,15 +49,23 @@ export function fileSource(file) {
 // Pages that show a video rather than being one (the player page, not the file).
 const NOT_A_FILE = /(^|\.)(youtube\.com|youtu\.be|vimeo\.com|twitch\.tv|facebook\.com|instagram\.com|tiktok\.com|dropbox\.com\/s\/|drive\.google\.com)/i;
 
-// Checks a URL before trying it; returns an error message or null.
-export function checkVideoUrl(text, video) {
+// Checks a URL before trying it; returns an error message or null. pageProtocol: the app's own
+// ('https:' on GitHub Pages), for the mixed-content check.
+const LOCAL_HOST = /^(localhost|127\.\d+\.\d+\.\d+|\[::1\])$/i;
+export function checkVideoUrl(text, video, pageProtocol = typeof location !== 'undefined' ? location.protocol : 'http:') {
     let u;
     try {
         u = new URL(String(text).trim());
     } catch {
         return 'That is not a complete URL (it should start with https://).';
     }
+    if (u.protocol === 'rtsp:' || u.protocol === 'rtmp:' || u.protocol === 'rtmps:' || u.protocol === 'srt:') {
+        return `Browsers can't play ${u.protocol.slice(0, -1).toUpperCase()} streams. Open it in OBS (Media Source) and use OBS's Virtual Camera here (Open → Camera), or put a gateway such as MediaMTX in between.`;
+    }
     if (!/^https?:$/.test(u.protocol)) return 'Only http:// and https:// links can be opened.';
+    if (pageProtocol === 'https:' && u.protocol === 'http:' && !LOCAL_HOST.test(u.hostname)) {
+        return 'This page is served over https://, and browsers block http:// video on it (mixed content), so this link can\'t be opened here. Run PixelHunter from your own computer (python3 -m http.server in its folder, then http://localhost:8000/) or serve the video over https://.';
+    }
     if (NOT_A_FILE.test(u.hostname + u.pathname)) {
         return `${u.hostname} links open a web page with a player, not the video itself. Use a direct link to the video file (ending in .mp4, .webm, …), or download the video and open the file.`;
     }
@@ -65,6 +73,20 @@ export function checkVideoUrl(text, video) {
         return 'This is an HLS stream (.m3u8), which this browser cannot play directly. Safari can; in Chrome or Edge use a direct .mp4 / .webm link.';
     }
     return null;
+}
+
+// Does the URL play in a <video> that doesn't ask for its pixels (no CORS)? Resolves within ms.
+function playsWithoutCors(url, ms = 8000) {
+    return new Promise(resolve => {
+        const v = document.createElement('video');
+        v.muted = true;
+        v.preload = 'metadata';
+        const end = ok => { clearTimeout(timer); v.removeAttribute('src'); v.load(); resolve(ok); };
+        const timer = setTimeout(() => end(false), ms);
+        v.addEventListener('loadedmetadata', () => end(true), { once: true });
+        v.addEventListener('error', () => end(false), { once: true });
+        v.src = url;
+    });
 }
 
 // A video at a URL: a file (mp4, webm, …) or a stream the browser plays natively. The server
@@ -98,7 +120,16 @@ export function urlSource(href) {
                 failed: `Could not load ${name}: the server could not be reached or the download stopped.`,
             });
             video.src = url;
-            await ready;
+            try {
+                await ready;
+            } catch (e) {
+                // the browser says the same for "no CORS permission" and "not a playable video":
+                // try once more without asking for the pixels to tell them apart
+                if (await playsWithoutCors(url)) {
+                    throw new Error(`${name} plays, but its server doesn't let other sites read the picture (no CORS permission: an Access-Control-Allow-Origin header), which detection needs. Ask for that header on the server, put a proxy that adds it in front, or open the video in OBS and use its Virtual Camera here (Open → Camera).`);
+                }
+                throw e;
+            }
             src.isLive = !Number.isFinite(video.duration);
             if (src.isLive) src.label = `${name} (live)`;
         },
@@ -110,4 +141,67 @@ export function urlSource(href) {
         },
     };
     return src;
+}
+
+// Cameras and capture devices the browser can see: [{ deviceId, label }]. Labels are empty until
+// camera access has been allowed once (then they are named "Camera 1", …).
+export async function listCameras() {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) return [];
+    const all = await navigator.mediaDevices.enumerateDevices();
+    return all.filter(d => d.kind === 'videoinput').map((d, i) => ({ deviceId: d.deviceId, label: d.label || `Camera ${i + 1}` }));
+}
+
+// A camera or capture device (a webcam, an HDMI capture card, OBS Virtual Camera, …) through
+// getUserMedia: live, no CORS involved. deviceId: one from listCameras(), or null for the default.
+// Asks for the highest resolution up to 1920×1080: few-pixel objects need every pixel.
+export function cameraSource({ deviceId = null, label = 'Camera' } = {}) {
+    let stream = null;
+    const src = {
+        kind: 'camera',
+        label,
+        isLive: true,
+        deviceId,
+        async start(video) {
+            if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+                throw new Error('Cameras are only available on pages served over https:// or from http://localhost.');
+            }
+            try {
+                stream = await navigator.mediaDevices.getUserMedia({ audio: false, video: {
+                    ...(deviceId ? { deviceId: { exact: deviceId } } : {}),
+                    width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 30 },
+                } });
+            } catch (e) {
+                throw new Error(cameraError(e));
+            }
+            const track = stream.getVideoTracks()[0];
+            const st = track.getSettings ? track.getSettings() : {};
+            src.deviceId = st.deviceId || deviceId;
+            src.label = track.label || label;
+            video.removeAttribute('src');
+            video.muted = true;
+            video.playsInline = true;
+            video.loop = false;
+            const ready = waitForMetadata(video, { failed: `${src.label} sends no picture.` });
+            video.srcObject = stream;
+            await ready;
+            src.fps = st.frameRate || null;
+        },
+        stop(video) {
+            if (stream) for (const t of stream.getTracks()) t.stop();
+            stream = null;
+            video.pause();
+            video.srcObject = null;
+        },
+    };
+    return src;
+}
+
+function cameraError(e) {
+    switch (e && e.name) {
+    case 'NotAllowedError': return 'Camera access was not allowed. Allow it in the address bar (camera icon) and try again.';
+    case 'NotFoundError': return 'No camera or capture device found. For OBS: Start Virtual Camera first (OBS → Controls).';
+    case 'NotReadableError': return 'The camera can\'t be opened: another app may be using it, or the device stopped responding.';
+    case 'OverconstrainedError': return 'That camera is no longer available (unplugged?). Pick one again from the list.';
+    default: return `The camera could not be opened${e && e.message ? `: ${e.message}` : ''}.`;
+    }
 }

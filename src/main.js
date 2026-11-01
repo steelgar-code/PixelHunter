@@ -1,6 +1,6 @@
 // Wiring: OpenCV.js startup check, sources, frame loop, parameter controls and stats.
 import { loadCv, checkCv, CV_VERSION } from './cvLoader.js';
-import { fileSource, urlSource } from './sources.js';
+import { fileSource, urlSource, cameraSource, listCameras } from './sources.js';
 import { createFrameLoop } from './frameLoop.js';
 import { createSyntheticLoop } from './synthLoop.js';
 import { createScene } from './synth.js';
@@ -711,7 +711,7 @@ const WARM_UP = 5;
 // restarts with the jump. By time, not frame number: with a variable frame rate, frame numbers
 // worked out from time don't count frames exactly.
 async function goToTime(T, why = 'seek') {
-    if (!loop || navigating || !Number.isFinite(T)) return;
+    if (!loop || navigating || !Number.isFinite(T) || loop.live) return;
     view.manual();
     navigating = true;
     $('stage').classList.add('busy');
@@ -1025,8 +1025,9 @@ async function openSourceNow(next) {
         score = null;
         confScore = null;
         $('srcLabel').textContent = `${next.label} · ${video.videoWidth}×${video.videoHeight}`;
-        loop = createFrameLoop({ video, onFrame, mode: params.mode });
+        loop = createFrameLoop({ video, onFrame, mode: params.mode, live: next.isLive });
         loop.setSpeed(Number(params.speed));
+        if (next.kind === 'camera') $('srcLabel').textContent += `${next.fps ? ` @ ${Math.round(next.fps)} fps` : ''} · live`;
     }
     ph.loop = loop;
     clearObjects();
@@ -1037,10 +1038,37 @@ async function openSourceNow(next) {
     await loop.start({ probe: !next.isLive });
     // frame t is shown once t+s has arrived (s = stride): load them so the first frame has its result
     if (!next.isLive) for (let i = 0; i < Math.max(1, params.stride); i++) await loop.step();
-    for (const id of ['play', 'step', 'timeline', 'back', 'bookmark']) $(id).disabled = false;
+    // live (camera, endless stream): play / pause only; it starts playing at once
+    for (const id of ['play', 'step', 'timeline', 'back', 'bookmark']) $(id).disabled = next.isLive && id !== 'play';
     renderBookmarks();
     renderZoneLists();
     updateTransport();
+    if (next.isLive) await loop.play().catch(e => showBanner(`Playback failed: ${e.message}`));
+    if (next.kind === 'camera') rememberCamera(next.deviceId);
+}
+
+// --- cameras and capture devices -----------------------------------------------------------
+
+const CAMERA_KEY = 'pixelhunter.camera.v1';
+function rememberCamera(id) { try { if (id) localStorage.setItem(CAMERA_KEY, id); } catch { /* not remembered */ } }
+
+// Fills the camera list in the Open menu (names show once camera access was allowed).
+async function renderCameras() {
+    const sel = $('camera');
+    let list = [];
+    try { list = await listCameras(); } catch { /* none */ }
+    let keep = sel.value;
+    if (!keep) try { keep = localStorage.getItem(CAMERA_KEY) || ''; } catch { /* none */ }
+    sel.replaceChildren(new Option(list.length ? 'Default camera' : 'Camera / capture device', ''), ...list.map(c => new Option(c.label, c.deviceId)));
+    if (keep && list.some(c => c.deviceId === keep)) sel.value = keep;
+}
+
+function openCamera() {
+    if (!cvState.ready) return;
+    const sel = $('camera');
+    const id = sel.value || null;
+    const label = id ? sel.selectedOptions[0].textContent : 'Camera';
+    openSource(cameraSource({ deviceId: id, label })).then(() => renderCameras());
 }
 
 const URL_KEY = 'pixelhunter.url.v1';
@@ -1078,7 +1106,7 @@ function updateTransport() {
     updateMarkButton();
     const shown = lastOut ? lastOut.slot.meta.time : loop.time;
     const fr = lastOut && lastOut.slot.meta.frame;
-    $('time').textContent = `${fmtTime(shown)}${fr !== null && fr !== undefined ? ` #${fr}` : ''} / ${fmtTime(loop.duration)}`;
+    $('time').textContent = loop.live ? `${fmtTime(shown)} · live` : `${fmtTime(shown)}${fr !== null && fr !== undefined ? ` #${fr}` : ''} / ${fmtTime(loop.duration)}`;
     if (!scrubbing && Number.isFinite(loop.duration) && loop.duration > 0) {
         $('timeline').value = Math.round(loop.time / loop.duration * 1000);
     }
@@ -1186,6 +1214,10 @@ function bindTransport() {
     const pick = $('scene');
     for (const [key, s] of Object.entries(SCENES)) pick.append(new Option(s.label, key));
     $('openScene').addEventListener('click', () => openScene(pick.value));
+    $('openCamera').addEventListener('click', openCamera);
+    $('openMenu').addEventListener('click', () => { if (!$('sourceMenu').hidden) renderCameras(); });
+    if (navigator.mediaDevices && navigator.mediaDevices.addEventListener) navigator.mediaDevices.addEventListener('devicechange', renderCameras);
+    renderCameras();
     $('exportJson').addEventListener('click', exportJson);
     $('clearLog').addEventListener('click', () => { log.clear(); clearObjects(); updateStats(); });
     $('clearObjects').addEventListener('click', () => { log.clear(); clearObjects(); updateStats(); });

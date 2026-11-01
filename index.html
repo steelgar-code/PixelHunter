@@ -20,10 +20,14 @@
                 <button type="submit">Open URL</button>
             </form>
             <div class="row">
+                <select id="camera" aria-label="Camera or capture device"></select>
+                <button type="button" id="openCamera">Open camera</button>
+            </div>
+            <div class="row">
                 <select id="scene" aria-label="Synthetic scene"></select>
                 <button type="button" id="openScene">Load</button>
             </div>
-            <p class="muted">Synthetic scenes come with ground truth and a live score. A video file can also be dropped on the player.</p>
+            <p class="muted">Camera: webcams, capture cards, OBS Virtual Camera (which can show an RTSP stream). Synthetic scenes come with ground truth and a live score. A video file can also be dropped on the player.</p>
         </div>
         <span id="srcLabel" class="src-label muted">No video</span>
     </div>

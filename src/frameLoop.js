@@ -60,7 +60,9 @@ export function estimateFrameDuration(samples, probe = null) {
     return refine(best);
 }
 
-export function createFrameLoop({ video, onFrame, mode = 'realtime' }) {
+// live: a camera or a stream without an end: always real time, no stepping, seeking or rate.
+export function createFrameLoop({ video, onFrame, mode = 'realtime', live = false }) {
+    if (live) mode = 'realtime';
     if (typeof video.requestVideoFrameCallback !== 'function') {
         throw new Error('This browser does not support requestVideoFrameCallback (needed to read video frames).');
     }
@@ -281,9 +283,15 @@ export function createFrameLoop({ video, onFrame, mode = 'realtime' }) {
         get mode() { return mode; },
         get time() { return video.currentTime; },
         get duration() { return video.duration; },
+        get live() { return live; },
         async play() {
             playing = true;
             safety = 1;
+            if (live) {
+                arm();
+                await video.play();
+                return;
+            }
             if (Number.isFinite(video.duration) && video.currentTime >= video.duration - 0.001) {
                 markJump('replay from the start');
                 video.currentTime = 0;
@@ -304,16 +312,19 @@ export function createFrameLoop({ video, onFrame, mode = 'realtime' }) {
         },
         // One frame forward (pauses first). Resolves true once the frame has been delivered.
         step() {
+            if (live) return Promise.resolve(false);
             this.pause();
             return stepOnce();
         },
         // why: the reason the frame history restarts (shown while it refills)
         seek(time, why = 'seek') {
+            if (live) return;
             markJump(why);
             video.currentTime = time;
             arm();
         },
         setMode(m) {
+            if (live) return;
             mode = m;
             safety = 1;
             if (m === 'realtime') {
@@ -325,7 +336,7 @@ export function createFrameLoop({ video, onFrame, mode = 'realtime' }) {
         },
         setSpeed(s) {
             speed = Math.max(0.25, Number(s) || 1);
-            if (mode === 'realtime' && !stepping) video.playbackRate = speed;
+            if (mode === 'realtime' && !stepping && !live) video.playbackRate = speed;
         },
         get speed() { return speed; },
         // Called when a new source starts (video loaded and paused). Probes the frame duration
