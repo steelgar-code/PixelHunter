@@ -289,10 +289,12 @@ export function createTracker(options = {}) {
     // them into it, then dt frames of their own motion. [{ id, x, y, vx, vy, gate }] in that
     // frame's coordinates, velocity per frame; nothing is changed. For the detector's
     // background-shift check, which must not drop a tracked object (detect.js).
-    function predict(H, dt = 1) {
+    // onlyPinned: just the tracks the user keeps tracking.
+    function predict(H, dt = 1, { onlyPinned = false } = {}) {
         if (!H) return [];
         const out = [];
         for (const t of tracks) {
+            if (onlyPinned && !pinned.has(t.id)) continue;
             if (!t.confirmed || t.misses > 1 || held_(t)) continue;
             const [x, y] = project(H, t.x, t.y);
             const [ex, ey] = project(H, t.x + t.vx, t.y + t.vy);

@@ -172,10 +172,10 @@ export function createPipeline(cv, params) {
             else if (!fwd.H && p.detectMode !== 'basic') detect = { ok: false, reason: fwd.reason, candidates: [] };
             else {
                 const prev = at(2 * s), next = slot;
-                // where confirmed tracks should be in frame t, and how far they move between the
-                // compared frames: the background-shift check must not drop them
+                // where the objects the user keeps tracking should be in frame t: the
+                // background-shift check must not drop them
                 const tracked = p.shiftCheck && egoPrev && egoPrev.ok
-                    ? tracker.predict(egoPrev.Hfull, dt).map(t => ({ x: t.x, y: t.y, dx: s * t.vx, dy: s * t.vy, gate: t.gate }))
+                    ? tracker.predict(egoPrev.Hfull, dt, { onlyPinned: true }).map(t => ({ x: t.x, y: t.y }))
                     : [];
                 detect = detector.detect({ prev: prev.grey, cur: cur.grey, next: next.grey, Hprev: back.H, Hnext: fwd.H || null,
                     fitErr: Math.max(back.err, fwd.err || 0), tracked,
