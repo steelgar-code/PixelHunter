@@ -1,6 +1,6 @@
 // Settings panel: an explanation behind every setting's "?", "Explain settings" for all, and
 // sliders that don't change when a touch scrolls the panel (real touch input via CDP).
-import { launch, ok, openApp } from './lib/env.mjs';
+import { launch, ok, openApp, showTab } from './lib/env.mjs';
 import { PARAM_DEFS } from '../src/params.js';
 import { HELP, SECTION_HELP } from '../src/help.js';
 
@@ -9,9 +9,10 @@ ok('every setting has an explanation', PARAM_DEFS.every(d => typeof HELP[d.key] 
 const browser = await launch();
 try {
     const { page, errors } = await openApp(browser, { viewport: { width: 1280, height: 700 } });
+    await showTab(page, 'settings');
     const n = await page.evaluate(() => document.querySelectorAll('.param .help-btn').length);
     ok('a "?" on every setting', n === PARAM_DEFS.length, n);
-    ok('section explanations for presets and detection area', (await page.evaluate(() => document.querySelectorAll('[data-help] .help-btn').length)) === Object.keys(SECTION_HELP).length);
+    ok('section explanations for presets, objects and detection area', (await page.evaluate(() => document.querySelectorAll('[data-help] .help-btn').length)) === Object.keys(SECTION_HELP).length);
     const row = page.locator('.param', { has: page.locator('#param-threshold') });
     ok('explanations start hidden', await row.locator('.help').isHidden());
     await row.locator('.help-btn').click();
@@ -51,7 +52,7 @@ try {
     const box = await page.locator('#param-features').boundingBox();
     const cx = box.x + box.width / 2, cy = box.y + box.height / 2;
     const feat = () => page.evaluate(() => __ph.params.features);
-    const scrollTop = () => page.evaluate(() => document.querySelector('.panel').scrollTop);
+    const scrollTop = () => page.evaluate(() => document.querySelector('#panel-settings').scrollTop);
     const f0 = await feat(), s0 = await scrollTop();
     await touch([[cx + 40, cy], [cx + 40, cy - 20], [cx + 42, cy - 60], [cx + 44, cy - 120], [cx + 45, cy - 180]]);
     ok('a vertical swipe starting on a slider scrolls the panel, value unchanged', (await feat()) === f0 && (await scrollTop()) > s0, { value: await feat(), scrolled: (await scrollTop()) - s0 });

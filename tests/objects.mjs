@@ -84,3 +84,13 @@ const paint = (cx, cy) => { grey.data.fill(100); for (let y = cy - 1; y <= cy + 
     objs.label(1, 'not');
     ok('labelled not an object: hidden, unpinned, an event in the history', objs.isHidden(1) && !objs.isPinned(1) && /not an object/.test(o.history.at(-1).event));
 }
+{
+    // after a jump, unpinned objects are re-linked too: same id and label when watched again
+    const objs = createObjects();
+    for (let k = 0; k < 20; k++) objs.update(result(k, [track(3, 40 + 3 * k, 60), track(4, 150, 20 + 2 * k)]), grey);
+    objs.label(2, 'not');
+    objs.update(result(9, [], { jump: true, jumpReason: 'seek' }), grey);
+    const out = objs.update(result(10, [track(51, 40 + 3 * 10, 61), track(52, 150, 40)]), grey);
+    ok('after a jump: unpinned objects continue under their ids', objs.objectOfTrack(51) === 1 && objs.objectOfTrack(52) === 2 && out.created.length === 0, [objs.objectOfTrack(51), objs.objectOfTrack(52), out.created]);
+    ok('… and one labelled not an object stays hidden', objs.isHidden(2));
+}

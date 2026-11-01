@@ -1,6 +1,6 @@
 // Background-shift check (robust detector): false detections on trees (parallax, wind) are
 // dropped, real targets are not, also in front of the trees, faint ones, when cropped and with blur.
-import { launch, ok, openApp } from './lib/env.mjs';
+import { launch, ok, openApp, loadScene } from './lib/env.mjs';
 import { instrumentMats } from './lib/mats.mjs';
 import { SCENES } from '../src/scenes.js';
 
@@ -107,8 +107,7 @@ try {
 
     // the app: grey boxes for dropped candidates, count in the stats
     const { page: p, errors: e2 } = await openApp(browser, { hash: 'mode=everyFrame&stride=2&shiftCheck=true' });
-    await p.selectOption('#scene', 'trees');
-    await p.click('#openScene');
+    await loadScene(p, 'trees');
     await p.waitForFunction(() => __ph.results.length >= 1, null, { timeout: 30000 });
     for (let i = 0; i < 8; i++) await p.click('#step');
     await p.waitForTimeout(400);

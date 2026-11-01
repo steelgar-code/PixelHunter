@@ -75,6 +75,7 @@ try {
 
     // the buttons
     const { page: p, errors: e2 } = await openApp(browser);
+    await p.click('#tab-settings');
     ok('Mid is shown as active with default settings', (await p.getAttribute('#preset-mid', 'aria-pressed')) === 'true');
     await p.click('#preset-highest');
     ok('Highest sets the settings and the controls', (await p.evaluate(() => [__ph.params.sigmas, __ph.params.confirmN])).join() === '6,4'

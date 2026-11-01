@@ -7,14 +7,17 @@
 // it was not seen, the likely reason why, and events (confirmed, lost, re-linked); it can be
 // viewed and exported to tune settings.
 //
-// Re-linking (pinned objects only, the ones the user cares about):
-//   - after a jump in the video (‹ Back, a bookmark, a seek) tracking restarts and the pinned
-//     object's track is gone. If the history has the object at the frame now shown (within 1.5
+// Re-linking:
+//   - after a jump in the video (‹ Back, a bookmark, a seek) tracking restarts and every
+//     object's track is gone. If the history has an object at the frame now shown (within 1.5
 //     frame times), a new confirmed track within RELINK_NEAR of where it was then, and of a
-//     compatible look (size within RELINK_SIZE ×, contrast of the same sign), continues it;
+//     compatible look (size within RELINK_SIZE ×, contrast of the same sign), continues it: the
+//     same object keeps its id, history and label when footage is watched again (pinned
+//     objects are tried first);
 //   - while a pinned object is being watched (its track waits where it stopped), a new
 //     confirmed track that appears within RELINK_WATCH of that spot, with a compatible look,
-//     continues it: the object moved off while unseen and was picked up as something new.
+//     continues it: the object moved off while unseen and was picked up as something new
+//     (pinned objects only: the ones the user cares about).
 
 const HISTORY = 900;               // frames of history kept per object
 const RELINK_SIZE = 2.5;           // size ratio still "the same object"
@@ -184,9 +187,10 @@ export function createObjects({ kept = 40 } = {}) {
         return { created, improved };
     }
 
-    // A pinned object a new confirmed track t should continue, or null.
+    // An object a new confirmed track t should continue, or null.
     function relinkTarget(r, t, box, contrast) {
-        for (const oid of pinned) {
+        const lost = [...objects.values()].filter(o => o.trackId === null && !pinned.has(o.id)).map(o => o.id);
+        for (const oid of [...pinned, ...lost]) {
             const o = objects.get(oid);
             if (!o || !compatible(o, box, contrast)) continue;
             if (o.trackId === null) {

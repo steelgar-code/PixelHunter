@@ -14,6 +14,11 @@ export const PARAM_DEFS = [
     { key: 'showBuilding', label: 'Tracks building up (dashed, with progress)', group: 'view', type: 'bool', default: true },
     { key: 'showTruth', label: 'Ground truth (synthetic)', group: 'view', type: 'bool', default: true },
     { key: 'showZones', label: 'Detection-area zones', group: 'view', type: 'bool', default: true },
+    { key: 'showHud', label: 'Readout on the video (fps, candidates, objects)', group: 'view', type: 'bool', default: true },
+
+    // the objects panel
+    { key: 'cards', label: 'A card on the video for each new object', group: 'objects', type: 'bool', default: true },
+    { key: 'pauseOnNew', label: 'Pause when a new object is confirmed', group: 'objects', type: 'bool', default: false },
 
     // detection (detect.js)
     { key: 'detectMode', label: 'Detection', group: 'detect', type: 'choice', default: 'adaptive',

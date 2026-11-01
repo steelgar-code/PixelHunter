@@ -46,6 +46,7 @@ try {
     // stabilised view needs the frame before too: one more step, then no note
     await page.click('#step');
     await page.waitForFunction(() => __ph.lastResult && __ph.lastResult.egoPrev, null, { timeout: 5000 });
+    await page.click('#tab-settings');
     await page.click('label:has(input[name=param-view][value=stabilised])');
     await sleep(100);
     const stab = await page.evaluate(() => ({ note: __ph.note, view: __ph.params.view }));

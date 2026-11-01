@@ -1,6 +1,6 @@
 // Synthetic scenes in the app: picker, playback, ground truth and candidate overlays, live
 // score, debug views.
-import { launch, ok, openApp, sleep } from './lib/env.mjs';
+import { launch, ok, openApp, sleep, loadScene } from './lib/env.mjs';
 
 const countColour = (page, test, minAlpha = 150) => page.evaluate(([src, a]) => {
     const fn = new Function('r', 'g', 'b', `return ${src};`);
@@ -16,8 +16,7 @@ try {
     const { page, errors } = await openApp(browser, { hash: 'mode=everyFrame&view=original' });
     const options = await page.$$eval('#scene option', os => os.map(o => o.value));
     ok('scene picker lists the presets', options.includes('pan-dots') && options.includes('static-scene'), options);
-    await page.selectOption('#scene', 'pan-dots');
-    await page.click('#openScene');
+    await loadScene(page, 'pan-dots');
     await page.waitForFunction(() => __ph.results.length >= 1, null, { timeout: 30000 });
     const first = await page.evaluate(() => ({ label: document.getElementById('srcLabel').textContent, shown: __ph.shown.frame,
         play: document.getElementById('play').disabled, time: document.getElementById('time').textContent }));
@@ -42,6 +41,7 @@ try {
     ok('ground truth circles drawn', cyan > 30, cyan);
     ok('candidate boxes drawn (faint)', yellow > 50, yellow);
     ok('confirmed tracks drawn', magenta > 50, magenta);
+    await page.click('#tab-settings');
     await page.click('#param-showTruth');
     await sleep(100);
     ok('ground truth toggles off', (await countColour(page, 'b > 200 && g > 180 && r < 140')) === 0);

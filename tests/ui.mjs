@@ -1,6 +1,6 @@
 // The side panel and player: folding panels (remembered), playback speed, one frame back,
 // bookmarks, the objects panel (details, pin), and updating a saved preset.
-import { launch, ok, BASE_URL } from './lib/env.mjs';
+import { launch, ok, BASE_URL, loadScene } from './lib/env.mjs';
 import { frameNumberClip, vfrFrameNumberClip, readFrameNumber } from './lib/clips.mjs';
 
 const browser = await launch();
@@ -13,21 +13,24 @@ try {
         await page.goto(`${BASE_URL}#${hash}`);
         await page.waitForFunction(() => window.__ph && window.__ph.ready, null, { timeout: 90000 });
     };
-    await open('mode=everyFrame');
+    await open('mode=everyFrame&cards=false');
 
-    // panels fold, and stay folded after a reload
-    ok('every side panel can fold', await page.evaluate(() => [...document.querySelectorAll('.panel > *')].every(el => el.tagName === 'DETAILS')));
-    await page.click('#pStats > summary');
-    ok('clicking a heading folds it', !(await page.evaluate(() => document.getElementById('pStats').open)));
+    // side panel tabs; settings sections fold, and stay folded after a reload
+    ok('the Objects tab is shown first', await page.isVisible('#panel-objects') && !(await page.isVisible('#panel-settings')));
+    await page.click('#tab-settings');
+    ok('tabs switch the side panel', await page.isVisible('#panel-settings') && !(await page.isVisible('#panel-objects')));
+    ok('every settings section can fold', await page.evaluate(() => [...document.querySelectorAll('#panel-settings > *')].every(el => el.tagName === 'DETAILS')));
+    await page.click('#pArea > summary');
+    ok('clicking a heading folds it', !(await page.evaluate(() => document.getElementById('pArea').open)));
     await page.click('#pPresets > summary .help-btn');
     ok('a "?" in a heading explains without folding', await page.evaluate(() => document.getElementById('pPresets').open && !document.querySelector('#pPresets .help').hidden));
-    await open('mode=everyFrame');
-    ok('folded panels stay folded after a reload', !(await page.evaluate(() => document.getElementById('pStats').open)));
-    await page.click('#pStats > summary');
+    await open('mode=everyFrame&cards=false');
+    ok('folded sections stay folded after a reload, and the tab is remembered', !(await page.evaluate(() => document.getElementById('pArea').open)) && await page.isVisible('#panel-settings'));
+    await page.click('#pArea > summary');
+    await page.click('#tab-objects');
 
     // synthetic scene, step a little
-    await page.selectOption('#scene', 'pan-dots');
-    await page.click('#openScene');
+    await loadScene(page, 'pan-dots');
     await page.waitForFunction(() => __ph.results.length >= 1, null, { timeout: 30000 });
     for (let i = 0; i < 30; i++) await page.click('#step');
     const shown = () => page.evaluate(() => __ph.shown.frame);
@@ -76,14 +79,19 @@ try {
     ok('★ pins an object to the top', (await page.evaluate(() => document.querySelector('#objectList li:first-child .oid').textContent)) === lastId
         && (await page.getAttribute('#objectList li:first-child', 'class')).includes('pinned'));
     const firstFrame = await shown();
+    const second = await page.evaluate(() => document.querySelector('#objectList li:nth-child(2) .oid').textContent);
     await page.click('#objectList li:nth-child(2)');
-    await page.waitForTimeout(1500);
-    ok('clicking an object jumps to its last frame', (await shown()) <= firstFrame);
+    ok('clicking an object opens it in the inspector', await page.isVisible('#inspector') && (await page.textContent('#inspTitle')) === second);
+    await page.click('#inspFirst');
+    await page.waitForFunction(() => !document.getElementById('stage').classList.contains('busy'), null, { timeout: 15000 });
+    await page.waitForTimeout(800);
+    ok('… First seen jumps back to where it was first seen', (await shown()) < firstFrame, [firstFrame, await shown()]);
+    await page.click('#inspClose');
+    ok('… × closes it', !(await page.isVisible('#inspector')));
 
     // pinning on the video, kept watching through a stop, then out of view
     {
-        await page.selectOption('#scene', 'stop-go');
-        await page.click('#openScene');
+        await loadScene(page, 'stop-go');
         await page.waitForFunction(() => __ph.results.length >= 1 && /stops/.test(document.getElementById('srcLabel').textContent), null, { timeout: 30000 });
         for (let i = 0; i < 20; i++) await page.click('#step');
         // the dot that will stop: started at 300,250 in frame 0
@@ -94,8 +102,11 @@ try {
         });
         await page.mouse.click(where.x, where.y);
         await page.waitForTimeout(300);
+        ok('a click on an object on the video opens it in the inspector', (await page.textContent('#inspTitle')) === `#${where.id}` && await page.isVisible('#inspector'));
+        await page.mouse.dblclick(where.x, where.y);
+        await page.waitForTimeout(300);
         const status = () => page.evaluate(id => [...document.querySelectorAll('#objectList li')].find(li => li.querySelector('.oid').textContent === `#${id}`)?.textContent || '', where.id);
-        ok('a click on an object on the video pins it', /on screen/.test(await status()) && (await page.evaluate(id => document.querySelector('#objectList li:first-child .oid').textContent === `#${id}`, where.id)), await status());
+        ok('a double click keeps tracking it (pinned)', /on screen/.test(await status()) && (await page.evaluate(id => document.querySelector('#objectList li:first-child .oid').textContent === `#${id}`, where.id)), await status());
         for (let i = 0; i < 25; i++) await page.click('#step');
         await page.waitForTimeout(300);
         ok('… it stops: kept watching where it stopped', /watching/.test(await status()), await status());
@@ -140,8 +151,7 @@ try {
 
     // a pinned object across ‹ Back (tracking restarts): re-linked, same object; history and export
     {
-        await page.selectOption('#scene', 'pan-dots');
-        await page.click('#openScene');
+        await loadScene(page, 'pan-dots');
         await page.waitForFunction(() => __ph.results.length >= 1 && /Pan · 2, 3/.test(document.getElementById('srcLabel').textContent), null, { timeout: 30000 });
         for (let i = 0; i < 30; i++) await page.click('#step');
         await page.waitForTimeout(300);
@@ -157,7 +167,7 @@ try {
         ok('… with the lost and re-linked events', /lost: tracking restarted/.test(await page.textContent('#historyRows')) && /re-linked/.test(await page.textContent('#historyRows')), (await page.textContent('#historyTitle')));
         const [dl] = await Promise.all([page.waitForEvent('download'), page.click('#historyCsv')]);
         const csv = await (await import('fs')).promises.readFile(await dl.path(), 'utf8');
-        ok('CSV export: a row per frame, with size, contrast and speed', csv.startsWith('frame,time,track,state,seen,x,y,w,h,contrast,speed') && csv.split('\n').length > 10, csv.split('\n').slice(0, 3));
+        ok('CSV export: a row per frame, with size, contrast and speed', csv.startsWith('frame,time,track,state,seen,early,x,y,w,h,contrast,speed') && csv.split('\n').length > 10, csv.split('\n').slice(0, 3));
         await page.click('#historyClose');
         ok('× closes it', !(await page.isVisible('#objectHistory')));
         await page.click('#objectList li:first-child .pin');
@@ -174,6 +184,7 @@ try {
     }
 
     // speed
+    await page.click('#tab-settings');
     await page.click('label:has(input[name=param-speed][value="3"])');
     ok('speed ×3 reaches the player', await page.evaluate(() => __ph.loop.speed === 3 && __ph.params.speed === '3'));
     await page.click('label:has(input[name=param-speed][value="1"])');
