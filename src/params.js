@@ -109,6 +109,11 @@ export const PRESETS = {
             estWidth: 320, features: 400, lkWin: 25, lkLevels: 4, ransacPx: 2.5,
         },
     },
+    compressed: {
+        label: 'Compressed',
+        hint: 'streams, phone recordings, re-encoded clips: Mid with confirmation by evidence (0.5 s), so short-lived compression artefacts in flat areas (sky) never confirm; objects show 0.5 s later, the history and export go back to their first sighting',
+        values: { ...MID, confirmBy: 'evidence' },
+    },
 };
 
 // The preset whose values all match `p`, or null.
