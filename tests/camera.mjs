@@ -52,6 +52,27 @@ try {
     ok('no page errors', errors.length === 0, errors);
     await ctx.close();
 
+    // real cameras often report mediaTime 0 (or a stuck value) for every frame: the picture
+    // must keep going anyway (seen on a real webcam and OBS Virtual Camera: one frame, then frozen)
+    for (const [what, patch] of [['0', 'md.mediaTime = 0;'], ['stuck, no capture time', 'md.mediaTime = 1.5; delete md.captureTime;']]) {
+        const c = await browser.newContext({ viewport: { width: 1280, height: 800 }, permissions: ['camera'] });
+        await c.addInitScript(`(() => {
+            const orig = HTMLVideoElement.prototype.requestVideoFrameCallback;
+            HTMLVideoElement.prototype.requestVideoFrameCallback = function (cb) {
+                return orig.call(this, (now, meta) => { const md = { ...meta }; if (this.srcObject) { ${patch} } cb(now, md); });
+            };
+        })();`);
+        const p = await c.newPage();
+        await p.goto(`${BASE_URL}#cards=false`);
+        await p.waitForFunction(() => window.__ph && window.__ph.ready, null, { timeout: 90000 });
+        await p.click('#openMenu');
+        await p.click('#openCamera');
+        await p.waitForFunction(() => __ph.results.length >= 20, null, { timeout: 30000 }).catch(() => {});
+        const r = await p.evaluate(() => ({ n: __ph.results.length, fps: __ph.stats && __ph.stats.sourceFps, conf: Math.max(0, ...__ph.results.map(x => x.confirmed.length)) }));
+        ok(`camera with mediaTime ${what}: keeps playing and detecting`, r.n >= 20 && r.conf >= 1, r);
+        await c.close();
+    }
+
     // camera access refused: a clear message
     const ctx2 = await browser.newContext({ viewport: { width: 1280, height: 800 } });
     const p2 = await ctx2.newPage();

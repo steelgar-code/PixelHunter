@@ -99,12 +99,31 @@ export function createFrameLoop({ video, onFrame, mode = 'realtime', live = fals
         return s[Math.min(s.length - 1, Math.floor(s.length * 0.9))];
     }
 
+    // Live sources (cameras): mediaTime is often 0 or stuck for every frame, so frames would look
+    // like the same one over and over (one frame, then a frozen picture). Their time comes from
+    // the capture time (else the callback time), from the first frame on; a new frame is one
+    // with a new presentedFrames count.
+    let liveT0 = null, livePresented = null;
+    const liveSteps = [];       // [time between delivered frames, frames presented in it]
+    function liveTime(now, md) {
+        const ms = Number.isFinite(md.captureTime) && md.captureTime > 0 ? md.captureTime : now;
+        if (liveT0 === null) liveT0 = ms;
+        return Math.max(0, (ms - liveT0) / 1000);
+    }
+
     function onVideoFrame(now, md) {
         handle = null;
         // taken now: a step started from inside this call must wait for the next frame
         const waiter = stepWaiter;
         stepWaiter = null;
-        const t = md.mediaTime;
+        // live: frames presented since the last one delivered (counts the ones skipped too)
+        let presentedStep = null;
+        if (live) {
+            if (Number.isFinite(md.presentedFrames) && md.presentedFrames === livePresented) { arm(); return; }
+            if (Number.isFinite(md.presentedFrames) && Number.isFinite(livePresented) && md.presentedFrames > livePresented) presentedStep = md.presentedFrames - livePresented;
+            livePresented = md.presentedFrames ?? null;
+        }
+        const t = live ? liveTime(now, md) : md.mediaTime;
         if (probing) {
             if (waiter) waiter(t);
             return;
@@ -123,10 +142,19 @@ export function createFrameLoop({ video, onFrame, mode = 'realtime', live = fals
                 jump = true;
                 jumpReason = 'video time went backwards';
             } else {
-                dtSamples.push(dt);
-                if (dtSamples.length > 60) dtSamples.shift();
-                dur = estimateFrameDuration(dtSamples, probed);
-                gap = Math.max(0, Math.round(dt / dur) - 1);
+                if (presentedStep) {
+                    // live with a frame count: it says what was skipped, and the frame duration is
+                    // the time over the frames counted (callback times jitter with the display)
+                    liveSteps.push([dt, presentedStep]);
+                    if (liveSteps.length > 60) liveSteps.shift();
+                    dur = liveSteps.reduce((a, q) => a + q[0], 0) / liveSteps.reduce((a, q) => a + q[1], 0);
+                    gap = presentedStep - 1;
+                } else {
+                    dtSamples.push(dt);
+                    if (dtSamples.length > 60) dtSamples.shift();
+                    dur = estimateFrameDuration(dtSamples, probed);
+                    gap = Math.max(0, Math.round(dt / dur) - 1);
+                }
             }
         }
         if (gap > 0 && mode === 'everyFrame' && playing && !stepping && !repairing) {
@@ -343,6 +371,7 @@ export function createFrameLoop({ video, onFrame, mode = 'realtime', live = fals
         // of a file, then delivers the first frame.
         async start({ probe = true } = {}) {
             last = null; seq = 0; markJump('start'); dur = null; probed = null; dtSamples.length = 0;
+            liveT0 = null; livePresented = null; liveSteps.length = 0;
             costs.length = 0; safety = 1; dropped = 0; recovered = 0; deliveredAt.length = 0;
             playing = false; stepping = false;
             const t0 = video.currentTime;
@@ -356,7 +385,7 @@ export function createFrameLoop({ video, onFrame, mode = 'realtime', live = fals
             // no new frame came (probe off or failed): the one on screen was presented before
             // the loop existed, so deliver it directly
             markJump('start');
-            onVideoFrame(performance.now(), { mediaTime: video.currentTime, width: video.videoWidth, height: video.videoHeight });
+            onVideoFrame(performance.now(), { mediaTime: video.currentTime, width: video.videoWidth, height: video.videoHeight, presentedFrames: -1 });
         },
         stats() {
             return {
