@@ -1049,7 +1049,46 @@ function togglePlay() {
 
 let scrubbing = false;
 
+// "1:23.4", "83.4" (seconds) or "#250" (a frame) → media time in s, or null.
+function parseGoTo(text, fps) {
+    const t = String(text).trim();
+    let m;
+    if ((m = /^#\s*(\d+)$/.exec(t))) return fps > 0 ? Number(m[1]) / fps : null;
+    if ((m = /^(\d+):(\d{1,2}(?:\.\d*)?)$/.exec(t))) return Number(m[1]) * 60 + Number(m[2]);
+    if ((m = /^\d+(?:\.\d*)?$/.exec(t))) return Number(t);
+    return null;
+}
+
+// Click on the time (or G): a field to type a time or a frame number to go to.
+function bindGoTo() {
+    const form = $('goToForm'), input = $('goTo'), time = $('time');
+    const open = () => {
+        if (!loop || !Number.isFinite(loop.duration)) return;
+        form.hidden = false;
+        time.hidden = true;
+        input.value = '';
+        input.focus();
+    };
+    const close = () => { form.hidden = true; time.hidden = false; };
+    time.addEventListener('click', open);
+    time.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); } });
+    input.addEventListener('keydown', e => { if (e.key === 'Escape') { e.stopPropagation(); close(); } });
+    input.addEventListener('blur', () => setTimeout(close, 150));
+    form.addEventListener('submit', e => {
+        e.preventDefault();
+        const fps = loop && loop.stats().sourceFps;
+        const t = parseGoTo(input.value, fps);
+        close();
+        if (t === null || !loop || !Number.isFinite(loop.duration)) return;
+        // a frame number: its time less a quarter frame, so rounding can't land on the next one
+        const to = /^#/.test(input.value.trim()) && fps ? t - 0.25 / fps : t;
+        goToTime(Math.min(Math.max(0, to), loop.duration - 1e-3), 'go to');
+    });
+    return open;
+}
+
 function bindTransport() {
+    const openGoTo = bindGoTo();
     $('play').addEventListener('click', togglePlay);
     $('step').addEventListener('click', stepForward);
     $('back').addEventListener('click', stepBack);
@@ -1086,6 +1125,7 @@ function bindTransport() {
         else if (e.code === 'ArrowRight' && loop) { e.preventDefault(); stepForward(); }
         else if (e.code === 'ArrowLeft' && loop) { e.preventDefault(); stepBack(); }
         else if (e.code === 'KeyB' && loop && !e.ctrlKey && !e.metaKey) addBookmark();
+        else if (e.code === 'KeyG' && loop && !e.ctrlKey && !e.metaKey) { e.preventDefault(); openGoTo(); }
         else if (e.code === 'Escape') {
             if (!$('sourceMenu').hidden) setMenu(false);
             else if (drawing) setDrawing(false);

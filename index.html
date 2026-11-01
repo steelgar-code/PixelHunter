@@ -81,11 +81,14 @@
                 <canvas id="tlLanes" class="tl-lanes" height="0" aria-label="When each object was seen"></canvas>
                 <span id="tlHover" class="tl-hover mono" hidden></span>
             </div>
-            <span id="time" class="mono">0:00.000</span>
+            <span id="time" class="mono time" role="button" tabindex="0" title="Go to a time or a frame (click, or G)">0:00.000</span>
+            <form id="goToForm" class="goto" hidden>
+                <input type="text" id="goTo" class="mono" placeholder="1:23.4 · 83.4 · #250" aria-label="Go to a time (m:ss.s or seconds) or a frame (#number)" spellcheck="false" autocomplete="off">
+            </form>
             <button type="button" id="bookmark" disabled title="Bookmark this frame (B)">☆ Mark</button>
         </div>
         <div id="bookmarks" class="bookmarks" hidden></div>
-        <p class="keys muted"><kbd>Space</kbd> play / pause · <kbd>←</kbd> <kbd>→</kbd> one frame · <kbd>B</kbd> bookmark · click an object on the video to inspect it, double-click to keep tracking it · <kbd>Esc</kbd> close / stop drawing zones</p>
+        <p class="keys muted"><kbd>Space</kbd> play / pause · <kbd>←</kbd> <kbd>→</kbd> one frame · <kbd>B</kbd> bookmark · <kbd>G</kbd> go to a time or frame · click an object on the video to inspect it, double-click to keep tracking it · <kbd>Esc</kbd> close / stop drawing zones</p>
         <section id="objectHistory" class="drawer" hidden aria-label="Object history">
             <div class="row history-head">
                 <span id="historyTitle" class="mono"></span>

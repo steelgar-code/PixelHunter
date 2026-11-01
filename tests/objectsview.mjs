@@ -81,6 +81,18 @@ try {
     await page.waitForTimeout(300);
     ok('replaying footage seen before shows no cards', (await page.locator('#cards .card').count()) === 0);
 
+    // go to a time or a frame
+    await page.click('#time');
+    await page.fill('#goTo', '#40');
+    await page.press('#goTo', 'Enter');
+    await page.waitForFunction(() => __ph.shown.frame === 40, null, { timeout: 15000 }).catch(() => {});
+    ok('click on the time: go to a frame (#40)', (await page.evaluate(() => __ph.shown.frame)) === 40 && await page.isVisible('#time'), await page.evaluate(() => __ph.shown.frame));
+    await page.keyboard.press('KeyG');
+    await page.fill('#goTo', '0:01.2');
+    await page.press('#goTo', 'Enter');
+    await page.waitForFunction(() => __ph.shown.frame === 30, null, { timeout: 15000 }).catch(() => {});
+    ok('G: go to a time (0:01.2 = frame 30 at 25 fps)', (await page.evaluate(() => __ph.shown.frame)) === 30, await page.evaluate(() => __ph.shown.frame));
+
     // exports keep the labels
     const [dl] = await Promise.all([page.waitForEvent('download'), page.click('#exportObjects')]);
     const csv = fs.readFileSync(await dl.path(), 'utf8');
