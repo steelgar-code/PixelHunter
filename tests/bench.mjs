@@ -122,6 +122,12 @@ export const CONFIGS = {
     'mid+mc10': { minContrast: 10 },
     'mid+mean3+mc6': { minMean: 3, minContrast: 6 },
     'highest+mean3': { ...PRESETS.highest.values, minMean: 3 },
+    'mid+mean0': { minMean: 0 },
+    // candidates for a Compressed preset
+    comp1: { minMean: 3, confirmBy: 'evidence' },
+    comp2: { minMean: 3, minContrast: 8, confirmBy: 'evidence' },
+    comp3: { minMean: 3, minContrast: 8, confirmN: 4, confirmM: 6 },
+    comp4: { minMean: 3, minContrast: 8, sigmas: 8, minArea: 2, confirmBy: 'evidence' },
     // slow faint targets: the Highest preset's stride and confirmation with the adaptive detector
     'adaptive-slow': { ...PRESETS.highest.values, detectMode: 'adaptive', sigmas: 6 },
 };

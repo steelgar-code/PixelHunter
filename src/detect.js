@@ -102,7 +102,7 @@ export const DETECT_DEFAULTS = {
     threshold: 20,         // grey levels (robust, basic)
     sigmas: 7,             // adaptive: threshold in units of the local noise
     minContrast: 4,        // adaptive: lowest threshold, grey levels
-    minMean: 0,            // adaptive: 2×2 and 3×3 sums must average this many grey levels a pixel (0: off)
+    minMean: 3,            // adaptive: 2×2 and 3×3 sums must average this many grey levels a pixel (0: off)
     weakMargin: 2.5,       // adaptive: weak candidates down to sigmas − this (0: none)
     noiseFrom: 'plain',    // adaptive: noise scaled from the plain difference ('plain', calibrated),
                            // or each k×k sum's own RMS ('sums': underestimates the tails of these

@@ -30,7 +30,7 @@ export const PARAM_DEFS = [
     { key: 'sigmas', label: 'Adaptive threshold', group: 'detect', type: 'number', default: 7, min: 3, max: 12, step: 0.5, unit: 'σ' },
     { key: 'weakMargin', label: 'Adaptive weak margin', group: 'detect', type: 'number', default: 2.5, min: 0, max: 4, step: 0.5, unit: 'σ' },
     { key: 'minContrast', label: 'Adaptive min contrast', group: 'detect', type: 'number', default: 4, min: 1, max: 30, step: 1, unit: 'grey' },
-    { key: 'minMean', label: 'Adaptive min mean contrast', group: 'detect', type: 'number', default: 0, min: 0, max: 8, step: 0.5, unit: 'grey' },
+    { key: 'minMean', label: 'Adaptive min mean contrast', group: 'detect', type: 'number', default: 3, min: 0, max: 8, step: 0.5, unit: 'grey' },
     { key: 'minArea', label: 'Min blob area', group: 'detect', type: 'number', default: 1, min: 1, max: 50, step: 1, unit: 'px' },
     { key: 'maxArea', label: 'Max blob area', group: 'detect', type: 'number', default: 400, min: 10, max: 5000, step: 10, unit: 'px' },
     { key: 'borderMargin', label: 'Border margin', group: 'detect', type: 'number', default: 3, min: 0, max: 20, step: 1, unit: 'px' },
