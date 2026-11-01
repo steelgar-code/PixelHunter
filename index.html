@@ -236,6 +236,20 @@
     </aside>
 </main>
 
+<script>
+// Opened straight from disk (file://): browsers don't load JavaScript modules there, so the app
+// would hang on "Loading OpenCV.js…". Say what to do instead.
+if (location.protocol === 'file:') {
+    var b = document.getElementById('banner');
+    b.textContent = 'PixelHunter has to be opened through a web server, not as a file: browsers block its scripts on file:// pages.\n'
+        + 'In this folder run:  python3 -m http.server 8000   (or: npx serve .)\n'
+        + 'then open  http://localhost:8000/';
+    b.hidden = false;
+    var st = document.getElementById('cvStatus');
+    st.textContent = 'Not started (opened as a file)';
+    st.className = 'pill error';
+}
+</script>
 <script type="module" src="src/main.js"></script>
 </body>
 </html>
