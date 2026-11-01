@@ -322,7 +322,7 @@ export function createObjectsView(d) {
         const rows = [
             ['Status', st.text],
             ['Size', `${o.w.toFixed(1)}×${o.h.toFixed(1)} px`],
-            ['Contrast', `${o.contrast > 0 ? '+' : ''}${o.contrast.toFixed(0)} grey`],
+            ['Contrast', `${Math.round(o.contrast) > 0 ? '+' : ''}${Math.round(o.contrast) || 0} grey`],
             ['Speed', `${o.speed.toFixed(2)} px/frame`],
             ...(last && last.score !== undefined ? [['Strength', `${last.score}σ`]] : []),
             ['First seen', `${d.fmtTime(o.first.time)} #${o.first.frame ?? '–'}`],

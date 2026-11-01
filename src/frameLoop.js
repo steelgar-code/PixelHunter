@@ -19,8 +19,8 @@
 //
 // The frame duration comes from mediaTime differences (presentedFrames is not reliable enough
 // for this). For files, start() first probes it by seeking forward in small steps until the
-// next frame shows; after that, it is the largest step that every recent difference is a
-// whole multiple of.
+// next frame shows; after that, see estimateFrameDuration: real recordings' timestamps jitter
+// and the odd pair is nearly the same instant, so one stray difference must not decide it.
 
 export const MIN_RATE = 0.0625;          // lowest playbackRate browsers reliably support
 const START_RATE = 0.25;                 // every-frame mode, until the cost is known
@@ -30,15 +30,34 @@ const SAME_FRAME_MS = 150;               // after 'seeked', no new frame within 
 const PROBE_STEP = 1 / 240;              // s; finer than any real frame duration
 const PROBE_MAX = 0.25;                  // s; slower than 4 fps is not probed
 
-// Largest d = min(dt)/k (k = 1..4) such that every sample is close to a whole multiple of d.
-export function estimateFrameDuration(samples) {
-    if (!samples.length) return null;
-    const min = Math.min(...samples);
-    for (let k = 1; k <= 4; k++) {
-        const d = min / k;
-        if (samples.every(s => Math.abs(s / d - Math.round(s / d)) < 0.15)) return d;
+const MIN_FRAME = 0.005;                 // s; shorter differences are timestamp noise (> 200 fps)
+const FIT_TOL = 0.15;                    // a difference within this share of a frame of k frames fits
+const FIT_SHARE = 0.85;                  // a duration must fit this share of the differences
+
+// Frame duration from recent mediaTime differences (s). Real-time mode skips frames, so most
+// differences are whole multiples of it; timestamps jitter (container time bases, variable-rate
+// recordings) and now and then two are nearly the same. Candidates are the differences divided
+// by 1..4; the longest that fits FIT_SHARE of the differences wins, refined as their total time
+// over their total frames. probe: the duration measured by stepping at the start, preferred
+// while it fits. (Was: the shortest difference, which one stray timestamp could make 1.5 ms
+// on a 25 fps file, so every frame looked like dozens skipped.)
+export function estimateFrameDuration(samples, probe = null) {
+    const s = samples.filter(x => x >= MIN_FRAME);
+    if (!s.length) return probe && probe >= MIN_FRAME ? probe : null;
+    const fitting = d => s.filter(x => { const k = Math.round(x / d); return k >= 1 && Math.abs(x / d - k) < FIT_TOL; });
+    const need = Math.ceil(FIT_SHARE * s.length);
+    const refine = d => { const f = fitting(d); return f.reduce((a, x) => a + x, 0) / f.reduce((a, x) => a + Math.round(x / d), 0); };
+    if (probe && probe >= MIN_FRAME && fitting(probe).length >= need) return refine(probe);
+    let best = null;
+    for (const x of new Set(s)) {
+        for (let k = 1; k <= 4; k++) {
+            const d = x / k;
+            if (d >= MIN_FRAME && (best === null || d > best) && fitting(d).length >= need) best = d;
+        }
     }
-    return min;
+    // nothing fits most of them (irregular timestamps): the median of the shortest third
+    if (best === null) { const sorted = [...s].sort((a, b) => a - b); return sorted[Math.floor((sorted.length - 1) / 3 / 2)]; }
+    return refine(best);
 }
 
 export function createFrameLoop({ video, onFrame, mode = 'realtime' }) {
@@ -61,6 +80,7 @@ export function createFrameLoop({ video, onFrame, mode = 'realtime' }) {
     let repairing = false;      // every-frame mode: going back for a skipped frame
     const dtSamples = [];
     let dur = null;             // frame duration estimate, s
+    let probed = null;          // frame duration measured by probing at the start, s
     const costs = [];           // recent onFrame costs, ms
     let safety = 1;
     let dropped = 0;
@@ -103,7 +123,7 @@ export function createFrameLoop({ video, onFrame, mode = 'realtime' }) {
             } else {
                 dtSamples.push(dt);
                 if (dtSamples.length > 60) dtSamples.shift();
-                dur = estimateFrameDuration(dtSamples);
+                dur = estimateFrameDuration(dtSamples, probed);
                 gap = Math.max(0, Math.round(dt / dur) - 1);
             }
         }
@@ -220,7 +240,7 @@ export function createFrameLoop({ video, onFrame, mode = 'realtime' }) {
     // a short frame, and a seek that lands on the same frame is retried a little further on.
     async function stepOnce() {
         const d = dur || 1 / 30;
-        const shortest = dtSamples.length ? Math.max(PROBE_STEP, Math.min(...dtSamples.filter(x => x > 1e-6), d)) : d;
+        const shortest = dtSamples.length ? Math.max(PROBE_STEP, Math.min(...dtSamples.filter(x => x >= MIN_FRAME), d)) : d;
         const from = last !== null ? last : video.currentTime;
         let target = from + Math.min(d, shortest) * 1.02;
         for (let attempt = 0; attempt < 12; attempt++) {
@@ -311,14 +331,14 @@ export function createFrameLoop({ video, onFrame, mode = 'realtime' }) {
         // Called when a new source starts (video loaded and paused). Probes the frame duration
         // of a file, then delivers the first frame.
         async start({ probe = true } = {}) {
-            last = null; seq = 0; markJump('start'); dur = null; dtSamples.length = 0;
+            last = null; seq = 0; markJump('start'); dur = null; probed = null; dtSamples.length = 0;
             costs.length = 0; safety = 1; dropped = 0; recovered = 0; deliveredAt.length = 0;
             playing = false; stepping = false;
             const t0 = video.currentTime;
             const d = probe ? await probeDuration() : null;
             if (d) {
                 dtSamples.push(d);
-                dur = d;
+                dur = probed = d;
             }
             markJump('start');
             if (d && (await seekAndWait(t0)) === 'ok') return;
