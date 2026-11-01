@@ -12,7 +12,7 @@ import { createPipeline } from './pipeline.js';
 import { createScore } from './score.js';
 import { createExportLog, download } from './exportLog.js';
 import { createObjects, historyCsv } from './objects.js';
-import { fitOverlay, clear, drawPoints, drawNote, drawBoxes, drawTruth, drawTracks, drawHeld, drawOffscreen, drawZones, drawInclude } from './overlay.js';
+import { fitOverlay, clear, drawPoints, drawNote, drawBoxes, drawTruth, drawTracks, drawBuilding, drawHeld, drawOffscreen, drawZones, drawInclude } from './overlay.js';
 import { normalizeZone, normalizeZones, parseZones, formatZones, zoneRect, inZones, loadZones, saveZones, MAX_ZONES, ZONES_KEY, INCLUDE_KEY } from './zones.js';
 
 const $ = id => document.getElementById(id);
@@ -68,6 +68,8 @@ function fatal(text) {
 // --- parameter controls -------------------------------------------------------------------
 
 const syncers = new Map();       // key → puts params[key] into its control
+// display-only settings: a change redraws, nothing is recomputed
+const VIEW_KEYS = ['view', 'showCandidates', 'showBuilding', 'showTruth', 'showZones'];
 
 // A "?" button that shows / hides `text` in a paragraph appended to `host`.
 function helpToggle(host, text, name) {
@@ -229,8 +231,10 @@ function renderParams() {
             row.append(guardSlider(input, def));
         }
         if (HELP[def.key]) head.append(helpToggle(row, HELP[def.key], def.label));
+        if (def.when) conditional.push([row, def.when]);
         host.append(row);
     }
+    updateConditional();
     // section explanations
     for (const [key, text] of Object.entries(SECTION_HELP)) {
         const h = document.querySelector(`[data-help=${key}]`);
@@ -245,12 +249,19 @@ function renderParams() {
     });
 }
 
+// Settings that only apply when another has a given value (def.when) are shown only then.
+const conditional = [];
+function updateConditional() {
+    for (const [row, when] of conditional) row.hidden = !Object.entries(when).every(([k, v]) => String(params[k]) === String(v));
+}
+
 function setParam(key, value) {
     params[key] = value;
     save(localStorage, params);
+    updateConditional();
     if (key === 'mode') { if (loop) loop.setMode(value); }
     else if (key === 'speed') { if (loop) loop.setSpeed(Number(value)); }
-    else if (['view', 'showCandidates', 'showTruth', 'showZones'].includes(key)) render();
+    else if (VIEW_KEYS.includes(key)) render();
     else settingsChanged();
 }
 
@@ -329,6 +340,7 @@ function applyUserPreset(name) {
     Object.assign(params, ch.values);
     save(localStorage, params);
     for (const sync of syncers.values()) sync();
+    updateConditional();
     for (const [kind, k] of Object.entries(ZONE_KINDS)) if (ch[k.param]) setZones(kind, ch[k.param]);
     settingsChanged();
     showUserPresetInfo(`Applied “${p.name}”: ${describe(p)}.`);
@@ -403,6 +415,7 @@ function applyPreset(key) {
     Object.assign(params, PRESETS[key].values);
     save(localStorage, params);
     for (const sync of syncers.values()) sync();
+    updateConditional();
     settingsChanged();
 }
 
@@ -497,6 +510,8 @@ function render() {
         const held = r.held || [];
         drawHeld(overlayCtx, tf, asObject(held.filter(t => !isPinnedTrack(t))));
         drawHeld(overlayCtx, tf, asObject(held.filter(isPinnedTrack)), { colour: PIN_COLOUR });
+        // tracks building up: seen at least twice, matched this frame, not confirmed yet
+        if (params.showBuilding) drawBuilding(overlayCtx, tf, r.tracks.filter(t => t.state === 'tentative' && t.matched && t.hits >= 2 && t.box));
         drawTracks(overlayCtx, tf, asObject(r.confirmed.filter(t => !isPinnedTrack(t))));
         drawTracks(overlayCtx, tf, asObject(r.confirmed.filter(isPinnedTrack)), { colour: PIN_COLOUR });
         // pinned and out of view: an arrow at the edge towards it
@@ -917,7 +932,7 @@ function exportHistory(kind) {
     } else {
         download(`${base}.json`, { app: 'PixelHunter', version: APP_VERSION, source: source ? source.label : null, object: o.id,
             units: 'x, y, w, h: source px; contrast: grey levels (box mean − 2 px ring mean); speed: px per frame against the background; score: σ (adaptive mode)',
-            params: Object.fromEntries(PARAM_DEFS.filter(d => !['view', 'showCandidates', 'showTruth', 'showZones', 'simLoad'].includes(d.key)).map(d => [d.key, params[d.key]])),
+            params: Object.fromEntries(PARAM_DEFS.filter(d => !VIEW_KEYS.includes(d.key) && d.key !== 'simLoad').map(d => [d.key, params[d.key]])),
             history: o.history.map(({ px, ...e }) => e) });
     }
 }
@@ -1104,7 +1119,7 @@ function bindTransport() {
 function exportJson() {
     if (!log.count || !pipeline.geometry) return;
     const g = pipeline.geometry;
-    const keys = PARAM_DEFS.filter(d => !['view', 'showCandidates', 'showTruth', 'showZones', 'simLoad'].includes(d.key)).map(d => d.key);
+    const keys = PARAM_DEFS.filter(d => !VIEW_KEYS.includes(d.key) && d.key !== 'simLoad').map(d => d.key);
     const meta = {
         app: 'PixelHunter', version: APP_VERSION, source: source ? source.label : null,
         width: g.srcW, height: g.srcH, fps: loop && loop.stats().sourceFps,

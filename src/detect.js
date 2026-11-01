@@ -63,6 +63,14 @@
 // object is somewhere else in the other frames. Surroundings without texture (sky) give no shift
 // to go by, so candidates there are kept.
 //
+// The check must not drop an object being tracked. A slow object moves less than shiftMax
+// between the compared frames, and a high-contrast one's soft edge spills around its box, so a
+// ring close to it would follow the object and "explain" it. So: the ring starts RING_GAP px
+// out from the candidate's box; a candidate within TRACKED_NEAR px of where a confirmed track is
+// predicted (`tracked`, from the tracker) is never dropped; and a ring whose best shift equals
+// the displacement of the track it continues (within its gate) is the object moving, not the
+// background: kept.
+//
 // Inclusion zones crop detection: only the box around each zone (plus REGION_PAD, overlapping
 // boxes merged) is processed, so the cost falls with the area watched. Neighbours are warped
 // straight into the box (H composed with a translation), and only pixels inside an inclusion
@@ -75,7 +83,10 @@ const SHIFT = 4;               // fillConvexPoly fractional bits: vertices to 1/
 const MAX_EXPLAINED = 50;      // blobs dropped by size kept per region, to show and explain
 const ZONE_PAD = 2;            // px around a zone: interpolation and the 3×3 min / max reach
 const REGION_PAD = 4;          // px of context around an inclusion zone (3×3 blur, min / max)
-const RING = 5;                // px of background around a candidate for the shift check
+const RING = 4;                // px of background around a candidate for the shift check …
+const RING_GAP = 3;            // … starting this far out from its box (clear of its soft edge)
+const TRACKED_NEAR = 1.5;      // px from a confirmed track's prediction: never dropped by the shift check
+const FOLLOWS_OBJECT = 1;      // px: a ring shift this close to a track's own displacement follows it
 const RING_TEXTURE = 1.5;      // grey levels: ring cost must vary at least this much over shifts
 const SHIFT_KEEP = 0.25;       // a candidate stays if more than this share of its pixels still differ
 const SHIFT_TOL = 1;           // px: min / max reach when testing the shifted pixels (2 loses real targets)
@@ -155,6 +166,7 @@ export function createDetector(cv, options = {}) {
     let lastMode = null;       // mode of the last detection, for the debug views
     let lastCropped = false;   // last detection ran on inclusion regions (views in m.vMask / m.vDiff)
     let lastTol = null;        // adaptive mode: misalignment allowance of the last detection, px
+    let tracked = [];          // confirmed tracks expected in this frame (background-shift check)
 
     function setup(w, h) {
         for (const k of Object.keys(m)) { m[k].delete(); delete m[k]; }
@@ -273,26 +285,29 @@ export function createDetector(cv, options = {}) {
     // thrAt: per-pixel threshold (robust / basic: a pixel still differs above it), or null for the
     // adaptive mode's relative test: explained when the shift leaves less than SHIFT_EXPLAINS of
     // the candidate's summed difference (faint objects never pass a per-pixel threshold).
-    function shiftExplained(c, r, cur, ns, mask, thrAt = () => p.threshold) {
+    // move: the displacement of the track c continues, between frame t and each neighbour
+    // ([dx, dy] per neighbour), or null.
+    function shiftExplained(c, r, cur, ns, mask, thrAt = () => p.threshold, move = null) {
         const S = Math.max(1, Math.round(p.shiftMax));
         const bx0 = c.x - r.x, by0 = c.y - r.y, bx1 = bx0 + c.w, by1 = by0 + c.h;     // box, exclusive end
         // the window must leave room for the shifts and the 3×3 min / max inside the region
-        const lo = S + SHIFT_TOL;
-        const wx0 = Math.max(lo, bx0 - RING), wy0 = Math.max(lo, by0 - RING);
-        const wx1 = Math.min(r.w - lo, bx1 + RING), wy1 = Math.min(r.h - lo, by1 + RING);
-        if (wx0 > bx0 - 2 || wy0 > by0 - 2 || wx1 < bx1 + 2 || wy1 < by1 + 2) return false;  // at the edge: keep
+        const lo = S + SHIFT_TOL, out = RING_GAP + RING;
+        const wx0 = Math.max(lo, bx0 - out), wy0 = Math.max(lo, by0 - out);
+        const wx1 = Math.min(r.w - lo, bx1 + out), wy1 = Math.min(r.h - lo, by1 + out);
+        const g = RING_GAP + 1;     // at least one ring pixel on every side, else (at the edge): keep
+        if (wx0 > bx0 - g || wy0 > by0 - g || wx1 < bx1 + g || wy1 < by1 + g) return false;
         const cd = cur.data, cs = cur.step, M = mask.data;
         const C = (x, y) => cd[(y + cur.oy) * cs + x + cur.ox];
-        for (const n of ns) {
-            const nd = n.data, W = r.w;
+        for (let i = 0; i < ns.length; i++) {
+            const nd = ns[i].data, W = r.w;
             let best = Infinity, worst = 0, bdx = 0, bdy = 0;
             for (let dy = -S; dy <= S; dy++) {
                 for (let dx = -S; dx <= S; dx++) {
                     let sum = 0, cnt = 0;
                     for (let y = wy0; y < wy1; y++) {
-                        const inRows = y >= by0 - 1 && y <= by1;
+                        const inRows = y >= by0 - RING_GAP && y < by1 + RING_GAP;
                         for (let x = wx0; x < wx1; x++) {
-                            if (inRows && x >= bx0 - 1 && x <= bx1) continue;            // the ring only
+                            if (inRows && x >= bx0 - RING_GAP && x < bx1 + RING_GAP) continue;  // the ring only
                             sum += Math.abs(C(x, y) - nd[(y + dy) * W + x + dx]);
                             cnt++;
                         }
@@ -303,6 +318,8 @@ export function createDetector(cv, options = {}) {
                 }
             }
             if (worst - best < RING_TEXTURE) return false;     // nothing to align on: keep
+            // the ring lines up best where the tracked object went: it follows the object
+            if (move && Math.hypot(move[i][0], move[i][1]) >= 0.5 && Math.hypot(bdx - move[i][0], bdy - move[i][1]) <= FOLLOWS_OBJECT) return false;
             if (!thrAt) {
                 if (bdx === 0 && bdy === 0) return false;       // the background lines up as it is
                 const residual = (sx, sy) => {
@@ -394,7 +411,16 @@ export function createDetector(cv, options = {}) {
             : { data: src.__full.data, step: size.w, ox: r.x, oy: r.y };
         const kept = [], rejected = [];
         for (const c of b.candidates) {
-            if (shiftExplained(c, r, cur, ns, m.mask, thrAt)) rejected.push({ ...c, why: 'background shift' }); else kept.push(c);
+            // the confirmed track it most likely continues (tracker's prediction within its gate)
+            let t = null, td = Infinity;
+            for (const q of tracked) {
+                const d = Math.hypot(c.cx - q.x, c.cy - q.y);
+                if (d <= Math.max(TRACKED_NEAR, q.gate) && d < td) { t = q; td = d; }
+            }
+            if (t && td <= TRACKED_NEAR) { kept.push(c); continue; }
+            // warped neighbours in order t−s, t+s: the object sits −s·v and +s·v away
+            const move = t ? [[-t.dx, -t.dy], [t.dx, t.dy]] : null;
+            if (shiftExplained(c, r, cur, ns, m.mask, thrAt, move)) rejected.push({ ...c, why: 'background shift' }); else kept.push(c);
         }
         return { ...b, candidates: kept, rejected: [...rejected, ...(b.sized || [])] };
     }
@@ -712,8 +738,11 @@ export function createDetector(cv, options = {}) {
         // frames and H at estimation size (for brightness matching). Returns
         // { ok, reason, mode, candidates, components, noisy, brightness?, timings }.
         // fitErr: the camera-motion fits' error over the compared frames (processing px; adaptive).
-        detect({ prev, cur, next, Hprev, Hnext, small, fitErr }) {
+        // tracked: confirmed tracks' predicted positions in frame t and displacement over the
+        // stride, [{ x, y, dx, dy, gate }] (processing px), kept by the background-shift check.
+        detect({ prev, cur, next, Hprev, Hnext, small, fitErr, tracked: tr = [] }) {
             if (!size || size.w !== cur.cols || size.h !== cur.rows) setup(cur.cols, cur.rows);
+            tracked = tr || [];
             if (!prev || !Hprev) return { ok: false, reason: 'no camera motion for t−1 → t', candidates: [] };
             lastMode = p.detectMode;
             if (p.detectMode === 'basic') return { ok: true, reason: null, mode: 'basic', ...run('basic', { prev, cur, Hprev }) };

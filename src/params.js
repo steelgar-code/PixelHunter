@@ -11,6 +11,7 @@ export const PARAM_DEFS = [
     { key: 'view', label: 'View', group: 'view', type: 'choice', default: 'original',
       choices: [['original', 'Original'], ['stabilised', 'Stabilised'], ['points', 'Points'], ['diff', 'Raw diff'], ['mask', 'Mask']] },
     { key: 'showCandidates', label: 'Unconfirmed candidates', group: 'view', type: 'bool', default: true },
+    { key: 'showBuilding', label: 'Tracks building up (dashed, with progress)', group: 'view', type: 'bool', default: true },
     { key: 'showTruth', label: 'Ground truth (synthetic)', group: 'view', type: 'bool', default: true },
     { key: 'showZones', label: 'Detection-area zones', group: 'view', type: 'bool', default: true },
 
@@ -35,8 +36,13 @@ export const PARAM_DEFS = [
     { key: 'zonesMotion', label: 'Also ignore zones for camera motion', group: 'zones', type: 'bool', default: true },
 
     // temporal confirmation (tracker.js)
-    { key: 'confirmN', label: 'Confirm: seen in N', group: 'track', type: 'number', default: 3, min: 1, max: 10, step: 1, unit: 'frames' },
-    { key: 'confirmM', label: '… of the last M', group: 'track', type: 'number', default: 5, min: 2, max: 20, step: 1, unit: 'frames' },
+    { key: 'confirmBy', label: 'Confirm by', group: 'track', type: 'choice', default: 'count',
+      choices: [['count', 'N of M frames'], ['evidence', 'Evidence']] },
+    { key: 'minAge', label: 'Min track age', group: 'track', type: 'number', default: 0.5, min: 0, max: 3, step: 0.1, unit: 's', when: { confirmBy: 'evidence' } },
+    { key: 'minEvidence', label: 'Min evidence', group: 'track', type: 'number', default: 6, min: 1, max: 40, step: 0.5, unit: '×', when: { confirmBy: 'evidence' } },
+    { key: 'maxGap', label: 'Max gap while building', group: 'track', type: 'number', default: 3, min: 0, max: 15, step: 1, unit: 'frames', when: { confirmBy: 'evidence' } },
+    { key: 'confirmN', label: 'Confirm: seen in N', group: 'track', type: 'number', default: 3, min: 1, max: 10, step: 1, unit: 'frames', when: { confirmBy: 'count' } },
+    { key: 'confirmM', label: '… of the last M', group: 'track', type: 'number', default: 5, min: 2, max: 20, step: 1, unit: 'frames', when: { confirmBy: 'count' } },
     { key: 'gateBase', label: 'Association gate', group: 'track', type: 'number', default: 4, min: 1, max: 30, step: 1, unit: 'px' },
     { key: 'maxSpeed', label: 'Max speed (new tracks)', group: 'track', type: 'number', default: 12, min: 2, max: 60, step: 1, unit: 'px/frame' },
     { key: 'minTravel', label: 'Min travel to confirm', group: 'track', type: 'number', default: 3, min: 0, max: 30, step: 1, unit: 'px' },

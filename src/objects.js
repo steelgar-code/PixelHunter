@@ -62,6 +62,15 @@ export function missReason(r, t, w, h) {
     return `nearest candidate ${d} px from the prediction, outside the gate (${gate.toFixed(1)} px)${best.c.taken ? '; taken by another track' : ''}`;
 }
 
+// A sighting from before the track confirmed (tracker `early`) as a history row, source px.
+function earlyEntry(e, track, s) {
+    const b = e.box;
+    return { frame: e.frame, time: e.time, track, state: 'tentative', seen: true, early: true,
+        x: +((b.cx + 0.5) / s - 0.5).toFixed(1), y: +((b.cy + 0.5) / s - 0.5).toFixed(1), w: +(b.w / s).toFixed(1), h: +(b.h / s).toFixed(1),
+        speed: +(Math.hypot(e.vx, e.vy) / s).toFixed(2), ...(e.score !== undefined ? { score: +e.score.toFixed(1) } : {}),
+        ...(e.weak ? { weak: true } : {}), px: [b.cx, b.cy] };
+}
+
 const compatible = (o, b, contrast) => {
     const s1 = Math.max(o.w, o.h), s2 = Math.max(b.w, b.h);
     return s1 / s2 <= RELINK_SIZE && s2 / s1 <= RELINK_SIZE && (Math.sign(contrast) === Math.sign(o.contrast) || Math.abs(o.contrast) < 4);
@@ -82,9 +91,12 @@ export function createObjects({ kept = 40 } = {}) {
 
     // r: a pipeline result; grey: the frame shown ({ cols, rows, data }, processing px);
     // frameDuration: s, for matching history to the frame now shown.
+    // Returns { created: ids of objects new this frame, improved: ids whose best sighting is
+    // this frame's (for a thumbnail) }.
     let fd = 1 / 25;
     function update(r, grey, { frameDuration } = {}) {
         if (frameDuration > 0) fd = frameDuration;
+        const created = [], improved = [];
         const s = r.scale || 1, W = r.width, H = r.height;
         const tracks = new Map(r.tracks.map(t => [t.id, t]));
         // candidates taken by some track this frame (for the reasons)
@@ -120,9 +132,13 @@ export function createObjects({ kept = 40 } = {}) {
                     oid = o.id;
                 } else {
                     oid = nextId++;
-                    objects.set(oid, { id: oid, trackId: t.id, first: { frame: r.frame, time: r.time }, last: null, frames: 0,
-                        w: box.w, h: box.h, contrast, speed: 0, history: [], lost: null });
-                    event(objects.get(oid), r, `confirmed (track #${t.id})`);
+                    // its sightings before it confirmed, back-filled (no contrast: those frames are gone)
+                    const early = (t.early || []).map(e => earlyEntry(e, t.id, s));
+                    const first = early.length ? { frame: early[0].frame, time: early[0].time } : { frame: r.frame, time: r.time };
+                    objects.set(oid, { id: oid, trackId: t.id, first, confirmedAt: { frame: r.frame, time: r.time }, last: null, frames: 0,
+                        w: box.w, h: box.h, contrast, speed: 0, best: null, label: null, history: early, lost: null });
+                    event(objects.get(oid), r, `confirmed (track #${t.id})${early.length ? `, seen ${early.length} times before` : ''}`);
+                    created.push(oid);
                 }
                 byTrack.set(t.id, oid);
                 objects.get(oid).trackId = t.id;
@@ -143,6 +159,9 @@ export function createObjects({ kept = 40 } = {}) {
                     o.frames++;
                     o.w = entry.w; o.h = entry.h; o.contrast = contrast; o.speed = entry.speed;
                     o.lastPos = [t.box.cx, t.box.cy];
+                    // its clearest sighting so far (score, else |contrast| × area): the thumbnail's frame
+                    const q = entry.score ?? Math.abs(contrast) * Math.sqrt(t.box.area || 1);
+                    if (!o.best || q > o.best.q) { o.best = { q, frame: r.frame, time: r.time }; improved.push(o.id); }
                 }
             } else {
                 const [x, y] = t.lastSeen;
@@ -162,6 +181,7 @@ export function createObjects({ kept = 40 } = {}) {
             if (o.trackId !== null) byTrack.delete(o.trackId);
             objects.delete(old);
         }
+        return { created, improved };
     }
 
     // A pinned object a new confirmed track t should continue, or null.
@@ -198,6 +218,18 @@ export function createObjects({ kept = 40 } = {}) {
         get(oid) { return objects.get(oid) || null; },
         objectOfTrack(tid) { return byTrack.has(tid) ? byTrack.get(tid) : null; },
         isPinned(oid) { return pinned.has(oid); },
+        // the user's verdict: 'object' (kept tracking) or 'not' (not an object: hidden), or null
+        label(oid, value) {
+            const o = objects.get(oid);
+            if (!o) return null;
+            if (value !== undefined && value !== o.label) {
+                o.label = value;
+                o.history.push({ frame: o.last ? o.last.frame : null, time: o.last ? o.last.time : null, event: value === 'not' ? 'labelled: not an object' : value === 'object' ? 'labelled: object' : 'label cleared' });
+                if (value === 'not') pinned.delete(oid);
+            }
+            return o.label;
+        },
+        isHidden(oid) { const o = objects.get(oid); return !!o && o.label === 'not'; },
         pin(oid, on = !pinned.has(oid)) { if (on) pinned.add(oid); else pinned.delete(oid); return on; },
         get pinnedCount() { return pinned.size; },
         // track ids the tracker should keep watching
@@ -208,7 +240,16 @@ export function createObjects({ kept = 40 } = {}) {
 
 // An object's history as CSV (one row per frame, events as rows with only `event` filled).
 export function historyCsv(o) {
-    const cols = ['frame', 'time', 'track', 'state', 'seen', 'x', 'y', 'w', 'h', 'contrast', 'speed', 'score', 'weak', 'why', 'event'];
+    const cols = ['frame', 'time', 'track', 'state', 'seen', 'early', 'x', 'y', 'w', 'h', 'contrast', 'speed', 'score', 'weak', 'why', 'event'];
     const q = v => (v === undefined || v === null ? '' : typeof v === 'string' && /[",\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : String(v));
     return [cols.join(','), ...o.history.map(e => cols.map(c => q(e[c])).join(','))].join('\n');
+}
+
+// The objects as CSV, one row each, with the user's labels (rough ground truth for tuning).
+export function objectsCsv(list) {
+    const cols = ['id', 'label', 'first_frame', 'first_time', 'confirmed_frame', 'confirmed_time', 'last_frame', 'last_time', 'frames', 'w', 'h', 'contrast', 'speed'];
+    const q = v => (v === undefined || v === null ? '' : String(v));
+    const rows = list.map(o => [o.id, o.label, o.first.frame, o.first.time?.toFixed(3), o.confirmedAt?.frame, o.confirmedAt?.time?.toFixed(3),
+        o.last?.frame, o.last?.time?.toFixed(3), o.frames, o.w?.toFixed(1), o.h?.toFixed(1), o.contrast?.toFixed(1), o.speed?.toFixed(2)].map(q).join(','));
+    return [cols.join(','), ...rows].join('\n');
 }

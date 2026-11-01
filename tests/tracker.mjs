@@ -232,3 +232,60 @@ const confirmedIds = tracks => tracks.filter(t => t.state === 'confirmed' && t.m
     for (let k = 0; k < 30; k++) s = tr.step([], back);
     ok('… and back in view where it was', Math.abs(s[0].lastSeen[0] - 120) < 1e-6 && s[0].id === 1, s[0].lastSeen);
 }
+{
+    // predictions for the background-shift check: confirmed tracks seen recently, carried by H
+    const tr = createTracker();
+    for (let k = 0; k < 5; k++) tr.step([blob(100 + 4 * k, 50 + 2 * k), blob(400, 300 + 7 * (k % 2))], I);
+    const pr = tr.predict([1, 0, 10, 0, 1, -5, 0, 0, 1]);
+    ok('predict: only confirmed tracks, carried by H and moved on by their velocity', pr.length === 1 && Math.abs(pr[0].x - (116 + 4 + 10)) < 0.3 && Math.abs(pr[0].y - (58 + 2 - 5)) < 0.3, pr);
+    ok('… with their velocity and gate', Math.abs(pr[0].vx - 4) < 0.2 && pr[0].gate > 0, pr[0]);
+    ok('… nothing without camera motion', tr.predict(null).length === 0);
+}
+{
+    // confirmation by evidence: age (s) and summed strength
+    const ev = { confirmBy: 'evidence', minAge: 0.4, minEvidence: 6 };
+    const run = (strength, frames = 30, fps = 25) => {
+        const tr = createTracker(ev);
+        let at = null, early = null;
+        for (let k = 0; k < frames; k++) {
+            const s = tr.step([{ ...blob(100 + 4 * k, 50 + 2 * k), strength }], I, 1, { time: k / fps, frame: k });
+            const c = s.find(t => t.state === 'confirmed' && t.matched);
+            if (c && at === null) { at = k; early = c.early; }
+        }
+        return { at, early };
+    };
+    const strong = run(3), plain = run(1), faint = run(0.5);
+    ok('evidence: a strong object confirms as soon as it is old enough (0.4 s = frame 10)', strong.at === 10, strong.at);
+    ok('… one at the threshold once the evidence adds up (6 sightings, but not before 0.4 s)', plain.at === 10, plain.at);
+    ok('… a faint one later (12 sightings at 0.5)', faint.at === 11, faint.at);
+    ok('… its earlier sightings are handed out with the confirmation, in order', strong.early.length === 10 && strong.early[0].frame === 0 && strong.early[9].frame === 9 && strong.early[0].time === 0, strong.early.map(e => e.frame));
+    const tr = createTracker({ ...ev, minAge: 0 });
+    let n = 0;
+    for (let k = 0; k < 12; k++) n += tr.step([{ ...blob(100 + 4 * k, 50), strength: 10 }], I, 1, { time: k / 25, frame: k }).filter(t => t.state === 'confirmed' && t.matched).length;
+    ok('… one sighting counts at most 3 (a single bright blip never confirms alone)', n === 12 - 2, n);
+    // a track still building up is dropped after more than maxGap missed frames
+    const tg = createTracker({ ...ev, maxGap: 2 });
+    const ids = new Set();
+    [1, 1, 1, 0, 0, 0, 1, 1].forEach((v, k) => { for (const t of tg.step(v ? [{ ...blob(100 + 4 * k, 50), strength: 1 }] : [], I, 1, { time: k / 25, frame: k })) ids.add(t.id); });
+    ok('… a building track missed 3 frames (maxGap 2) is dropped: a new id after', ids.size === 2, [...ids]);
+    // random noise: nothing confirms with evidence either
+    let ever = 0;
+    for (const seed of [5, 6, 7, 8]) {
+        const tn = createTracker(ev);
+        const r = mulberry32(seed);
+        for (let k = 0; k < 300; k++) ever += tn.step(Array.from({ length: 4 }, () => ({ ...blob(r() * 640, r() * 360), strength: 1.5 })), I, 1, { time: k / 25, frame: k })
+            .filter(t => t.state === 'confirmed' && t.matched).length;
+    }
+    ok('evidence: random noise blobs never confirm', ever === 0, ever);
+}
+{
+    // N of M hands out the earlier sightings too, and a progress for tracks building up
+    const tr = createTracker();
+    let s;
+    const prog = [];
+    for (let k = 0; k < 3; k++) { s = tr.step([blob(100 + 4 * k, 50)], I, 1, { time: k / 25, frame: k }); prog.push(+s[0].progress.toFixed(2)); }
+    ok('N of M: progress 1/3, 2/3, then confirmed', prog.join() === '0.33,0.67,1', prog);
+    ok('… the first two sightings handed out on confirming', s[0].early && s[0].early.map(e => e.frame).join() === '0,1', s[0].early);
+    s = tr.step([blob(112, 50)], I, 1, { time: 3 / 25, frame: 3 });
+    ok('… once only', !s[0].early);
+}

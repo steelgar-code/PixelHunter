@@ -14,6 +14,12 @@ export function createExportLog() {
             const edge = v => +(v / s).toFixed(2);
             for (const t of r.confirmed) {
                 const b = t.box;
+                // sightings from before it confirmed (back-filled once, on the frame it confirms)
+                for (const e of t.early || []) {
+                    rows.push({ frame: e.frame, time: +e.time.toFixed(4), trackId: t.id, ...(t.objectId !== undefined && t.objectId !== null ? { objectId: t.objectId } : {}),
+                        box: [edge(e.box.x), edge(e.box.y), edge(e.box.w), edge(e.box.h)], cx: src(e.box.cx), cy: src(e.box.cy),
+                        area: +(e.box.area / (s * s)).toFixed(1), vx: +(e.vx / s).toFixed(3), vy: +(e.vy / s).toFixed(3), early: true });
+                }
                 rows.push({
                     frame: r.frame, time: +r.time.toFixed(4), trackId: t.id, ...(t.objectId !== undefined && t.objectId !== null ? { objectId: t.objectId } : {}),
                     box: [edge(b.x), edge(b.y), edge(b.w), edge(b.h)],
@@ -26,7 +32,11 @@ export function createExportLog() {
         clear() { rows = []; ids.clear(); },
         get count() { return rows.length; },
         get tracks() { return ids.size; },
-        toJSON(meta) { return { meta, detections: rows }; },
+        // detections in frame order (back-filled ones are added late); objects: the user's labels
+        toJSON(meta, objects) {
+            const detections = [...rows].sort((a, b) => (a.frame ?? 0) - (b.frame ?? 0) || a.trackId - b.trackId);
+            return { meta, ...(objects ? { objects } : {}), detections };
+        },
     };
 }
 
