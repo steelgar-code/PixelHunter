@@ -115,6 +115,13 @@ export const CONFIGS = {
     'mid+ev-1s': { confirmBy: 'evidence', minAge: 1, minEvidence: 10 },
     'mid+ev-gap5': { confirmBy: 'evidence', maxGap: 5 },
     'highest+ev': { ...PRESETS.highest.values, confirmBy: 'evidence' },
+    // compressed footage: a floor for the patch sums (minMean) against a higher min contrast
+    'mid+mean2': { minMean: 2 },
+    'mid+mean3': { minMean: 3 },
+    'mid+mc8': { minContrast: 8 },
+    'mid+mc10': { minContrast: 10 },
+    'mid+mean3+mc6': { minMean: 3, minContrast: 6 },
+    'highest+mean3': { ...PRESETS.highest.values, minMean: 3 },
     // slow faint targets: the Highest preset's stride and confirmation with the adaptive detector
     'adaptive-slow': { ...PRESETS.highest.values, detectMode: 'adaptive', sigmas: 6 },
 };

@@ -104,6 +104,7 @@ export const DETECT_DEFAULTS = {
     threshold: 20,         // grey levels (robust, basic)
     sigmas: 7,             // adaptive: threshold in units of the local noise
     minContrast: 4,        // adaptive: lowest threshold, grey levels
+    minMean: 0,            // adaptive: 2×2 and 3×3 sums must average this many grey levels a pixel (0: off)
     weakMargin: 2.5,       // adaptive: weak candidates down to sigmas − this (0: none)
     noiseFrom: 'plain',    // adaptive: noise scaled from the plain difference ('plain', calibrated),
                            // or each k×k sum's own RMS ('sums': underestimates the tails of these
@@ -653,6 +654,14 @@ export function createDetector(cv, options = {}) {
                 } else {
                     cv.absdiff(m.S, m.zero, m.S);
                     cv.divide(m.S, m.sig, m.Zk, 1 / (SUM_NOISE * k));
+                }
+                // compressed footage: in flat areas the measured noise is ~0 and the floor rules,
+                // but compression changes whole blocks by a grey level or two at once (noise
+                // correlated over the block), so a 2×2 or 3×3 sum must also average minMean per
+                // pixel: Zk is capped below `sigmas` where it doesn't
+                if (k > 1 && p.minMean > 0) {
+                    m.S.convertTo(m.tmp2, cv.CV_32F, p.sigmas / (k * k * p.minMean));
+                    cv.min(m.Zk, m.tmp2, m.Zk);
                 }
                 if (k === 1) m.Zk.copyTo(m.Z); else cv.max(m.Z, m.Zk, m.Z);
             }
