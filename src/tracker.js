@@ -39,6 +39,13 @@
 // confirmed are handed out once, with the confirmation (`early`), so the history and the export
 // can be back-filled.
 //
+// Spots fixed on the screen (screenFixed, an option): dust on the lens, a dead pixel, a burned-in
+// overlay, or compression blocks on flat sky (the block grid is fixed to the screen) stay put in
+// the frame while the camera moves, so against the background they travel steadily and pass min
+// travel and the path check. A track whose recent sightings stay within SCREEN_FIXED px of each
+// other on the screen doesn't confirm. (Off when the camera follows the object: then the object
+// stays put on the screen.)
+//
 // Pinned tracks (setPinned: the user's objects of interest) are kept watching: never dropped
 // for being gone too long or for frames without camera motion, they wait at their last seen
 // position (carried with the scene, also out of view) and pick up movement there again under
@@ -67,6 +74,7 @@ export const TRACK_DEFAULTS = {
     minAge: 0.5,           // s: evidence mode, a track confirms no sooner than this after it started …
     minEvidence: 6,        // … and once its sightings' strength adds up to this
     maxGap: 3,             // evidence mode: missed frames in a row before a track still building up is dropped
+    screenFixed: true,     // don't confirm tracks that stay put on the screen while the camera moves
 };
 
 const CROWD_RADIUS = 40;       // px around a prediction in which blob density is measured
@@ -76,6 +84,7 @@ const PATH_RESTART = 4;        // missed frames after which the path check start
 const WEAK_MIN_AREA = 0.12;    // a weak blob continues a track only at ≥ this × the track's last blob area
 const EVIDENCE_CAP = 3;        // evidence: one sighting counts at most this much
 const EARLY_KEPT = 300;        // sightings kept per track until it confirms (for back-filling)
+const SCREEN_FIXED = 1.5;      // px: sightings this close together on the screen are a screen-fixed spot
 
 const popcount = x => { let n = 0; while (x) { n += x & 1; x >>>= 1; } return n; };
 
@@ -196,7 +205,7 @@ export function createTracker(options = {}) {
             const b = blobs[j];
             // seen again after a gap: its motion may have changed (stop and go), so the path
             // check starts over from here
-            if (t.misses >= PATH_RESTART) t.pts = [];
+            if (t.misses >= PATH_RESTART) { t.pts = []; t.raw = []; }
             if (restart) {
                 // picked up again after a pause (or where it stopped): same id, but it confirms
                 // afresh from here, so noise around a stopped object can't show as a detection
@@ -205,6 +214,7 @@ export function createTracker(options = {}) {
                 t.hits = 0;
                 t.sx = b.cx; t.sy = b.cy;
                 t.pts = [];
+                t.raw = [];
                 t.reacquired = (t.reacquired || 0) + 1;
                 t.ev = 0; t.t0 = now; t.early = [];
             }
@@ -225,6 +235,8 @@ export function createTracker(options = {}) {
             t.lx = b.cx; t.ly = b.cy;
             t.pts.push([b.cx, b.cy, clock]);
             if (t.pts.length > PATH_POINTS) t.pts.shift();
+            (t.raw ??= []).push([b.cx, b.cy]);            // on the screen, not carried with the scene
+            if (t.raw.length > PATH_POINTS) t.raw.shift();
             t.ev += strength(b);
             if (!t.confirmed && t.early.length < EARLY_KEPT) t.early.push(sighting(b, frame, t));
         }
@@ -245,7 +257,7 @@ export function createTracker(options = {}) {
             if (t.justConfirmed) t.early = [];       // handed out with the last snapshot
             t.justConfirmed = false;
             if (!t.confirmed && !paused && t.matched && enough(t) && Math.hypot(t.x - t.sx, t.y - t.sy) >= p.minTravel
-                && (!p.pathCheck || pathDeviation(t.pts) <= p.pathTolerance)) {
+                && (!p.pathCheck || pathDeviation(t.pts) <= p.pathTolerance) && !(p.screenFixed && fixedOnScreen(t))) {
                 t.confirmed = true;
                 t.justConfirmed = true;
             }
@@ -259,12 +271,20 @@ export function createTracker(options = {}) {
             if (usedB.has(j) || b.weak || paused) return;
             const t = { id: nextId++, x: b.cx, y: b.cy, vx: 0, vy: 0, sx: b.cx, sy: b.cy, lx: b.cx, ly: b.cy, hist: 1, hits: 1, misses: 0, age: 1,
                 matched: true, confirmed: false, box: { x: b.x, y: b.y, w: b.w, h: b.h, area: b.area, cx: b.cx, cy: b.cy },
-                trail: [[b.cx, b.cy]], pts: [[b.cx, b.cy, clock]], ev: strength(b), t0: now, early: [] };
+                trail: [[b.cx, b.cy]], pts: [[b.cx, b.cy, clock]], raw: [[b.cx, b.cy]], ev: strength(b), t0: now, early: [] };
             t.early.push(sighting(b, frame, t));
             t.confirmed = t.justConfirmed = !evidence() && p.confirmN <= 1 && p.minTravel <= 0;
             tracks.push(t);
         });
         return snapshot();
+    }
+
+    // all recent sightings within SCREEN_FIXED px of their mean, on the screen
+    function fixedOnScreen(t) {
+        const r = t.raw || [];
+        if (r.length < 3) return false;
+        const mx = r.reduce((a, q) => a + q[0], 0) / r.length, my = r.reduce((a, q) => a + q[1], 0) / r.length;
+        return r.every(([x, y]) => Math.hypot(x - mx, y - my) <= SCREEN_FIXED);
     }
 
     // enough sightings to confirm: N of the last M, or (evidence) old enough and strong enough

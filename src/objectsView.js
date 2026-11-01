@@ -11,7 +11,8 @@ const THUMB = 64;                  // px, stored thumbnail size
 const CARD_MS = 8000;              // a card stays this long (paused while hovered)
 const CARDS_MAX = 3;
 const LANES = 6;                   // objects shown on the timeline
-const LANE_H = 4;                  // px per lane (3 + 1 gap)
+const LANES_H = 12;                // px: the strip under the timeline, always this tall
+const laneH = n => Math.min(4, LANES_H / Math.max(1, n));   // px per lane (with a 1 px gap from 3)
 const ZOOMS = [4, 8, 16];
 const SPARK_FRAMES = 150;
 const STATE_KEY = 'pixelhunter.objectsView.v1';
@@ -91,6 +92,8 @@ export function createObjectsView(d) {
         if (fresh && created.length) {
             const shown = created.filter(oid => !objs.isHidden(oid));
             if (shown.length && d.params.cards) for (const oid of shown) addCard(oid);
+            // open the newest in the inspector, unless it shows an object being kept track of
+            if (shown.length && d.params.autoInspect && (open === null || !objs.isPinned(open))) inspect(shown[shown.length - 1]);
             if (shown.length && d.params.pauseOnNew) d.pause();
         }
         dirty = true;
@@ -479,22 +482,21 @@ export function createObjectsView(d) {
         const list = dur ? objs.list().filter(o => o.last && o.label !== 'not').sort((a, b) => (objs.isPinned(b.id) - objs.isPinned(a.id)) || (b.id === open) - (a.id === open) || b.last.time - a.last.time).slice(0, LANES) : [];
         lanes = list.map(o => ({ o, segs: segmentsOf(o, fd) }));
         const dpr = window.devicePixelRatio || 1;
-        const w = Math.max(1, Math.round(c.clientWidth * dpr)), hCss = lanes.length * LANE_H;
-        c.style.height = `${hCss}px`;
-        const h = Math.round(hCss * dpr);
+        const w = Math.max(1, Math.round(c.clientWidth * dpr)), lh = laneH(lanes.length);
+        const h = Math.round(LANES_H * dpr);
         if (c.width !== w || c.height !== h) { c.width = w; c.height = h; }
         const ctx = c.getContext('2d');
         ctx.clearRect(0, 0, w, h);
         lanes.forEach(({ o, segs }, i) => {
-            const y = i * LANE_H * dpr;
+            const y = i * lh * dpr, bar = Math.max(1, (lh >= 3 ? lh - 1 : lh * 0.75)) * dpr;
             ctx.fillStyle = 'rgb(255 255 255 / 0.05)';
-            ctx.fillRect(0, y, w, (LANE_H - 1) * dpr);
+            ctx.fillRect(0, y, w, bar);
             const colour = objs.isPinned(o.id) ? PIN : LIVE;
             for (const [t0, t1, early] of segs) {
                 ctx.globalAlpha = early ? 0.4 : o.id === open ? 1 : 0.75;
                 ctx.fillStyle = colour;
                 const x0 = t0 / dur * w, x1 = Math.max(x0 + 2 * dpr, (t1 + fd) / dur * w);
-                ctx.fillRect(x0, y, x1 - x0, (LANE_H - 1) * dpr);
+                ctx.fillRect(x0, y, x1 - x0, bar);
             }
             ctx.globalAlpha = 1;
         });
@@ -504,7 +506,7 @@ export function createObjectsView(d) {
     function laneAt(e) {
         const c = $('tlLanes'), rect = c.getBoundingClientRect(), { loop } = d.current();
         if (!lanes.length || !loop || !Number.isFinite(loop.duration)) return null;
-        const i = Math.floor((e.clientY - rect.top) / LANE_H);
+        const i = Math.floor((e.clientY - rect.top) / laneH(lanes.length));
         if (i < 0 || i >= lanes.length || e.clientX < rect.left || e.clientX > rect.right) return null;
         const t = (e.clientX - rect.left) / rect.width * loop.duration;
         // the nearest segment's time, within 6 screen px
@@ -617,6 +619,7 @@ export function createObjectsView(d) {
         showHistory,
         laneAt,
         renderLanes,
+        get laneCount() { return lanes.length; },
         // a new source or Clear: everything goes
         clear() {
             thumbs.clear();

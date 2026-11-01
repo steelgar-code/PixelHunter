@@ -45,6 +45,10 @@
             <canvas id="overlay"></canvas>
             <div id="hud" class="hud mono" hidden></div>
             <div id="cards" class="cards" aria-live="polite"></div>
+            <div id="loading" class="loading" role="status" aria-live="polite" hidden>
+                <span class="spinner" aria-hidden="true"></span>
+                <span id="loadingText"></span>
+            </div>
             <div id="empty" class="empty">
                 <p>Open a video file, or drop one here.</p>
                 <button type="button" class="primary" data-open>Open video file…</button>
@@ -78,7 +82,7 @@
             <div class="timeline-wrap">
                 <input type="range" id="timeline" min="0" max="1000" value="0" step="1" disabled aria-label="Position">
                 <div id="tlMarks" class="tl-marks"></div>
-                <canvas id="tlLanes" class="tl-lanes" height="0" aria-label="When each object was seen"></canvas>
+                <canvas id="tlLanes" class="tl-lanes" aria-label="When each object was seen"></canvas>
                 <span id="tlHover" class="tl-hover mono" hidden></span>
             </div>
             <span id="time" class="mono time" role="button" tabindex="0" title="Go to a time or a frame (click, or G)">0:00.000</span>
@@ -87,8 +91,7 @@
             </form>
             <button type="button" id="bookmark" disabled title="Bookmark this frame (B)">☆ Mark</button>
         </div>
-        <div id="bookmarks" class="bookmarks" hidden></div>
-        <p class="keys muted"><kbd>Space</kbd> play / pause · <kbd>←</kbd> <kbd>→</kbd> one frame · <kbd>B</kbd> bookmark · <kbd>G</kbd> go to a time or frame · click an object on the video to inspect it, double-click to keep tracking it · <kbd>Esc</kbd> close / stop drawing zones</p>
+        <p class="keys muted"><kbd>Space</kbd> play / pause · <kbd>←</kbd> <kbd>→</kbd> one frame · <kbd>B</kbd> bookmark (ticks on the timeline; right-click one to remove it) · <kbd>G</kbd> go to a time or frame · click an object on the video to inspect it, double-click to keep tracking it · <kbd>Esc</kbd> close / stop drawing zones</p>
         <section id="objectHistory" class="drawer" hidden aria-label="Object history">
             <div class="row history-head">
                 <span id="historyTitle" class="mono"></span>

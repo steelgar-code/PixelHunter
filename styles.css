@@ -154,10 +154,19 @@ button[aria-pressed=true] { background: color-mix(in srgb, var(--danger) 25%, va
 .panel details[open] > summary::before { transform: rotate(90deg); }
 .panel summary .help-btn { margin-left: auto; }
 
-.bookmarks { display: flex; flex-wrap: wrap; gap: 6px; }
-.bookmarks .chip { display: inline-flex; align-items: center; gap: 4px; border: 1px solid var(--line); border-radius: 999px; padding: 1px 4px 1px 10px; background: var(--panel); }
-.bookmarks .chip button { border: 0; background: none; padding: 0 4px; }
-.bookmarks .chip .go { padding: 2px 2px; }
+#bookmark[aria-pressed=true] { color: #ffcf5c; border-color: #ffcf5c; background: var(--panel); }
+
+/* settings that have no effect with the current choices: dimmed, with a note saying when they apply */
+.param.inactive > :not(.when-note) { opacity: 0.4; }
+.param .when-note { display: none; font-size: 11px; color: var(--muted); }
+.param.inactive .when-note { display: block; }
+
+/* a busy state the user should notice: over the player */
+.loading { position: absolute; inset: 0; z-index: 6; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px;
+    background: rgb(0 0 0 / 0.55); color: var(--text); font-size: 14px; text-align: center; padding: 16px; }
+.spinner { width: 34px; height: 34px; border-radius: 50%; border: 3px solid color-mix(in srgb, var(--accent) 25%, transparent); border-top-color: var(--accent); animation: spin 0.8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .spinner { animation-duration: 2.4s; } }
 
 .objects-head { display: flex; align-items: center; gap: 8px; }
 .objects-head .segmented { flex: 1; }
@@ -225,7 +234,7 @@ button[aria-pressed=true] { background: color-mix(in srgb, var(--danger) 25%, va
 
 /* objects on the timeline: one lane each, under the slider */
 .transport .timeline-wrap { flex-direction: column; align-items: stretch; }
-.tl-lanes { display: block; width: calc(100% - 16px); margin: 0 8px; cursor: pointer; }
+.tl-lanes { display: block; width: calc(100% - 16px); height: 12px; margin: 0 8px; cursor: pointer; }
 
 /* the history of one object, full width under the player */
 .drawer { border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); }

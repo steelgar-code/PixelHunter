@@ -60,8 +60,8 @@ try {
     await page.click('#objFilter button[data-filter=all]');
 
     // timeline lanes
-    const lanes = await page.evaluate(() => document.getElementById('tlLanes').getBoundingClientRect().height);
-    ok('timeline: a lane per object', lanes >= 8, lanes);
+    const lanes = await page.evaluate(() => ({ h: document.getElementById('tlLanes').getBoundingClientRect().height, n: __ph.objectsView.laneCount }));
+    ok('timeline: a lane per object, in a strip of fixed height (the player doesn\'t grow)', lanes.h === 12 && lanes.n >= 2, lanes);
     const before = await page.evaluate(() => __ph.shown.frame);
     const hit = await page.evaluate(() => {
         // the first lane's first segment
@@ -106,11 +106,41 @@ try {
     // confirmation by evidence: its settings replace N and M
     await page.click('#tab-settings');
     await page.click('#pConfirmation > summary');
-    ok('N of M settings shown by default, the evidence ones not', await page.isVisible('#param-confirmN') && !(await page.isVisible('#param-minAge')));
+    const inactive = key => page.evaluate(k => document.getElementById(`param-${k}`).closest('.param').classList.contains('inactive'), key);
+    ok('N of M settings in use by default, the evidence ones dimmed', !(await inactive('confirmN')) && await inactive('minAge'));
     await page.click('label:has(input[name=param-confirmBy][value=evidence])');
-    ok('Evidence: min age, min evidence and max gap instead', await page.isVisible('#param-minAge') && await page.isVisible('#param-minEvidence') && !(await page.isVisible('#param-confirmN')));
+    ok('Evidence: min age, min evidence and max gap in use instead, N and M dimmed', !(await inactive('minAge')) && !(await inactive('minEvidence')) && await inactive('confirmN'));
+    ok('… with a note saying when they apply', /only with Confirm by: N of M frames/.test(await page.evaluate(() => document.getElementById('param-confirmN').closest('.param').querySelector('.when-note').textContent)));
+    ok('Adaptive (default): the diff threshold is dimmed, the adaptive settings in use', await inactive('threshold') && !(await inactive('sigmas')));
+    await page.click('#pDetection > summary').catch(() => {});
+    await page.evaluate(() => { const i = document.querySelector('input[name=param-detectMode][value=robust]'); i.checked = true; i.dispatchEvent(new Event('change')); });
+    ok('Robust: the diff threshold in use, the adaptive settings dimmed', !(await inactive('threshold')) && await inactive('sigmas') && await inactive('minMean'));
     ok('no page errors', errors.length === 0, errors);
     await page.close();
+
+    // open the zoomed view for each new object
+    {
+        const { page: p, errors: e4 } = await openApp(browser, { hash: 'mode=everyFrame&cards=false&autoInspect=true' });
+        ok('no busy overlay once OpenCV.js is ready', await p.isHidden('#loading'));
+        await loadScene(p, 'pan-dots');
+        await p.waitForFunction(() => __ph.results.length >= 1, null, { timeout: 30000 });
+        for (let i = 0; i < 6; i++) await p.click('#step');
+        await p.waitForTimeout(300);
+        ok('the option opens the inspector on a new object by itself', await p.isVisible('#inspector') && (await p.evaluate(() => __ph.objectsView.open)) !== null);
+        ok('no page errors (auto inspect)', e4.length === 0, e4);
+        await p.close();
+    }
+
+    // a busy overlay while a scene renders / a source opens
+    {
+        const { page: p } = await openApp(browser, { hash: 'mode=everyFrame' });
+        await p.evaluate(() => { window.__sawLoading = false; new MutationObserver(() => { if (!document.getElementById('loading').hidden) window.__sawLoading = document.getElementById('loadingText').textContent; }).observe(document.getElementById('loading'), { attributes: true }); });
+        await loadScene(p, 'trees');
+        await p.waitForFunction(() => __ph.results.length >= 1, null, { timeout: 30000 });
+        const saw = await p.evaluate(() => window.__sawLoading);
+        ok('opening a source shows a busy overlay with what it is doing, gone after', /Rendering|Opening/.test(saw || '') && await p.isHidden('#loading'), saw);
+        await p.close();
+    }
 
     // pause when a new object is confirmed
     {

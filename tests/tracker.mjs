@@ -289,3 +289,21 @@ const confirmedIds = tracks => tracks.filter(t => t.state === 'confirmed' && t.m
     s = tr.step([blob(112, 50)], I, 1, { time: 3 / 25, frame: 3 });
     ok('… once only', !s[0].early);
 }
+{
+    // a spot fixed on the screen while the camera pans 2 px/frame: against the background it
+    // moves steadily, but it never confirms (unless the check is off: a camera following its target)
+    const pan = [1, 0, -2, 0, 1, 0, 0, 0, 1];
+    const run = opts => {
+        const tr = createTracker(opts);
+        let n = 0;
+        for (let k = 0; k < 20; k++) n += confirmedIds(tr.step([blob(200 + (k % 2) * 0.4, 120)], pan)).length;
+        return n;
+    };
+    ok('a spot fixed on the screen (camera panning) never confirms', run({}) === 0, run({}));
+    ok('… unless the screen-fixed check is off', run({ screenFixed: false }) > 10, run({ screenFixed: false }));
+    // a real object moving on the screen with the same pan confirms
+    const tr = createTracker();
+    let n = 0;
+    for (let k = 0; k < 10; k++) n += confirmedIds(tr.step([blob(200 + 3 * k, 120)], pan)).length;
+    ok('… an object moving on the screen still confirms', n >= 7, n);
+}

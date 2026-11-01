@@ -54,6 +54,16 @@ const FRAME_LOG = 5000;
 const ph = window.__ph = { params, frames: [], results: [], cvState, ready: false, error: null, setZones: (kind, z) => setZones(kind, z), applyPreset: k => applyPreset(k),
     get userPresets() { return userPresets; } };
 
+// A busy state over the player (spinner and text), or null to clear it. Several can overlap
+// (keyed by what is busy); the latest one's text shows.
+const busyStates = new Map();
+function setLoading(key, text) {
+    if (text) busyStates.set(key, text); else busyStates.delete(key);
+    const last = [...busyStates.values()].pop();
+    $('loading').hidden = !last;
+    $('loadingText').textContent = last || '';
+}
+
 function showBanner(text) {
     const b = $('banner');
     b.textContent = text;
@@ -234,7 +244,13 @@ function renderParams() {
             row.append(guardSlider(input, def));
         }
         if (HELP[def.key]) head.append(helpToggle(row, HELP[def.key], def.label));
-        if (def.when) conditional.push([row, def.when]);
+        if (def.when) {
+            const note = document.createElement('span');
+            note.className = 'when-note';
+            note.textContent = `Not used now: only ${whenText(def.when)}`;
+            row.append(note);
+            conditional.push([row, def.when]);
+        }
         host.append(row);
     }
     updateConditional();
@@ -257,8 +273,19 @@ const DEF_GROUP = new Map(PARAM_DEFS.map(d => [d.key, d.group]));
 
 // Settings that only apply when another has a given value (def.when) are shown only then.
 const conditional = [];
+// (shown dimmed, with a note saying when they apply, so it is clear what has an effect now)
+const applies = when => Object.entries(when).every(([k, v]) => (Array.isArray(v) ? v : [v]).some(x => String(params[k]) === String(x)));
 function updateConditional() {
-    for (const [row, when] of conditional) row.hidden = !Object.entries(when).every(([k, v]) => String(params[k]) === String(v));
+    for (const [row, when] of conditional) row.classList.toggle('inactive', !applies(when));
+}
+// "with Detection: Robust or Basic", "with “Confirm steady paths only” on"
+function whenText(when) {
+    return Object.entries(when).map(([k, v]) => {
+        const d = PARAM_DEFS.find(x => x.key === k);
+        if (d.type === 'bool') return `with “${d.label}” ${v ? 'on' : 'off'}`;
+        const names = (Array.isArray(v) ? v : [v]).map(x => (d.choices.find(c => c[0] === x) || [x, x])[1].replace(/\s*\(.*\)$/, ''));
+        return `with ${d.label}: ${names.join(' or ')}`;
+    }).join(', ');
 }
 
 function setParam(key, value) {
@@ -687,6 +714,7 @@ async function goToTime(T, why = 'seek') {
     if (!loop || navigating || !Number.isFinite(T)) return;
     navigating = true;
     $('stage').classList.add('busy');
+    const shown = setTimeout(() => setLoading('jump', `Going to ${fmtTime(T)}…`), 300);
     try {
         loop.pause();
         const s = Math.max(1, Math.round(params.stride));
@@ -699,6 +727,8 @@ async function goToTime(T, why = 'seek') {
         }
     } finally {
         navigating = false;
+        clearTimeout(shown);
+        setLoading('jump', null);
         $('stage').classList.remove('busy');
         render();
         updateTransport();
@@ -754,47 +784,45 @@ function saveBookmarks(label, list) {
     } catch { /* not remembered */ }
 }
 
+// Bookmarks the frame shown, or removes its bookmark if it has one.
 function addBookmark() {
     if (!source || !ph.shown || ph.shown.frame === null) return;
-    const list = bookmarksOf(source.label);
-    if (!list.some(b => b.frame === ph.shown.frame)) list.push({ frame: ph.shown.frame, time: ph.shown.time });
+    let list = bookmarksOf(source.label);
+    if (list.some(b => b.frame === ph.shown.frame)) list = list.filter(b => b.frame !== ph.shown.frame);
+    else list.push({ frame: ph.shown.frame, time: ph.shown.time });
     list.sort((a, b) => a.frame - b.frame);
     saveBookmarks(source.label, list);
     renderBookmarks();
 }
 
+// The Mark button says whether the frame shown is bookmarked.
+function updateMarkButton() {
+    const on = !!(source && ph.shown && ph.shown.frame !== null && bookmarksOf(source.label).some(b => b.frame === ph.shown.frame));
+    $('bookmark').textContent = on ? '★ Marked' : '☆ Mark';
+    $('bookmark').setAttribute('aria-pressed', String(on));
+    $('bookmark').title = on ? 'Remove the bookmark of this frame (B)' : 'Bookmark this frame (B)';
+}
+
+// Bookmarks are ticks on the timeline: click goes there, right-click (or a long press) removes.
 function renderBookmarks() {
-    const host = $('bookmarks');
     const list = source ? bookmarksOf(source.label) : [];
-    host.replaceChildren(...list.map(b => {
-        const chip = document.createElement('span');
-        chip.className = 'chip mono';
-        const go = document.createElement('button');
-        go.type = 'button';
-        go.className = 'go';
-        go.textContent = `${fmtTime(b.time)} #${b.frame}`;
-        go.title = 'Go to this frame';
-        go.addEventListener('click', () => goToTime(b.time));
-        const del = document.createElement('button');
-        del.type = 'button';
-        del.textContent = '×';
-        del.title = 'Remove this bookmark';
-        del.addEventListener('click', () => { saveBookmarks(source.label, bookmarksOf(source.label).filter(x => x.frame !== b.frame)); renderBookmarks(); });
-        chip.append(go, del);
-        return chip;
-    }));
-    host.hidden = !list.length;
-    // and as ticks on the timeline
     const dur = loop && loop.duration;
+    const remove = b => { saveBookmarks(source.label, bookmarksOf(source.label).filter(x => x.frame !== b.frame)); renderBookmarks(); };
     $('tlMarks').replaceChildren(...(Number.isFinite(dur) && dur > 0 ? list : []).map(b => {
         const m = document.createElement('button');
         m.type = 'button';
         m.style.left = `${Math.min(100, Math.max(0, b.time / dur * 100))}%`;
-        m.title = `Bookmark ${fmtTime(b.time)} #${b.frame}`;
-        m.setAttribute('aria-label', m.title);
+        m.title = `Bookmark ${fmtTime(b.time)} #${b.frame}: click to go there, right-click to remove`;
+        m.setAttribute('aria-label', `Bookmark ${fmtTime(b.time)} #${b.frame}`);
         m.addEventListener('click', () => goToTime(b.time));
+        m.addEventListener('contextmenu', e => { e.preventDefault(); remove(b); });
+        let press = null;
+        m.addEventListener('pointerdown', e => { if (e.pointerType !== 'mouse') press = setTimeout(() => { press = null; remove(b); }, 700); });
+        m.addEventListener('pointerup', () => clearTimeout(press));
+        m.addEventListener('pointerleave', () => clearTimeout(press));
         return m;
     }));
+    updateMarkButton();
 }
 
 // --- objects: the list, inspector, cards, timeline lanes and history (objectsView.js) -----------
@@ -950,6 +978,15 @@ function bindPanels() {
 // next: a video source (sources.js), or { kind: 'synthetic', label, scene }
 async function openSource(next) {
     setMenu(false);
+    setLoading('source', `Opening ${next.label}…`);
+    try {
+        await openSourceNow(next);
+    } finally {
+        setLoading('source', null);
+    }
+}
+
+async function openSourceNow(next) {
     if (loop) { loop.destroy(); loop = null; }
     if (source && source.stop) source.stop(video);
     source = null;
@@ -1017,6 +1054,7 @@ function openFile(file) {
 function openScene(key) {
     if (!cvState.ready || !SCENES[key]) return;
     $('srcLabel').textContent = `Rendering ${SCENES[key].label}…`;
+    setLoading('source', `Rendering the synthetic scene “${SCENES[key].label}”…`);
     // let the label paint before the (synchronous) world texture is built
     setTimeout(() => openSource({ kind: 'synthetic', label: SCENES[key].label, isLive: false, scene: createScene(SCENES[key].options) }), 20);
 }
@@ -1032,6 +1070,7 @@ function fmtTime(t) {
 function updateTransport() {
     $('play').textContent = loop && loop.playing ? 'Pause' : 'Play';
     if (!loop) return;
+    updateMarkButton();
     const shown = lastOut ? lastOut.slot.meta.time : loop.time;
     const fr = lastOut && lastOut.slot.meta.frame;
     $('time').textContent = `${fmtTime(shown)}${fr !== null && fr !== undefined ? ` #${fr}` : ''} / ${fmtTime(loop.duration)}`;
@@ -1240,8 +1279,10 @@ async function start() {
         return;
     }
     const status = $('cvStatus');
+    setLoading('cv', 'Loading OpenCV.js, the image-processing library (3.5 MB, once per visit)…');
     try {
         const { cv, ms } = await loadCv();
+        setLoading('cv', null);
         const missing = checkCv(cv);
         if (missing.functions.length || missing.constants.length) {
             const names = [...missing.functions, ...missing.constants];
@@ -1262,6 +1303,7 @@ async function start() {
         // #src=<URL-encoded link> opens that video at once (repeatable test runs)
         if (hash.src) openUrl(hash.src);
     } catch (e) {
+        setLoading('cv', null);
         status.textContent = 'OpenCV.js failed';
         status.className = 'pill error';
         fatal(`OpenCV.js could not be loaded: ${e.message}`);
