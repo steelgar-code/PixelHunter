@@ -96,6 +96,13 @@ export const CONFIGS = {
     'adaptive6': { detectMode: 'adaptive', sigmas: 6 },
     'adaptive6+shift': { detectMode: 'adaptive', sigmas: 6, shiftCheck: true },
     'adaptive7': { detectMode: 'adaptive', sigmas: 7, weakMargin: 2.5 },
+    // confirmation by evidence (age + summed strength) against stricter N of M
+    'mid-5of8': { confirmN: 5, confirmM: 8 },
+    'mid-8of12': { confirmN: 8, confirmM: 12 },
+    'mid+ev': { confirmBy: 'evidence' },
+    'mid+ev-1s': { confirmBy: 'evidence', minAge: 1, minEvidence: 10 },
+    'mid+ev-gap5': { confirmBy: 'evidence', maxGap: 5 },
+    'highest+ev': { ...PRESETS.highest.values, confirmBy: 'evidence' },
     // slow faint targets: the Highest preset's stride and confirmation with the adaptive detector
     'adaptive-slow': { ...PRESETS.highest.values, detectMode: 'adaptive', sigmas: 6 },
 };
