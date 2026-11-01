@@ -34,7 +34,10 @@ try {
     ok('targets found (basic mode)', st.score.hitRate > 0.9, st.score);
 
     const cyan = await countColour(page, 'b > 200 && g > 180 && r < 140');
-    const yellow = await countColour(page, 'r > 200 && g > 170 && b < 140', 100);
+    // (candidate boxes are 1 px lines at 55 % opacity: where a line falls between pixels its
+    // antialiased halves are fainter still, so a low opacity cut keeps the count from depending
+    // on where the boxes land on the pixel grid)
+    const yellow = await countColour(page, 'r > 200 && g > 170 && b < 140', 40);
     const magenta = await countColour(page, 'r > 200 && g < 120 && b > 180');
     // (the count depends on the frame on screen and how much of the circles the boxes drawn on top
     // cover: 50–56 has been seen; a missing overlay gives 0)
