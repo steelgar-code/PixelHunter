@@ -307,3 +307,53 @@ const confirmedIds = tracks => tracks.filter(t => t.state === 'confirmed' && t.m
     for (let k = 0; k < 10; k++) n += confirmedIds(tr.step([blob(200 + 3 * k, 120)], pan)).length;
     ok('… an object moving on the screen still confirms', n >= 7, n);
 }
+{
+    // confirm by time: N sightings within T seconds, whatever the frames processed
+    const run = (fps, every, opts = {}) => {
+        const tr = createTracker({ confirmBy: 'time', confirmN: 3, confirmSecs: 0.3, ...opts });   // (wider than the default 0.2)
+        let at = null;
+        // real time drops frames: one step per processed frame, dt = frames since the last one
+        for (let k = 0; k < 40; k += every) {
+            const s = tr.step([blob(100 + 2 * k, 50)], I, k ? every : 1, { time: k / fps, frame: k });
+            if (at === null && confirmedIds(s).length) at = k;
+        }
+        return at;
+    };
+    ok('time mode: 3 sightings within 0.3 s confirm (every frame at 25 fps: the 3rd)', run(25, 1) === 2, run(25, 1));
+    ok('… every 3rd frame (real time dropping frames): 3 sightings in 0.24 s still confirm', run(25, 3) === 6, run(25, 3));
+    ok('… every 5th: never 3 within 0.3 s', run(25, 5) === null, run(25, 5));
+    // a building track not seen for half of T is dropped
+    const tr = createTracker({ confirmBy: 'time', confirmN: 3, confirmSecs: 0.3 });
+    const ids = new Set();
+    [1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1].forEach((v, k) => { for (const t of tr.step(v ? [blob(100 + 2 * k, 50)] : [], I, 1, { time: k / 25, frame: k })) ids.add(t.id); });
+    ok('… a building track not seen for half of T is dropped', ids.size === 2, [...ids]);
+}
+{
+    // minStrong: tracks carried by weak sightings wait (weak ones continue a track from its 3rd
+    // sighting on, so the first two are strong)
+    const run = (weakAt, minStrong) => {
+        const tr = createTracker({ minStrong });
+        let at = null;
+        for (let k = 0; k < 12; k++) {
+            const b = { ...blob(100 + 4 * k, 50), weak: weakAt(k) };
+            if (at === null && confirmedIds(tr.step([b], I, 1, { time: k / 25, frame: k })).length) at = k;
+        }
+        return at;
+    };
+    ok('min strong sightings off: weak sightings count (confirmed at the 3rd)', run(k => k >= 2, 0) === 2, run(k => k >= 2, 0));
+    ok('… 3 strong needed, then only weak: never', run(k => k >= 2, 3) === null, run(k => k >= 2, 3));
+    ok('… 3 strong needed: confirms once 3 strong are among the last 5', run(k => k === 2 || k === 4, 3) === 3, run(k => k === 2 || k === 4, 3));
+}
+{
+    // minSpatial: the median contrast against the surroundings
+    const run = (spatial, minSpatial) => {
+        const tr = createTracker({ minSpatial });
+        let n = 0;
+        for (let k = 0; k < 10; k++) n += confirmedIds(tr.step([{ ...blob(100 + 4 * k, 50), spatial: spatial(k) }], I, 1, { time: k / 25, frame: k })).length;
+        return n;
+    };
+    ok('min contrast against the surroundings: an object at −12 confirms with 5', run(() => -12, 5) >= 7);
+    ok('… shimmer at ±1 does not', run(k => (k % 2 ? 1 : -1), 5) === 0);
+    ok('… a single bright sighting does not lift the median', run(k => (k === 1 ? 30 : 0.5), 5) === 0);
+    ok('… off: contrast is ignored', run(() => 0, 0) >= 7);
+}

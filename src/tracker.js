@@ -39,6 +39,21 @@
 // confirmed are handed out once, with the confirmation (`early`), so the history and the export
 // can be back-filled.
 //
+// Confirmation by time (confirmBy: 'time', an option for real time): seen N times within the last
+// confirmSecs seconds. N of M counts *processed* frames, which span more time when real-time mode
+// drops frames; this counts time. A track still building up is dropped when not seen for half that
+// time (like N of M's M − N misses: with 3 of 5, 2 frames of 5).
+//
+// Two more conditions for confirming, options for each mode:
+//   - minStrong: at least this many of the sightings that count (in the window) must be strong
+//     (above the detection threshold, not only the weak margin): a track carried by faint
+//     sightings alone waits. Faint real objects confirm later or not at all.
+//   - minSpatial: the sightings' contrast against their surroundings in the frame itself (grey
+//     levels, b.spatial: the pipeline measures it) must have a median of at least this. Detection
+//     looks at change over time; shimmer, compression and texture can change a lot while looking
+//     like their surroundings (contrast ~0). An object of light and dark parts can average to ~0
+//     too, so keep it modest.
+//
 // Spots fixed on the screen (screenFixed, an option): dust on the lens, a dead pixel, a burned-in
 // overlay, or compression blocks on flat sky (the block grid is fixed to the screen) stay put in
 // the frame while the camera moves, so against the background they travel steadily and pass min
@@ -75,6 +90,9 @@ export const TRACK_DEFAULTS = {
     minEvidence: 6,        // … and once its sightings' strength adds up to this
     maxGap: 3,             // evidence mode: missed frames in a row before a track still building up is dropped
     screenFixed: true,     // don't confirm tracks that stay put on the screen while the camera moves
+    confirmSecs: 0.2,      // time mode: seen confirmN times within this many seconds (0.2 s = 5 frames at 25 fps)
+    minStrong: 0,          // sightings above the threshold (not weak) needed to confirm (0: any)
+    minSpatial: 0,         // grey: median contrast against the surroundings needed to confirm (0: off)
 };
 
 const CROWD_RADIUS = 40;       // px around a prediction in which blob density is measured
@@ -85,6 +103,7 @@ const WEAK_MIN_AREA = 0.12;    // a weak blob continues a track only at ≥ this
 const EVIDENCE_CAP = 3;        // evidence: one sighting counts at most this much
 const EARLY_KEPT = 300;        // sightings kept per track until it confirms (for back-filling)
 const SCREEN_FIXED = 1.5;      // px: sightings this close together on the screen are a screen-fixed spot
+const SIGHTS_KEPT = 60;        // sightings kept per track for time mode, minStrong and minSpatial
 
 const popcount = x => { let n = 0; while (x) { n += x & 1; x >>>= 1; } return n; };
 
@@ -97,6 +116,7 @@ export function createTracker(options = {}) {
     let clock = 0;             // frames since the start, for the sightings' times
     let now = 0;               // media time of the current step, s
     const evidence = () => p.confirmBy === 'evidence';
+    const timeMode = () => p.confirmBy === 'time';
     // missed frames after which a confirmed track waits where it was last seen (held)
     const holdAfter = () => (evidence() ? Math.max(p.maxGap, 3) : p.confirmM);
     // a sighting's strength: its score in units of the threshold (adaptive), else 1
@@ -205,7 +225,7 @@ export function createTracker(options = {}) {
             const b = blobs[j];
             // seen again after a gap: its motion may have changed (stop and go), so the path
             // check starts over from here
-            if (t.misses >= PATH_RESTART) { t.pts = []; t.raw = []; }
+            if (t.misses >= PATH_RESTART) { t.pts = []; t.raw = []; t.spat = []; }
             if (restart) {
                 // picked up again after a pause (or where it stopped): same id, but it confirms
                 // afresh from here, so noise around a stopped object can't show as a detection
@@ -217,6 +237,7 @@ export function createTracker(options = {}) {
                 t.raw = [];
                 t.reacquired = (t.reacquired || 0) + 1;
                 t.ev = 0; t.t0 = now; t.early = [];
+                t.sights = []; t.sHist = 0; t.spat = [];
             }
             if (t.hits <= 1) {
                 // first or second sighting: the velocity is the displacement (none on the first)
@@ -228,6 +249,8 @@ export function createTracker(options = {}) {
                 t.vx += (p.beta / dt) * ex; t.vy += (p.beta / dt) * ey;
             }
             t.hist = ((t.hist << 1) | 1) & mask;
+            t.sHist = ((t.sHist << 1) | (b.weak ? 0 : 1)) & mask;
+            note(t, b);
             t.hits++;
             t.misses = 0;
             t.matched = true;
@@ -245,18 +268,20 @@ export function createTracker(options = {}) {
             if (usedT.has(t)) continue;
             t.x = t.px; t.y = t.py;
             t.hist = (t.hist << 1) & mask;
+            t.sHist = (t.sHist << 1) & mask;
             t.misses++;
             t.matched = false;
         }
         // drop tracks that can no longer confirm (tentative), and confirmed ones gone longer than
         // M frames and the hold (a re-acquired track keeps its hold until it gives up again)
         const gap = evidence() ? p.maxGap : p.confirmM - p.confirmN;
+        const building = t => (timeMode() ? t.misses === 0 || now - t.lastTime <= p.confirmSecs / 2 + 1e-6 : t.misses <= gap);
         tracks = tracks.filter(t => pinned.has(t.id) || (t.confirmed ? t.misses <= Math.max(holdAfter(), p.holdFrames)
-            : t.misses <= gap || (t.reacquired && t.misses <= p.holdFrames)));
+            : building(t) || (t.reacquired && t.misses <= p.holdFrames)));
         for (const t of tracks) {
             if (t.justConfirmed) t.early = [];       // handed out with the last snapshot
             t.justConfirmed = false;
-            if (!t.confirmed && !paused && t.matched && enough(t) && Math.hypot(t.x - t.sx, t.y - t.sy) >= p.minTravel
+            if (!t.confirmed && !paused && t.matched && enough(t) && strongEnough(t) && contrastEnough(t) && Math.hypot(t.x - t.sx, t.y - t.sy) >= p.minTravel
                 && (!p.pathCheck || pathDeviation(t.pts) <= p.pathTolerance) && !(p.screenFixed && fixedOnScreen(t))) {
                 t.confirmed = true;
                 t.justConfirmed = true;
@@ -271,7 +296,9 @@ export function createTracker(options = {}) {
             if (usedB.has(j) || b.weak || paused) return;
             const t = { id: nextId++, x: b.cx, y: b.cy, vx: 0, vy: 0, sx: b.cx, sy: b.cy, lx: b.cx, ly: b.cy, hist: 1, hits: 1, misses: 0, age: 1,
                 matched: true, confirmed: false, box: { x: b.x, y: b.y, w: b.w, h: b.h, area: b.area, cx: b.cx, cy: b.cy },
-                trail: [[b.cx, b.cy]], pts: [[b.cx, b.cy, clock]], raw: [[b.cx, b.cy]], ev: strength(b), t0: now, early: [] };
+                trail: [[b.cx, b.cy]], pts: [[b.cx, b.cy, clock]], raw: [[b.cx, b.cy]], ev: strength(b), t0: now, early: [],
+                sights: [], sHist: b.weak ? 0 : 1, spat: [] };
+            note(t, b);
             t.early.push(sighting(b, frame, t));
             t.confirmed = t.justConfirmed = !evidence() && p.confirmN <= 1 && p.minTravel <= 0;
             tracks.push(t);
@@ -287,8 +314,33 @@ export function createTracker(options = {}) {
         return r.every(([x, y]) => Math.hypot(x - mx, y - my) <= SCREEN_FIXED);
     }
 
-    // enough sightings to confirm: N of the last M, or (evidence) old enough and strong enough
+    // a sighting, for time mode, minStrong and minSpatial
+    function note(t, b) {
+        (t.sights ??= []).push({ time: now, strong: !b.weak });
+        if (t.sights.length > SIGHTS_KEPT) t.sights.shift();
+        if (Number.isFinite(b.spatial)) { (t.spat ??= []).push(Math.abs(b.spatial)); if (t.spat.length > PATH_POINTS) t.spat.shift(); }
+        t.lastTime = now;
+    }
+
+    // the sightings that count towards confirming now (time mode: in the window; evidence: since
+    // the track started)
+    const counting = t => (timeMode() ? (t.sights || []).filter(q => now - q.time <= p.confirmSecs + 1e-6) : t.sights || []);
+
+    function strongEnough(t) {
+        if (!(p.minStrong > 0)) return true;
+        const n = evidence() || timeMode() ? counting(t).filter(q => q.strong).length : popcount(t.sHist);
+        return n >= p.minStrong;
+    }
+
+    function contrastEnough(t) {
+        if (!(p.minSpatial > 0)) return true;
+        const v = [...(t.spat || [])].sort((a, b) => a - b);
+        return v.length > 0 && v[v.length >> 1] >= p.minSpatial;
+    }
+
+    // enough sightings to confirm: N of the last M, N within T s, or (evidence) old and strong enough
     function enough(t) {
+        if (timeMode()) return counting(t).length >= p.confirmN;
         if (!evidence()) return popcount(t.hist) >= p.confirmN;
         return t.hits >= 3 && now - t.t0 >= p.minAge - 1e-6 && t.ev >= p.minEvidence;
     }
@@ -296,6 +348,7 @@ export function createTracker(options = {}) {
     // how far a track still building up is towards confirming, 0–1
     function progress(t) {
         if (t.confirmed) return 1;
+        if (timeMode()) return Math.min(1, counting(t).length / p.confirmN);
         if (!evidence()) return Math.min(1, popcount(t.hist) / p.confirmN);
         return Math.min(1, p.minAge > 0 ? (now - t.t0) / p.minAge : 1, p.minEvidence > 0 ? t.ev / p.minEvidence : 1);
     }
@@ -310,12 +363,13 @@ export function createTracker(options = {}) {
     // frame's coordinates, velocity per frame; nothing is changed. For the detector's
     // background-shift check, which must not drop a tracked object (detect.js).
     // onlyPinned: just the tracks the user keeps tracking.
-    function predict(H, dt = 1, { onlyPinned = false } = {}) {
+    // maxMisses: also tracks missed this many frames in a row (their prediction is rougher).
+    function predict(H, dt = 1, { onlyPinned = false, maxMisses = 1 } = {}) {
         if (!H) return [];
         const out = [];
         for (const t of tracks) {
             if (onlyPinned && !pinned.has(t.id)) continue;
-            if (!t.confirmed || t.misses > 1 || held_(t)) continue;
+            if (!t.confirmed || t.misses > maxMisses || held_(t)) continue;
             const [x, y] = project(H, t.x, t.y);
             const [ex, ey] = project(H, t.x + t.vx, t.y + t.vy);
             const vx = ex - x, vy = ey - y;
@@ -326,7 +380,7 @@ export function createTracker(options = {}) {
 
     // confirmed, but missed for more than M frames: waiting at its last seen position
     // (a pinned track waits there too while it is re-confirming)
-    const held_ = t => (t.confirmed || pinned.has(t.id)) && t.misses > holdAfter();
+    const held_ = t => (t.confirmed || pinned.has(t.id)) && (timeMode() ? t.misses > 1 && now - t.lastTime > p.confirmSecs : t.misses > holdAfter());
 
     function snapshot() {
         return tracks.map(t => ({

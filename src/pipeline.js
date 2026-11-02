@@ -22,6 +22,7 @@ import { createDetector, DETECT_DEFAULTS } from './detect.js';
 import { createTracker, TRACK_DEFAULTS } from './tracker.js';
 import { scaleH, mul, normalize, composeNewestFirst } from './homography.js';
 import { mulberry32 } from './synth.js';
+import { contrastOf } from './objects.js';
 
 function makeCanvas(w, h) {
     if (typeof OffscreenCanvas !== 'undefined') return new OffscreenCanvas(w, h);
@@ -39,6 +40,8 @@ const trackParams = p => pick(TRACK_DEFAULTS, p);
 
 export const MAX_STRIDE = 12;
 const MAX_FPS = 120;             // highest source frame rate assumed when checking frame gaps
+const NEAR_MISSES = 3;           // nearMargin: around confirmed tracks missed up to this many frames
+const NEAR_MAX_R = 12;           // px: … within this of where they are expected (at most)
 
 export function createPipeline(cv, params) {
     let p = { ...params };
@@ -183,8 +186,13 @@ export function createPipeline(cv, params) {
                 const tracked = p.shiftCheck && egoPrev && egoPrev.ok
                     ? tracker.predict(egoPrev.Hfull, dt, { onlyPinned: true }).map(t => ({ x: t.x, y: t.y }))
                     : [];
+                // where confirmed objects should be (also missed for a few frames): a lower
+                // threshold around them (nearMargin)
+                const near = p.nearMargin > 0 && egoPrev && egoPrev.ok
+                    ? tracker.predict(egoPrev.Hfull, dt, { maxMisses: NEAR_MISSES }).map(t => ({ x: t.x, y: t.y, r: Math.min(NEAR_MAX_R, Math.max(4, t.gate)) }))
+                    : [];
                 detect = detector.detect({ prev: prev.grey, cur: cur.grey, next: next.grey, Hprev: back.H, Hnext: fwd.H || null,
-                    fitErr: Math.max(back.err, fwd.err || 0), tracked,
+                    fitErr: Math.max(back.err, fwd.err || 0), tracked, near,
                     small: { prev: prev.small, cur: cur.small, next: next.small, Hprev: back.Hs, Hnext: fwd.Hs || null } });
             }
         }
@@ -196,6 +204,8 @@ export function createPipeline(cv, params) {
             const blobs = detect.weak && detect.weak.length ? [...detect.candidates, ...detect.weak] : detect.candidates;
             // a sighting's strength for confirmation by evidence: its score in units of the threshold
             for (const b of blobs) if (b.score !== undefined) b.strength = b.score / p.sigmas;
+            // its contrast against the surroundings in the frame itself (min contrast to confirm)
+            if (p.minSpatial > 0) for (const b of blobs) b.spatial = contrastOf(cur.grey, b);
             tracks = tracker.step(blobs, egoPrev && egoPrev.ok ? egoPrev.Hfull : null, dt, meta);
         } else if (count >= 2 * s + 1) tracks = tracker.step([], null, dt, meta);
         const t3 = performance.now();

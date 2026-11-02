@@ -120,6 +120,7 @@ export const DETECT_DEFAULTS = {
     open: false,           // 3×3 opening of the final mask (removes 1–2 px blobs!)
     shiftCheck: false,     // drop candidates explained by a small local shift of the background
     shiftMax: 2,           // px: largest local shift tried
+    nearMargin: 0,         // adaptive: σ lower still where a confirmed object is expected (0: off)
     shiftRingGap: 3,       // px between a candidate's box and the ring the shift check aligns (was 1)
     zones: [],             // exclusion zones, { x, y, w, h } fractions of the frame
     include: [],           // inclusion zones: when set, only these areas are processed
@@ -167,6 +168,7 @@ export function createDetector(cv, options = {}) {
     let lastCropped = false;   // last detection ran on inclusion regions (views in m.vMask / m.vDiff)
     let lastTol = null;        // adaptive mode: misalignment allowance of the last detection, px
     let tracked = [];          // objects the user keeps tracking, expected in this frame (shift check)
+    let near = [];             // confirmed objects expected in this frame: { x, y, r } (nearMargin)
 
     function setup(w, h) {
         for (const k of Object.keys(m)) { m[k].delete(); delete m[k]; }
@@ -657,6 +659,28 @@ export function createDetector(cv, options = {}) {
             const weakAt = Math.max(1, p.sigmas - Math.max(0, p.weakMargin || 0));
             cv.threshold(m.Z, m.tmp2, weakAt, 255, cv.THRESH_BINARY);
             m.tmp2.convertTo(m.mask, cv.CV_8U);
+            // where a confirmed object is expected (`near`), from nearMargin σ lower still: such
+            // candidates come out weak, so they can only continue that object (tracker.js)
+            if (p.nearMargin > 0 && near.length) {
+                const lowAt = Math.max(1, weakAt - p.nearMargin);
+                m.nearF ??= new cv.Mat();
+                m.near8 ??= new cv.Mat();
+                for (const q of near) {
+                    const x0 = Math.max(0, Math.round(q.x - r.x - q.r)), y0 = Math.max(0, Math.round(q.y - r.y - q.r));
+                    const x1 = Math.min(r.w, Math.round(q.x - r.x + q.r) + 1), y1 = Math.min(r.h, Math.round(q.y - r.y + q.r) + 1);
+                    if (x1 - x0 < 1 || y1 - y0 < 1) continue;
+                    const rect = new cv.Rect(x0, y0, x1 - x0, y1 - y0);
+                    const zr = m.Z.roi(rect), mr = m.mask.roi(rect);
+                    try {
+                        cv.threshold(zr, m.nearF, lowAt, 255, cv.THRESH_BINARY);
+                        m.nearF.convertTo(m.near8, cv.CV_8U);
+                        cv.bitwise_or(mr, m.near8, mr);
+                    } finally {
+                        zr.delete();
+                        mr.delete();
+                    }
+                }
+            }
             regionValid(r, T, [Hp, Hn]);
             cv.bitwise_and(m.mask, m.valid, m.mask);
             if (p.open) cv.morphologyEx(m.mask, m.mask, cv.MORPH_OPEN, k3);
@@ -738,9 +762,11 @@ export function createDetector(cv, options = {}) {
         // fitErr: the camera-motion fits' error over the compared frames (processing px; adaptive).
         // tracked: where the objects the user keeps tracking should be in frame t, [{ x, y }]
         // (processing px): kept by the background-shift check.
-        detect({ prev, cur, next, Hprev, Hnext, small, fitErr, tracked: tr = [] }) {
+        // near: where confirmed objects are expected, [{ x, y, r }] (processing px), for nearMargin.
+        detect({ prev, cur, next, Hprev, Hnext, small, fitErr, tracked: tr = [], near: nr = [] }) {
             if (!size || size.w !== cur.cols || size.h !== cur.rows) setup(cur.cols, cur.rows);
             tracked = tr || [];
+            near = nr || [];
             if (!prev || !Hprev) return { ok: false, reason: 'no camera motion for t−1 → t', candidates: [] };
             lastMode = p.detectMode;
             if (p.detectMode === 'basic') return { ok: true, reason: null, mode: 'basic', ...run('basic', { prev, cur, Hprev }) };

@@ -124,6 +124,12 @@ export const CONFIGS = {
     'mid+mean3+mc6': { minMean: 3, minContrast: 6 },
     'highest+mean3': { ...PRESETS.highest.values, minMean: 3 },
     'mid+mean0': { minMean: 0 },
+    // confirmation options (2026-11-02 batch)
+    'mid+strong2': { minStrong: 2 },
+    'mid+spatial4': { minSpatial: 4 },
+    'mid+time': { confirmBy: 'time' },
+    'mid+near2': { nearMargin: 2 },
+    'highest+near2': { ...PRESETS.highest.values, nearMargin: 2 },
     // candidates for a Compressed preset
     comp1: { minMean: 3, confirmBy: 'evidence' },
     comp2: { minMean: 3, minContrast: 8, confirmBy: 'evidence' },
