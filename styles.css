@@ -286,3 +286,26 @@ button[aria-pressed=true] { background: color-mix(in srgb, var(--danger) 25%, va
 .stage.marking, .stage.marking canvas { cursor: crosshair; }
 #labelsStatus.warn, #dataStatus.warn { color: #ffcf5c; }
 .objects .olabel { color: var(--ok); font-weight: 700; }
+
+/* the Benchmark tab */
+.bench-sets { display: flex; flex-direction: column; gap: 2px; margin: 6px 0; }
+.bench-sets .icon { margin-left: 6px; padding: 0 6px; }
+.bench-change { flex-wrap: wrap; align-items: center; }
+.bench-change select { max-width: 150px; }
+.bench-change input { width: 70px; }
+#benchProgress { width: 100%; }
+.bench-scroll { overflow-x: auto; }
+.bench-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.bench-table th, .bench-table td { padding: 3px 4px; text-align: right; border-bottom: 1px solid var(--line); white-space: nowrap; }
+.bench-table th:first-child, .bench-table td:first-child { text-align: left; white-space: normal; }
+.bench-table tbody tr { cursor: pointer; }
+.bench-table tbody tr.selected { background: color-mix(in srgb, var(--accent) 14%, transparent); }
+.bench-list { list-style: none; padding: 0; margin: 4px 0; display: flex; flex-direction: column; gap: 4px; font-size: 12px; }
+.bench-list li { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.bench-list button { padding: 1px 6px; font-size: 12px; }
+.bench-list .ok { color: var(--ok); } .bench-list .miss, .bench-list .unk { color: var(--muted); } .bench-list .bad { color: var(--danger); }
+.bench-details h3 { font-size: 13px; margin: 10px 0 2px; }
+.bench-video { position: fixed; left: 0; top: 0; width: 2px; height: 2px; opacity: 0; pointer-events: none; }
+#benchResults p, .bench-details { word-break: normal; overflow-wrap: break-word; }
+.bench-table th[title] { cursor: help; text-decoration: underline dotted; }
+#panel-bench .muted { word-break: normal; overflow-wrap: break-word; }

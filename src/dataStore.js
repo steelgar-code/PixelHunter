@@ -6,15 +6,17 @@
 // Folder layout:
 //   labels/<clip-name>.<id8>.labels.json   a clip's labels (labels.js), bookmarks, "complete"
 //   crops/<id8>/<name>.png                 3-frame crops of labelled objects (crops.js)
-//   results/…                              benchmark runs (later)
+//   results/<clip-name>.<id8>.<time>.json  benchmark runs (benchView.js)
 //
 // IndexedDB 'pixelhunter': kv (the folder handle), clips (clip id → { set, exported, pending }),
-// crops ('<id8>/<name>' → PNG Blob).
+// crops ('<id8>/<name>' → PNG Blob), results ('<clip id>/<time>' → a run; without a folder,
+// the last RESULTS_KEPT per clip).
 
 import { normalizeLabelSet, mergeLabelSets, labelsFileName, id8 } from './labels.js';
 
 const DB_NAME = 'pixelhunter';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
+export const RESULTS_KEPT = 20;
 
 function openDb() {
     return new Promise((resolve, reject) => {
@@ -22,7 +24,7 @@ function openDb() {
         const rq = indexedDB.open(DB_NAME, DB_VERSION);
         rq.onupgradeneeded = () => {
             const db = rq.result;
-            for (const s of ['kv', 'clips', 'crops']) if (!db.objectStoreNames.contains(s)) db.createObjectStore(s);
+            for (const s of ['kv', 'clips', 'crops', 'results']) if (!db.objectStoreNames.contains(s)) db.createObjectStore(s);
         };
         rq.onsuccess = () => resolve(rq.result);
         rq.onerror = () => reject(rq.error);
@@ -156,6 +158,37 @@ export function createDataStore() {
             }
             await del('clips', set.clip.id);
             return 'folder';
+        },
+
+        // A benchmark run (benchView.js): to the folder's results/, else browser storage (the
+        // last RESULTS_KEPT per clip). → 'folder' or 'browser'.
+        async saveResult(clip, result) {
+            const stamp = String(result.created).replace(/[:.]/g, '-');
+            if (usable()) {
+                const base = labelsFileName(clip).replace(/\.labels\.json$/, '');
+                await writeFile(await sub('results'), `${base}.${stamp}.json`, JSON.stringify(result));
+                return 'folder';
+            }
+            await put('results', `${clip.id}/${stamp}`, result);
+            const keys = await idb('results', 'readonly', s => req(s.getAllKeys(IDBKeyRange.bound(`${clip.id}/`, `${clip.id}/\uffff`))));
+            for (const k of keys.slice(0, Math.max(0, keys.length - RESULTS_KEPT))) await del('results', k);
+            return 'browser';
+        },
+        // The clip's latest saved run, or null.
+        async latestResult(clip) {
+            const tag = `.${id8(clip)}.`;
+            if (usable()) {
+                try {
+                    const dir = await sub('results', false);
+                    let best = null;
+                    for await (const [name, h] of dir.entries()) if (h.kind === 'file' && name.includes(tag) && (!best || name.slice(name.indexOf(tag)) > best.slice(best.indexOf(tag)))) best = name;
+                    if (best) { const r = await readJson(dir, best); if (r && r.clip && r.clip.id === clip.id) return r; }
+                } catch { /* none */ }
+            }
+            try {
+                const keys = await idb('results', 'readonly', s => req(s.getAllKeys(IDBKeyRange.bound(`${clip.id}/`, `${clip.id}/\uffff`))));
+                return keys.length ? await get('results', keys[keys.length - 1]) : null;
+            } catch { return null; }
         },
 
         // A crop's PNG (folder or browser storage), or null.

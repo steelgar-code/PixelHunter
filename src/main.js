@@ -14,6 +14,7 @@ import { createExportLog, download } from './exportLog.js';
 import { createObjects } from './objects.js';
 import { createObjectsView } from './objectsView.js';
 import { createLabelsView } from './labelsView.js';
+import { createBenchView } from './benchView.js';
 import { fitOverlay, clear, drawPoints, drawNote, drawBoxes, drawTruth, drawTracks, drawBuilding, drawHeld, drawOffscreen, drawZones, drawInclude } from './overlay.js';
 import { normalizeZone, normalizeZones, parseZones, formatZones, zoneRect, inZones, loadZones, saveZones, MAX_ZONES, ZONES_KEY, INCLUDE_KEY } from './zones.js';
 
@@ -48,7 +49,7 @@ const skipped = { count: 0, reasons: {} };
 let score = null;                // synthetic sources: candidates against ground truth
 let confScore = null;            // … and confirmed detections
 const log = createExportLog();
-const APP_VERSION = '0.8.0';
+const APP_VERSION = '0.9.0';
 
 // Test hook (see tests/): recent frames and state, no effect on the UI.
 const FRAME_LOG = 5000;
@@ -914,8 +915,27 @@ const labels = createLabelsView({
     toFrame: e => toFrame(e),
     onBookmarks: () => renderBookmarks(),
     onLabelsChanged: () => { view.markDirty(); view.render(); render(); },
+    onEdit: () => { if (!$('panel-bench').hidden) bench.render(); },
 });
 ph.labels = labels;
+
+// --- the Benchmark tab (benchView.js) ------------------------------------------------------------
+
+const bench = createBenchView({
+    $, params, labels,
+    source: () => source,
+    loop: () => loop,
+    geometry: () => pipeline && pipeline.geometry,
+    cv: () => (cvState.ready ? cvState.cv : null),
+    pause: () => { if (loop && loop.playing) { loop.pause(); updateTransport(); } },
+    goToTime: t => goToTime(t),
+    fmtTime,
+    userPresets: () => userPresets,
+    download,
+});
+ph.bench = bench;
+// a synthetic scene from its options (tests)
+ph.openScene = (label, options) => openSource({ kind: 'synthetic', label, isLive: false, scene: createScene(options) });
 Object.defineProperty(ph, 'navigating', { get: () => navigating });
 
 // --- side panel tabs, the source menu, quick presets ------------------------------------------
@@ -930,6 +950,7 @@ function showTab(name) {
     }
     try { localStorage.setItem(TAB_KEY, name); } catch { /* not remembered */ }
     if (name === 'objects') { view.markDirty(); view.render(); }
+    if (name === 'bench') { bench.render(); bench.renderControls(); }
 }
 
 function bindTabs() {
@@ -1007,6 +1028,7 @@ async function openSource(next) {
 }
 
 async function openSourceNow(next) {
+    bench.cancel();
     if (loop) { loop.destroy(); loop = null; }
     if (source && source.stop) source.stop(video);
     source = null;
@@ -1050,6 +1072,7 @@ async function openSourceNow(next) {
     await labels.openClip(next, next.kind === 'synthetic'
         ? { width: next.scene.width, height: next.scene.height, duration: next.scene.frames / next.scene.fps }
         : { width: video.videoWidth, height: video.videoHeight, duration: video.duration });
+    bench.openClip();
     ph.score = score;
     ph.confScore = confScore;
     ph.log = log;
@@ -1343,6 +1366,7 @@ async function start() {
     bindSourceMenu();
     view.bind();
     labels.init();
+    bench.bind();
     renderPresets();
     renderQuickPresets();
     bindUserPresets();

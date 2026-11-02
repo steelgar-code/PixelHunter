@@ -23,7 +23,8 @@ const OLD_BOOKMARKS_KEY = 'pixelhunter.bookmarks.v1';
 
 export function createLabelsView(d) {
     // d: { $, params, objs, current() → { r, slot, geometry, loop }, source(), pipeline(), busy(),
-    //      render(), download(name, data), toFrame(e), onBookmarks(), onLabelsChanged() }
+    //      render(), download(name, data), toFrame(e), onBookmarks(), onLabelsChanged(),
+    //      onEdit(): after any change to the labels }
     const { $, objs } = d;
     const store = createDataStore();
     let set = null;                    // the clip's labels, or null (live source, none open)
@@ -92,7 +93,7 @@ export function createLabelsView(d) {
 
     // --- saving ------------------------------------------------------------------------------
 
-    function changed(ms = SAVE_MS) { dirty = true; schedule(ms); renderAll(); }
+    function changed(ms = SAVE_MS) { dirty = true; schedule(ms); renderAll(); if (d.onEdit) d.onEdit(); }
 
     function schedule(ms) {
         clearTimeout(saveTimer);
@@ -454,6 +455,26 @@ export function createLabelsView(d) {
         d.onLabelsChanged();
     }
 
+    // --- from the Benchmark tab -----------------------------------------------------------------
+
+    // A track of a benchmark run ([[t, x, y, w, h], …], source px) labelled: a new label from its path.
+    function addFromTrack(label, pts) {
+        if (!set || !pts.length) return null;
+        const med = i => [...pts.map(p => p[i])].sort((a, b) => a - b)[pts.length >> 1];
+        const o = upsertObject(set, { id: newLabelId(), label, source: 'tracked', size: [med(3), med(4)], keys: simplify(pts) });
+        changed();
+        d.render();
+        return o.id;
+    }
+
+    // Sightings of the object before its label started (a set found it earlier): added to it.
+    function extendLabel(id, pts) {
+        if (!set || !set.objects.some(o => o.id === id)) return;
+        upsertObject(set, { id, keys: pts });
+        changed();
+        d.render();
+    }
+
     // --- bookmarks ---------------------------------------------------------------------------
 
     const bookmarks = () => (set ? set.bookmarks : []);
@@ -531,6 +552,8 @@ export function createLabelsView(d) {
         get marking() { return marking; },
         bookmarks,
         setBookmarks,
+        addFromTrack,
+        extendLabel,
         flush,
         exportLabels,
         importFiles,

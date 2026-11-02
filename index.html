@@ -119,6 +119,7 @@
             <button type="button" role="tab" id="tab-objects" aria-controls="panel-objects" aria-selected="true">Objects <span id="objBadge" class="badge" hidden></span></button>
             <button type="button" role="tab" id="tab-settings" aria-controls="panel-settings" aria-selected="false">Settings</button>
             <button type="button" role="tab" id="tab-stats" aria-controls="panel-stats" aria-selected="false">Stats</button>
+            <button type="button" role="tab" id="tab-bench" aria-controls="panel-bench" aria-selected="false">Benchmark</button>
         </nav>
 
         <div id="panel-objects" class="tab-panel" role="tabpanel" aria-labelledby="tab-objects">
@@ -271,6 +272,26 @@
                 <button type="button" id="exportJson" disabled>Export JSON</button>
                 <button type="button" id="clearLog" disabled>Clear</button>
             </div>
+        </div>
+        <div id="panel-bench" class="tab-panel" role="tabpanel" aria-labelledby="tab-bench" hidden>
+            <h3 data-help="benchmark">Compare settings on this clip</h3>
+            <div class="help-host"></div>
+            <p id="benchClip" class="muted"></p>
+            <div id="benchSets" class="bench-sets"></div>
+            <form id="benchChangeForm" class="row bench-change">
+                <span class="muted">Current with</span>
+                <select id="benchChangeKey" aria-label="Setting to change"></select>
+                <input type="text" id="benchChangeValue" class="mono" aria-label="Its value" spellcheck="false">
+                <button type="submit" title="Add the current settings with this one changed as a set">Add</button>
+            </form>
+            <div class="row">
+                <button type="button" id="benchRun" class="primary">Run</button>
+                <button type="button" id="benchCancel" hidden>Cancel</button>
+                <button type="button" id="benchExport" disabled title="This run's results as a file">Export results</button>
+            </div>
+            <progress id="benchProgress" max="1" value="0" hidden></progress>
+            <p id="benchProgressText" class="muted" role="status"></p>
+            <div id="benchResults"></div>
         </div>
     </aside>
 </main>
