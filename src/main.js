@@ -1,6 +1,6 @@
 // Wiring: OpenCV.js startup check, sources, frame loop, parameter controls and stats.
 import { loadCv, checkCv, CV_VERSION } from './cvLoader.js';
-import { fileSource, urlSource, cameraSource, listCameras } from './sources.js';
+import { fileSource, urlSource, cameraSource, listCameras, displaySource } from './sources.js';
 import { createFrameLoop } from './frameLoop.js';
 import { createSyntheticLoop } from './synthLoop.js';
 import { createScene } from './synth.js';
@@ -1027,7 +1027,7 @@ async function openSourceNow(next) {
         $('srcLabel').textContent = `${next.label} · ${video.videoWidth}×${video.videoHeight}`;
         loop = createFrameLoop({ video, onFrame, mode: params.mode, live: next.isLive });
         loop.setSpeed(Number(params.speed));
-        if (next.kind === 'camera') $('srcLabel').textContent += `${next.fps ? ` @ ${Math.round(next.fps)} fps` : ''} · live`;
+        if (next.kind === 'camera' || next.kind === 'display') $('srcLabel').textContent += `${next.fps ? ` @ ${Math.round(next.fps)} fps` : ''} · live`;
     }
     ph.loop = loop;
     clearObjects();
@@ -1061,6 +1061,19 @@ async function renderCameras() {
     if (!keep) try { keep = localStorage.getItem(CAMERA_KEY) || ''; } catch { /* none */ }
     sel.replaceChildren(new Option(list.length ? 'Default camera' : 'Camera / capture device', ''), ...list.map(c => new Option(c.label, c.deviceId)));
     if (keep && list.some(c => c.deviceId === keep)) sel.value = keep;
+}
+
+// Another tab or a window, picked in the browser's sharing dialog.
+function openCapture() {
+    if (!cvState.ready) return;
+    const src = displaySource({ onEnded: () => {
+        if (source !== src) return;
+        if (loop) loop.pause();
+        updateTransport();
+        $('play').disabled = true;
+        showBanner('Sharing was stopped. Open → Capture a tab or window to pick it again.');
+    } });
+    openSource(src);
 }
 
 function openCamera() {
@@ -1215,6 +1228,7 @@ function bindTransport() {
     for (const [key, s] of Object.entries(SCENES)) pick.append(new Option(s.label, key));
     $('openScene').addEventListener('click', () => openScene(pick.value));
     $('openCamera').addEventListener('click', openCamera);
+    $('openCapture').addEventListener('click', openCapture);
     $('openMenu').addEventListener('click', () => { if (!$('sourceMenu').hidden) renderCameras(); });
     if (navigator.mediaDevices && navigator.mediaDevices.addEventListener) navigator.mediaDevices.addEventListener('devicechange', renderCameras);
     renderCameras();

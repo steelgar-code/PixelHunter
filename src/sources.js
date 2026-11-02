@@ -205,3 +205,51 @@ function cameraError(e) {
     default: return `The camera could not be opened${e && e.message ? `: ${e.message}` : ''}.`;
     }
 }
+
+// Another tab or a window, through the browser's screen sharing (getDisplayMedia): the user picks
+// it in the browser's dialog. A stream opened in its own tab (its address straight in the address
+// bar: http:// works there too) comes in without CORS, server or OBS. What comes is the tab as
+// drawn, so the video should show at its own size (a large window, or full screen). Asks for the
+// native size (no scaling) and up to 30 fps. onEnded: called when sharing is stopped from the
+// browser's bar. Chrome and Edge offer tabs; Firefox and Safari windows and screens.
+export function displaySource({ onEnded } = {}) {
+    let stream = null;
+    const src = {
+        kind: 'display',
+        label: 'Captured tab',
+        isLive: true,
+        async start(video) {
+            if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) {
+                throw new Error('This browser can\'t capture tabs or windows (or the page isn\'t served over https:// or from localhost).');
+            }
+            try {
+                stream = await navigator.mediaDevices.getDisplayMedia({
+                    video: { displaySurface: 'browser', resizeMode: 'none', width: { ideal: 3840 }, height: { ideal: 2160 }, frameRate: { ideal: 30 }, cursor: 'never' },
+                    audio: false, selfBrowserSurface: 'exclude', surfaceSwitching: 'include', systemAudio: 'exclude',
+                });
+            } catch (e) {
+                throw new Error(e && e.name === 'NotAllowedError' ? 'Capture was cancelled (or not allowed).' : `The tab or window could not be captured${e && e.message ? `: ${e.message}` : ''}.`);
+            }
+            const track = stream.getVideoTracks()[0];
+            const st = track.getSettings ? track.getSettings() : {};
+            src.label = `Captured ${st.displaySurface === 'window' ? 'window' : st.displaySurface === 'monitor' ? 'screen' : 'tab'}`;
+            track.addEventListener('ended', () => { if (stream && onEnded) onEnded(); });
+            video.removeAttribute('src');
+            video.muted = true;
+            video.playsInline = true;
+            video.loop = false;
+            const ready = waitForMetadata(video, { failed: 'The captured tab sends no picture.' });
+            video.srcObject = stream;
+            await ready;
+            src.fps = st.frameRate || null;
+        },
+        stop(video) {
+            const s = stream;
+            stream = null;
+            if (s) for (const t of s.getTracks()) t.stop();
+            video.pause();
+            video.srcObject = null;
+        },
+    };
+    return src;
+}
