@@ -139,7 +139,7 @@ export function createObjects({ kept = 40 } = {}) {
                     const early = (t.early || []).map(e => earlyEntry(e, t.id, s));
                     const first = early.length ? { frame: early[0].frame, time: early[0].time } : { frame: r.frame, time: r.time };
                     objects.set(oid, { id: oid, trackId: t.id, first, confirmedAt: { frame: r.frame, time: r.time }, last: null, frames: 0,
-                        w: box.w, h: box.h, contrast, speed: 0, best: null, label: null, history: early, lost: null });
+                        w: box.w, h: box.h, contrast, speed: 0, best: null, label: null, labelId: null, history: early, lost: null });
                     event(objects.get(oid), r, `confirmed (track #${t.id})${early.length ? `, seen ${early.length} times before` : ''}`);
                     created.push(oid);
                 }
@@ -222,17 +222,20 @@ export function createObjects({ kept = 40 } = {}) {
         get(oid) { return objects.get(oid) || null; },
         objectOfTrack(tid) { return byTrack.has(tid) ? byTrack.get(tid) : null; },
         isPinned(oid) { return pinned.has(oid); },
-        // the user's verdict: 'object' (kept tracking) or 'not' (not an object: hidden), or null
-        label(oid, value) {
+        // the user's verdict: 'real' (Real, or Keep tracking) or 'not' (not an object: hidden), or
+        // null; `how` is added to the history event (e.g. 'from the saved labels')
+        label(oid, value, how = '') {
             const o = objects.get(oid);
             if (!o) return null;
             if (value !== undefined && value !== o.label) {
                 o.label = value;
-                o.history.push({ frame: o.last ? o.last.frame : null, time: o.last ? o.last.time : null, event: value === 'not' ? 'labelled: not an object' : value === 'object' ? 'labelled: object' : 'label cleared' });
+                o.history.push({ frame: o.last ? o.last.frame : null, time: o.last ? o.last.time : null, event: (value === 'not' ? 'labelled: not an object' : value === 'real' ? 'labelled: real' : 'label cleared') + (how ? ` (${how})` : '') });
                 if (value === 'not') pinned.delete(oid);
             }
             return o.label;
         },
+        // the saved label (labels.js) this object is, or null
+        setLabelId(oid, id) { const o = objects.get(oid); if (o) o.labelId = id; },
         isHidden(oid) { const o = objects.get(oid); return !!o && o.label === 'not'; },
         pin(oid, on = !pinned.has(oid)) { if (on) pinned.add(oid); else pinned.delete(oid); return on; },
         get pinnedCount() { return pinned.size; },

@@ -25,6 +25,7 @@ export function fileSource(file) {
     return {
         kind: 'file',
         label: file.name,
+        file,                       // for the clip id of its labels
         isLive: false,
         async start(video) {
             url = URL.createObjectURL(file);

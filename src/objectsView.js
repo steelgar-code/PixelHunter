@@ -20,7 +20,7 @@ const STATE_KEY = 'pixelhunter.objectsView.v1';
 export function createObjectsView(d) {
     // d: { objs, params, $, fmtTime, display, stage, wrap, current() → { r, slot, geometry, loop },
     //      goToTime(t), togglePin(oid), onChange(), pause(), download(name, data), sourceLabel(),
-    //      exportMeta() }
+    //      exportMeta(), onLabel(oid): after the user labels an object }
     const { objs, $ } = d;
     const thumbs = new Map();          // oid → canvas (THUMB × THUMB)
     let filter = 'all';
@@ -147,7 +147,8 @@ export function createObjectsView(d) {
             head.className = 'ohead';
             const id = document.createElement('span');
             id.className = 'oid mono';
-            id.textContent = `#${o.id}`;
+            id.textContent = `#${o.id}${o.label === 'real' ? ' ✓' : ''}`;
+            if (o.label === 'real') id.title = 'Labelled real';
             const chip = document.createElement('span');
             chip.className = `chip ${st.key}`;
             chip.textContent = st.key === 'lost' ? 'lost' : st.text;
@@ -275,7 +276,9 @@ export function createObjectsView(d) {
         $('inspector').classList.toggle('pinned-obj', pin);
         $('inspPin').textContent = pin ? '★ Tracking' : '☆ Keep tracking';
         $('inspPin').setAttribute('aria-pressed', String(pin));
-        $('inspPin').title = pin ? 'Stop keeping track of it' : 'Keep tracking: kept watching when it stops or leaves the view; labelled as an object';
+        $('inspPin').title = pin ? 'Stop keeping track of it (the Real label stays)' : 'Keep tracking: kept watching when it stops or leaves the view; also labels it Real';
+        $('inspReal').setAttribute('aria-pressed', String(o.label === 'real'));
+        $('inspReal').textContent = o.label === 'real' ? '✓ Real: undo' : '✓ Real';
         $('inspNot').setAttribute('aria-pressed', String(o.label === 'not'));
         $('inspNot').textContent = o.label === 'not' ? 'Hidden: undo' : 'Not an object';
         drawZoom(o);
@@ -397,22 +400,34 @@ export function createObjectsView(d) {
         $('inspPin').addEventListener('click', () => {
             if (open === null) return;
             const pinNow = !objs.isPinned(open);
-            if (pinNow) objs.label(open, 'object');
+            if (pinNow) setLabel(open, 'real');
             d.togglePin(open);
+        });
+        $('inspReal').addEventListener('click', () => {
+            if (open === null) return;
+            const o = objs.get(open);
+            setLabel(open, o.label === 'real' ? null : 'real');
+            d.togglePin(open, objs.isPinned(open));
         });
         $('inspNot').addEventListener('click', () => {
             if (open === null) return;
             const o = objs.get(open);
-            objs.label(open, o.label === 'not' ? null : 'not');
+            setLabel(open, o.label === 'not' ? null : 'not');
             if (o.label === 'not') dismissed(open);
             d.togglePin(open, objs.isPinned(open));          // keeps the tracker's pins in step
-            dirty = true;
-            renderList();
-            d.onChange();
         });
         $('inspFirst').addEventListener('click', () => { const o = objs.get(open); if (o) d.goToTime(o.first.time); });
         $('inspLast').addEventListener('click', () => { const o = objs.get(open); if (o) d.goToTime(o.last.time); });
         $('inspHistory').addEventListener('click', () => showHistory(historyOf === open ? null : open));
+    }
+
+    // The user's verdict on an object (objs.label), passed on to the saved labels.
+    function setLabel(oid, value) {
+        objs.label(oid, value);
+        if (d.onLabel) d.onLabel(oid);
+        dirty = true;
+        renderList();
+        d.onChange();
     }
 
     // An object marked "Not an object": if playback paused for it (and only for new objects
@@ -448,18 +463,24 @@ export function createObjectsView(d) {
         const keep = document.createElement('button');
         keep.type = 'button';
         keep.textContent = '☆ Keep tracking';
-        keep.addEventListener('click', e => { e.stopPropagation(); if (!objs.isPinned(oid)) { objs.label(oid, 'object'); d.togglePin(oid); } close(); });
+        keep.title = 'Keep tracking it (also labels it Real)';
+        keep.addEventListener('click', e => { e.stopPropagation(); if (!objs.isPinned(oid)) { setLabel(oid, 'real'); d.togglePin(oid); } close(); });
+        const real = document.createElement('button');
+        real.type = 'button';
+        real.textContent = '✓ Real';
+        real.title = 'Label it a real object (without keeping track of it)';
+        real.addEventListener('click', e => { e.stopPropagation(); setLabel(oid, 'real'); close(); });
         const not = document.createElement('button');
         not.type = 'button';
         not.textContent = 'Not an object';
-        not.addEventListener('click', e => { e.stopPropagation(); objs.label(oid, 'not'); d.togglePin(oid, false); dirty = true; renderList(); d.onChange(); close(); dismissed(oid); });
+        not.addEventListener('click', e => { e.stopPropagation(); setLabel(oid, 'not'); d.togglePin(oid, false); close(); dismissed(oid); });
         const x = document.createElement('button');
         x.type = 'button';
         x.className = 'icon';
         x.textContent = '×';
         x.title = 'Dismiss';
         x.addEventListener('click', e => { e.stopPropagation(); close(); });
-        btns.append(keep, not, x);
+        btns.append(keep, real, not, x);
         card.append(thumb, title, data, btns);
         card.addEventListener('click', () => { inspect(oid); close(); });
         let timer = null;
@@ -558,7 +579,7 @@ export function createObjectsView(d) {
         box.hidden = !o;
         if (!o) return;
         const tracks = [...new Set(o.history.filter(e => e.track !== undefined).map(e => e.track))];
-        $('historyTitle').textContent = `#${o.id} · tracks ${tracks.map(t => `#${t}`).join(', ')} · ${o.history.length} rows${o.label ? ` · labelled: ${o.label === 'not' ? 'not an object' : 'object'}` : ''}`;
+        $('historyTitle').textContent = `#${o.id} · tracks ${tracks.map(t => `#${t}`).join(', ')} · ${o.history.length} rows${o.label ? ` · labelled: ${o.label === 'not' ? 'not an object' : 'real'}` : ''}`;
         const rows = o.history.slice(-300).reverse();
         $('historyRows').replaceChildren(...rows.map(e => {
             const tr = document.createElement('tr');
@@ -652,7 +673,7 @@ export function createObjectsView(d) {
         get maxTime() { return maxTime; },
         // the objects with labels, for the detections export
         summary() {
-            return objs.list().map(o => ({ id: o.id, label: o.label, first: o.first, confirmed: o.confirmedAt || null, last: o.last, frames: o.frames,
+            return objs.list().map(o => ({ id: o.id, label: o.label, ...(o.labelId ? { labelId: o.labelId } : {}), first: o.first, confirmed: o.confirmedAt || null, last: o.last, frames: o.frames,
                 w: +o.w.toFixed(1), h: +o.h.toFixed(1), contrast: +o.contrast.toFixed(1), speed: +o.speed.toFixed(2) }));
         },
     };

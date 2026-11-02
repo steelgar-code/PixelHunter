@@ -96,11 +96,11 @@ try {
     // exports keep the labels
     const [dl] = await Promise.all([page.waitForEvent('download'), page.click('#exportObjects')]);
     const csv = fs.readFileSync(await dl.path(), 'utf8');
-    ok('Objects CSV: a row per object with its label', csv.startsWith('id,label,first_frame') && csv.includes(`\n${hidden},not,`) && csv.includes(`\n${first},object,`), csv.split('\n').slice(0, 4));
+    ok('Objects CSV: a row per object with its label', csv.startsWith('id,label,first_frame') && csv.includes(`\n${hidden},not,`) && csv.includes(`\n${first},real,`), csv.split('\n').slice(0, 4));
     await page.click('#tab-stats');
     const [dj] = await Promise.all([page.waitForEvent('download'), page.click('#exportJson')]);
     const json = JSON.parse(fs.readFileSync(await dj.path(), 'utf8'));
-    ok('detections JSON: the objects with their labels', json.objects.some(o => o.id === hidden && o.label === 'not') && json.objects.some(o => o.id === first && o.label === 'object'), json.objects);
+    ok('detections JSON: the objects with their labels', json.objects.some(o => o.id === hidden && o.label === 'not') && json.objects.some(o => o.id === first && o.label === 'real'), json.objects);
     ok('… detections in frame order', json.detections.every((d, i) => i === 0 || d.frame >= json.detections[i - 1].frame));
 
     // confirmation by evidence: its settings replace N and M

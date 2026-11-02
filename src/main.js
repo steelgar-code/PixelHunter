@@ -13,6 +13,7 @@ import { createScore } from './score.js';
 import { createExportLog, download } from './exportLog.js';
 import { createObjects } from './objects.js';
 import { createObjectsView } from './objectsView.js';
+import { createLabelsView } from './labelsView.js';
 import { fitOverlay, clear, drawPoints, drawNote, drawBoxes, drawTruth, drawTracks, drawBuilding, drawHeld, drawOffscreen, drawZones, drawInclude } from './overlay.js';
 import { normalizeZone, normalizeZones, parseZones, formatZones, zoneRect, inZones, loadZones, saveZones, MAX_ZONES, ZONES_KEY, INCLUDE_KEY } from './zones.js';
 
@@ -557,6 +558,7 @@ function render() {
         // pinned and out of view: an arrow at the edge towards it
         drawOffscreen(overlayCtx, tf, asObject(r.tracks.filter(isPinnedTrack)), g.w, g.h, PIN_COLOUR);
     }
+    if (params.view !== 'points') labels.draw(overlayCtx, tf, lastOut.slot && lastOut.slot.meta ? lastOut.slot.meta.time : null, g);
     if (params.showZones || drawing) drawZones(overlayCtx, tf, params.zones, g.w, g.h, drawKind === 'exclude' ? draft : null);
     if (note) drawNote(overlayCtx, tf, note);
     ph.note = note;
@@ -612,6 +614,7 @@ function renderZoneLists() {
 }
 
 function setDrawing(on) {
+    if (on && labels.marking) labels.setMarking(false);
     drawing = on;
     draft = dragFrom = null;
     $('drawZone').setAttribute('aria-pressed', String(on));
@@ -636,6 +639,7 @@ const onPanel = e => !!(e.target && e.target.closest && e.target.closest('.inspe
 
 function bindZones() {
     $('drawZone').addEventListener('click', () => setDrawing(!drawing));
+    $('markMissed').addEventListener('click', () => { if (drawing && labels.marking) setDrawing(false); });
     $('clearZones').addEventListener('click', () => { setZones('include', []); setZones('exclude', []); });
     for (const input of document.querySelectorAll('input[name=zoneKind]')) {
         input.addEventListener('change', () => { drawKind = input.value; if (!drawing) setDrawing(true); });
@@ -672,20 +676,21 @@ function bindZones() {
     // tracking it (or stops)
     stage.addEventListener('click', e => {
         if (drawing || onPanel(e)) return;
+        if (labels.marking) { labels.markClick(e); return; }
         const t = trackAt(e);
         if (t) view.inspect(objs.objectOfTrack(t.id));
     });
     stage.addEventListener('dblclick', e => {
-        if (drawing || onPanel(e)) return;
+        if (drawing || onPanel(e) || labels.marking) return;
         const t = trackAt(e);
         if (!t) return;
         const oid = objs.objectOfTrack(t.id);
-        if (!objs.isPinned(oid)) objs.label(oid, 'object');
+        if (!objs.isPinned(oid)) { objs.label(oid, 'real'); labels.onLabel(oid); }
         togglePin(oid);
     });
     stage.addEventListener('pointermove', e => {
         if (drawing || e.pointerType !== 'mouse') return;
-        stage.classList.toggle('over-object', !onPanel(e) && !!trackAt(e));
+        stage.classList.toggle('over-object', !labels.marking && !onPanel(e) && !!trackAt(e));
     });
     stage.addEventListener('pointercancel', () => { dragFrom = draft = null; render(); });
     renderZoneLists();
@@ -771,21 +776,9 @@ function stepBack() {
     if (T !== null && T >= 0) goToTime(T);
 }
 
-const BOOKMARKS_KEY = 'pixelhunter.bookmarks.v1';
-
-function loadBookmarks() {
-    try { return JSON.parse(localStorage.getItem(BOOKMARKS_KEY) || '{}') || {}; } catch { return {}; }
-}
-
-function bookmarksOf(label) { return (loadBookmarks()[label] || []).filter(b => Number.isFinite(b.frame)); }
-
-function saveBookmarks(label, list) {
-    try {
-        const all = loadBookmarks();
-        if (list.length) all[label] = list; else delete all[label];
-        localStorage.setItem(BOOKMARKS_KEY, JSON.stringify(all));
-    } catch { /* not remembered */ }
-}
+// Bookmarks are kept in the clip's labels (labelsView.js; saved with them).
+const bookmarksOf = () => labels.bookmarks().filter(b => Number.isFinite(b.frame));
+const saveBookmarks = (_, list) => labels.setBookmarks(list);
 
 // Bookmarks the frame shown, or removes its bookmark if it has one.
 function addBookmark() {
@@ -835,6 +828,7 @@ const objs = createObjects({ kept: 40 });
 
 function clearObjects() {
     objs.clear();
+    labels.clearObjects();
     if (view) view.clear();
     if (pipeline) pipeline.setPinned([]);
 }
@@ -847,6 +841,7 @@ function noteObjects(out) {
     // tracks shown with their object's id
     for (const t of r.tracks) t.objectId = objs.objectOfTrack(t.id);
     view.noteFrame(r, out.slot, changes);
+    labels.noteFrame(r);
 }
 
 // object id of a track (for drawing and the export); the track id until it is an object
@@ -900,8 +895,26 @@ const view = createObjectsView({
     download,
     fileBase,
     exportMeta: () => ({ app: 'PixelHunter', version: APP_VERSION, source: source ? source.label : null, params: exportedParams() }),
+    onLabel: oid => labels.onLabel(oid),
 });
 ph.objectsView = view;
+
+// --- labels: the clip's saved labels, mark missed, the data folder (labelsView.js) --------------
+
+const labels = createLabelsView({
+    $, params, objs,
+    busy: () => navigating,
+    current: () => ({ r: lastOut && lastOut.result, slot: lastOut && lastOut.slot, geometry: pipeline && pipeline.geometry, loop }),
+    source: () => source,
+    pipeline: () => pipeline,
+    render: () => render(),
+    download,
+    toFrame: e => toFrame(e),
+    onBookmarks: () => renderBookmarks(),
+    onLabelsChanged: () => { view.markDirty(); view.render(); render(); },
+});
+ph.labels = labels;
+Object.defineProperty(ph, 'navigating', { get: () => navigating });
 
 // --- side panel tabs, the source menu, quick presets ------------------------------------------
 
@@ -1031,6 +1044,10 @@ async function openSourceNow(next) {
     }
     ph.loop = loop;
     clearObjects();
+    // the clip's labels (and bookmarks), before its first frame
+    await labels.openClip(next, next.kind === 'synthetic'
+        ? { width: next.scene.width, height: next.scene.height, duration: next.scene.frames / next.scene.fps }
+        : { width: video.videoWidth, height: video.videoHeight, duration: video.duration });
     ph.score = score;
     ph.confScore = confScore;
     ph.log = log;
@@ -1213,9 +1230,11 @@ function bindTransport() {
         else if (e.code === 'ArrowLeft' && loop) { e.preventDefault(); stepBack(); }
         else if (e.code === 'KeyB' && loop && !e.ctrlKey && !e.metaKey) addBookmark();
         else if (e.code === 'KeyG' && loop && !e.ctrlKey && !e.metaKey) { e.preventDefault(); openGoTo(); }
+        else if (e.code === 'KeyM' && loop && !e.ctrlKey && !e.metaKey && labels.set) { if (drawing) setDrawing(false); labels.setMarking(!labels.marking); }
         else if (e.code === 'Escape') {
             if (!$('sourceMenu').hidden) setMenu(false);
             else if (drawing) setDrawing(false);
+            else if (labels.marking) labels.setMarking(false);
             else if (view.open !== null) view.inspect(null);
         }
     });
@@ -1321,6 +1340,7 @@ async function start() {
     bindTabs();
     bindSourceMenu();
     view.bind();
+    labels.init();
     renderPresets();
     renderQuickPresets();
     bindUserPresets();
