@@ -143,6 +143,7 @@ try {
     const again = await objects(page);
     ok('objects found again on a labelled path get its label (and the "not" one is hidden)', again.some(o => o.label === 'real' && o.labelId) && again.some(o => o.label === 'not' && o.labelId)
         && !(await page.evaluate(() => [...document.querySelectorAll('#objectList li')].map(li => li.dataset.oid))).includes(String(again.find(o => o.label === 'not').id)), again);
+    ok('… and no card for the known false alarm', (await page.locator(`#cards .card[data-oid="${again.find(o => o.label === 'not').id}"]`).count()) === 0);
     ok('labels drawn on the video (green box)', await page.evaluate(() => {
         const c = document.getElementById('overlay'), d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
         for (let i = 0; i < d.length; i += 4) if (d[i] > 50 && d[i] < 100 && d[i + 1] > 170 && d[i + 2] > 110 && d[i + 2] < 160 && d[i + 3] > 100) return true;

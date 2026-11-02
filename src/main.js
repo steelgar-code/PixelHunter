@@ -48,7 +48,7 @@ const skipped = { count: 0, reasons: {} };
 let score = null;                // synthetic sources: candidates against ground truth
 let confScore = null;            // … and confirmed detections
 const log = createExportLog();
-const APP_VERSION = '0.7.0';
+const APP_VERSION = '0.8.0';
 
 // Test hook (see tests/): recent frames and state, no effect on the UI.
 const FRAME_LOG = 5000;
@@ -81,7 +81,7 @@ function fatal(text) {
 
 const syncers = new Map();       // key → puts params[key] into its control
 // display-only settings: a change redraws, nothing is recomputed
-const VIEW_KEYS = ['view', 'showCandidates', 'showBuilding', 'showTruth', 'showZones', 'showHud'];
+const VIEW_KEYS = ['view', 'showCandidates', 'showBuilding', 'showTruth', 'showZones', 'showHud', 'showLabels'];
 // settings of the app itself (what is shown, cards): not part of a detection run's settings
 const UI_GROUPS = ['view', 'objects'];
 
@@ -840,8 +840,10 @@ function noteObjects(out) {
     if (objs.pinnedCount) pipeline.setPinned(objs.pinnedTrackIds());
     // tracks shown with their object's id
     for (const t of r.tracks) t.objectId = objs.objectOfTrack(t.id);
-    view.noteFrame(r, out.slot, changes);
+    // labels first: an object on a labelled path takes its label before cards are shown (a known
+    // false alarm gets no card and doesn't pause playback)
     labels.noteFrame(r);
+    view.noteFrame(r, out.slot, changes);
 }
 
 // object id of a track (for drawing and the export); the track id until it is an object
