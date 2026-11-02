@@ -285,3 +285,4 @@ button[aria-pressed=true] { background: color-mix(in srgb, var(--danger) 25%, va
 #markMissed[aria-pressed=true] { color: #5ce1ff; border-color: #5ce1ff; background: color-mix(in srgb, #5ce1ff 12%, var(--panel)); }
 .stage.marking, .stage.marking canvas { cursor: crosshair; }
 #labelsStatus.warn, #dataStatus.warn { color: #ffcf5c; }
+.objects .olabel { color: var(--ok); font-weight: 700; }

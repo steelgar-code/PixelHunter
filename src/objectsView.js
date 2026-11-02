@@ -147,13 +147,20 @@ export function createObjectsView(d) {
             head.className = 'ohead';
             const id = document.createElement('span');
             id.className = 'oid mono';
-            id.textContent = `#${o.id}${o.label === 'real' ? ' ✓' : ''}`;
-            if (o.label === 'real') id.title = 'Labelled real';
+            id.textContent = `#${o.id}`;
             const chip = document.createElement('span');
             chip.className = `chip ${st.key}`;
             chip.textContent = st.key === 'lost' ? 'lost' : st.text;
             chip.title = st.text;
-            head.append(id, chip);
+            head.append(id);
+            if (o.label === 'real') {
+                const real = document.createElement('span');
+                real.className = 'olabel';
+                real.textContent = '✓';
+                real.title = 'Labelled real';
+                head.append(real);
+            }
+            head.append(chip);
             const size = document.createElement('span');
             size.className = 'osize mono';
             size.textContent = `${sizeText(o)} · ${o.speed.toFixed(1)} px/f`;

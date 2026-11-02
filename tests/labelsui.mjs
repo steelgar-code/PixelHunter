@@ -64,7 +64,7 @@ try {
     const la = set.objects[0];
     ok('✓ Real labels it: a label with its path, size and crops', set.objects.length === 1 && la.label === 'real' && la.keys.length >= 2 && la.crops.length >= 1, la);
     ok('… not pinned (Keep tracking stays off)', (await page.getAttribute('#inspPin', 'aria-pressed')) === 'false' && (await page.getAttribute('#inspReal', 'aria-pressed')) === 'true');
-    ok('… shown in the list and counted', (await page.textContent(`#objectList li[data-oid="${a.id}"] .oid`)).includes('✓') && (await page.textContent('#labelCounts')).includes('1 real'));
+    ok('… shown in the list and counted', (await page.locator(`#objectList li[data-oid="${a.id}"] .olabel`).count()) === 1 && (await page.textContent('#labelCounts')).includes('1 real'));
     await page.evaluate(id => __ph.objectsView.inspect(id), b.id);
     await page.click('#inspNot');
     set = await labelSet(page);
