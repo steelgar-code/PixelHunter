@@ -13,6 +13,8 @@ import { createScore } from './score.js';
 import { createExportLog, download } from './exportLog.js';
 import { createObjects } from './objects.js';
 import { createObjectsView } from './objectsView.js';
+import { createLabelsView } from './labelsView.js';
+import { createBenchView } from './benchView.js';
 import { fitOverlay, clear, drawPoints, drawNote, drawBoxes, drawTruth, drawTracks, drawBuilding, drawHeld, drawOffscreen, drawZones, drawInclude } from './overlay.js';
 import { normalizeZone, normalizeZones, parseZones, formatZones, zoneRect, inZones, loadZones, saveZones, MAX_ZONES, ZONES_KEY, INCLUDE_KEY } from './zones.js';
 
@@ -47,7 +49,7 @@ const skipped = { count: 0, reasons: {} };
 let score = null;                // synthetic sources: candidates against ground truth
 let confScore = null;            // … and confirmed detections
 const log = createExportLog();
-const APP_VERSION = '0.7.0';
+const APP_VERSION = '0.9.0';
 
 // Test hook (see tests/): recent frames and state, no effect on the UI.
 const FRAME_LOG = 5000;
@@ -80,7 +82,7 @@ function fatal(text) {
 
 const syncers = new Map();       // key → puts params[key] into its control
 // display-only settings: a change redraws, nothing is recomputed
-const VIEW_KEYS = ['view', 'showCandidates', 'showBuilding', 'showTruth', 'showZones', 'showHud'];
+const VIEW_KEYS = ['view', 'showCandidates', 'showBuilding', 'showTruth', 'showZones', 'showHud', 'showLabels'];
 // settings of the app itself (what is shown, cards): not part of a detection run's settings
 const UI_GROUPS = ['view', 'objects'];
 
@@ -557,6 +559,7 @@ function render() {
         // pinned and out of view: an arrow at the edge towards it
         drawOffscreen(overlayCtx, tf, asObject(r.tracks.filter(isPinnedTrack)), g.w, g.h, PIN_COLOUR);
     }
+    if (params.view !== 'points') labels.draw(overlayCtx, tf, lastOut.slot && lastOut.slot.meta ? lastOut.slot.meta.time : null, g);
     if (params.showZones || drawing) drawZones(overlayCtx, tf, params.zones, g.w, g.h, drawKind === 'exclude' ? draft : null);
     if (note) drawNote(overlayCtx, tf, note);
     ph.note = note;
@@ -612,6 +615,7 @@ function renderZoneLists() {
 }
 
 function setDrawing(on) {
+    if (on && labels.marking) labels.setMarking(false);
     drawing = on;
     draft = dragFrom = null;
     $('drawZone').setAttribute('aria-pressed', String(on));
@@ -636,6 +640,7 @@ const onPanel = e => !!(e.target && e.target.closest && e.target.closest('.inspe
 
 function bindZones() {
     $('drawZone').addEventListener('click', () => setDrawing(!drawing));
+    $('markMissed').addEventListener('click', () => { if (drawing && labels.marking) setDrawing(false); });
     $('clearZones').addEventListener('click', () => { setZones('include', []); setZones('exclude', []); });
     for (const input of document.querySelectorAll('input[name=zoneKind]')) {
         input.addEventListener('change', () => { drawKind = input.value; if (!drawing) setDrawing(true); });
@@ -672,20 +677,21 @@ function bindZones() {
     // tracking it (or stops)
     stage.addEventListener('click', e => {
         if (drawing || onPanel(e)) return;
+        if (labels.marking) { labels.markClick(e); return; }
         const t = trackAt(e);
         if (t) view.inspect(objs.objectOfTrack(t.id));
     });
     stage.addEventListener('dblclick', e => {
-        if (drawing || onPanel(e)) return;
+        if (drawing || onPanel(e) || labels.marking) return;
         const t = trackAt(e);
         if (!t) return;
         const oid = objs.objectOfTrack(t.id);
-        if (!objs.isPinned(oid)) objs.label(oid, 'object');
+        if (!objs.isPinned(oid)) { objs.label(oid, 'real'); labels.onLabel(oid); }
         togglePin(oid);
     });
     stage.addEventListener('pointermove', e => {
         if (drawing || e.pointerType !== 'mouse') return;
-        stage.classList.toggle('over-object', !onPanel(e) && !!trackAt(e));
+        stage.classList.toggle('over-object', !labels.marking && !onPanel(e) && !!trackAt(e));
     });
     stage.addEventListener('pointercancel', () => { dragFrom = draft = null; render(); });
     renderZoneLists();
@@ -771,21 +777,9 @@ function stepBack() {
     if (T !== null && T >= 0) goToTime(T);
 }
 
-const BOOKMARKS_KEY = 'pixelhunter.bookmarks.v1';
-
-function loadBookmarks() {
-    try { return JSON.parse(localStorage.getItem(BOOKMARKS_KEY) || '{}') || {}; } catch { return {}; }
-}
-
-function bookmarksOf(label) { return (loadBookmarks()[label] || []).filter(b => Number.isFinite(b.frame)); }
-
-function saveBookmarks(label, list) {
-    try {
-        const all = loadBookmarks();
-        if (list.length) all[label] = list; else delete all[label];
-        localStorage.setItem(BOOKMARKS_KEY, JSON.stringify(all));
-    } catch { /* not remembered */ }
-}
+// Bookmarks are kept in the clip's labels (labelsView.js; saved with them).
+const bookmarksOf = () => labels.bookmarks().filter(b => Number.isFinite(b.frame));
+const saveBookmarks = (_, list) => labels.setBookmarks(list);
 
 // Bookmarks the frame shown, or removes its bookmark if it has one.
 function addBookmark() {
@@ -835,6 +829,7 @@ const objs = createObjects({ kept: 40 });
 
 function clearObjects() {
     objs.clear();
+    labels.clearObjects();
     if (view) view.clear();
     if (pipeline) pipeline.setPinned([]);
 }
@@ -846,6 +841,9 @@ function noteObjects(out) {
     if (objs.pinnedCount) pipeline.setPinned(objs.pinnedTrackIds());
     // tracks shown with their object's id
     for (const t of r.tracks) t.objectId = objs.objectOfTrack(t.id);
+    // labels first: an object on a labelled path takes its label before cards are shown (a known
+    // false alarm gets no card and doesn't pause playback)
+    labels.noteFrame(r);
     view.noteFrame(r, out.slot, changes);
 }
 
@@ -900,8 +898,45 @@ const view = createObjectsView({
     download,
     fileBase,
     exportMeta: () => ({ app: 'PixelHunter', version: APP_VERSION, source: source ? source.label : null, params: exportedParams() }),
+    onLabel: oid => labels.onLabel(oid),
 });
 ph.objectsView = view;
+
+// --- labels: the clip's saved labels, mark missed, the data folder (labelsView.js) --------------
+
+const labels = createLabelsView({
+    $, params, objs,
+    busy: () => navigating,
+    current: () => ({ r: lastOut && lastOut.result, slot: lastOut && lastOut.slot, geometry: pipeline && pipeline.geometry, loop }),
+    source: () => source,
+    pipeline: () => pipeline,
+    render: () => render(),
+    download,
+    toFrame: e => toFrame(e),
+    onBookmarks: () => renderBookmarks(),
+    onLabelsChanged: () => { view.markDirty(); view.render(); render(); },
+    onEdit: () => { if (!$('panel-bench').hidden) bench.render(); },
+});
+ph.labels = labels;
+
+// --- the Benchmark tab (benchView.js) ------------------------------------------------------------
+
+const bench = createBenchView({
+    $, params, labels,
+    source: () => source,
+    loop: () => loop,
+    geometry: () => pipeline && pipeline.geometry,
+    cv: () => (cvState.ready ? cvState.cv : null),
+    pause: () => { if (loop && loop.playing) { loop.pause(); updateTransport(); } },
+    goToTime: t => goToTime(t),
+    fmtTime,
+    userPresets: () => userPresets,
+    download,
+});
+ph.bench = bench;
+// a synthetic scene from its options (tests)
+ph.openScene = (label, options) => openSource({ kind: 'synthetic', label, isLive: false, scene: createScene(options) });
+Object.defineProperty(ph, 'navigating', { get: () => navigating });
 
 // --- side panel tabs, the source menu, quick presets ------------------------------------------
 
@@ -915,6 +950,7 @@ function showTab(name) {
     }
     try { localStorage.setItem(TAB_KEY, name); } catch { /* not remembered */ }
     if (name === 'objects') { view.markDirty(); view.render(); }
+    if (name === 'bench') { bench.render(); bench.renderControls(); }
 }
 
 function bindTabs() {
@@ -992,6 +1028,7 @@ async function openSource(next) {
 }
 
 async function openSourceNow(next) {
+    bench.cancel();
     if (loop) { loop.destroy(); loop = null; }
     if (source && source.stop) source.stop(video);
     source = null;
@@ -1031,6 +1068,11 @@ async function openSourceNow(next) {
     }
     ph.loop = loop;
     clearObjects();
+    // the clip's labels (and bookmarks), before its first frame
+    await labels.openClip(next, next.kind === 'synthetic'
+        ? { width: next.scene.width, height: next.scene.height, duration: next.scene.frames / next.scene.fps }
+        : { width: video.videoWidth, height: video.videoHeight, duration: video.duration });
+    bench.openClip();
     ph.score = score;
     ph.confScore = confScore;
     ph.log = log;
@@ -1213,9 +1255,11 @@ function bindTransport() {
         else if (e.code === 'ArrowLeft' && loop) { e.preventDefault(); stepBack(); }
         else if (e.code === 'KeyB' && loop && !e.ctrlKey && !e.metaKey) addBookmark();
         else if (e.code === 'KeyG' && loop && !e.ctrlKey && !e.metaKey) { e.preventDefault(); openGoTo(); }
+        else if (e.code === 'KeyM' && loop && !e.ctrlKey && !e.metaKey && labels.set) { if (drawing) setDrawing(false); labels.setMarking(!labels.marking); }
         else if (e.code === 'Escape') {
             if (!$('sourceMenu').hidden) setMenu(false);
             else if (drawing) setDrawing(false);
+            else if (labels.marking) labels.setMarking(false);
             else if (view.open !== null) view.inspect(null);
         }
     });
@@ -1321,6 +1365,8 @@ async function start() {
     bindTabs();
     bindSourceMenu();
     view.bind();
+    labels.init();
+    bench.bind();
     renderPresets();
     renderQuickPresets();
     bindUserPresets();

@@ -21,6 +21,7 @@ export const PARAM_DEFS = [
     { key: 'cards', label: 'A card on the video for each new object', group: 'objects', type: 'bool', default: true },
     { key: 'autoInspect', label: 'Open the zoomed view for each new object', group: 'objects', type: 'bool', default: false },
     { key: 'pauseOnNew', label: 'Pause when a new object is confirmed', group: 'objects', type: 'bool', default: false },
+    { key: 'showLabels', label: 'Show labels on the video (paths of labelled objects)', group: 'objects', type: 'bool', default: true },
 
     // detection (detect.js)
     { key: 'detectMode', label: 'Detection', group: 'detect', type: 'choice', default: 'adaptive',

@@ -23,6 +23,7 @@ import { createTracker, TRACK_DEFAULTS } from './tracker.js';
 import { scaleH, mul, normalize, composeNewestFirst } from './homography.js';
 import { mulberry32 } from './synth.js';
 import { contrastOf } from './objects.js';
+import { stackCrop, CROP } from './crops.js';
 
 function makeCanvas(w, h) {
     if (typeof OffscreenCanvas !== 'undefined') return new OffscreenCanvas(w, h);
@@ -59,6 +60,7 @@ export function createPipeline(cv, params) {
     let resetCause = 'start';    // why the frame history last started over (shown while it refills)
     const scratch = {};          // Mats for debug views, made on first use
     let viewData = null;         // ImageData for grey views
+    let stack = null;            // frames t−s, t, t+s and the fits between them, for crops (until the next push)
 
     const stride = () => Math.min(MAX_STRIDE, Math.max(1, Math.round(Number(p.stride) || 1)));
     // slot holding the frame `back` frames before the newest
@@ -70,6 +72,7 @@ export function createPipeline(cv, params) {
         views = [];
         if (rgba) rgba.delete();
         rgba = null;
+        stack = null;
     }
 
     function setup(srcW, srcH, cause = 'start') {
@@ -136,6 +139,7 @@ export function createPipeline(cv, params) {
     // Returns { slot: the frame to show (.view.canvas, .meta), result: frame t's result or null }.
     function push(f) {
         const t0 = performance.now();
+        stack = null;
         if (!geom) setup(f.width, f.height);
         else if (geom.srcW !== f.width || geom.srcH !== f.height) setup(f.width, f.height, `video size changed to ${f.width}×${f.height}`);
         else if (geom.stride !== stride()) setup(f.width, f.height, 'frame stride changed');
@@ -172,6 +176,7 @@ export function createPipeline(cv, params) {
         const prevT = count >= s + 2 ? at(s + 1).meta?.time : null;
         if (Number.isFinite(prevT) && Number.isFinite(cur.meta.time) && cur.meta.time > prevT) dt = Math.min(dt, Math.max(1, Math.round((cur.meta.time - prevT) * MAX_FPS)));
         let detect;
+        stack = { cur: cur.grey, prev: null, next: null, Hb: null, Hf: null };
         if (count < 2 * s + 1) {
             detect = { ok: false, reason: (count === s + 1 ? 'no previous frame' : `waiting for ${s} frames before`) + restarted(), candidates: [] };
         } else {
@@ -181,6 +186,7 @@ export function createPipeline(cv, params) {
             else if (!fwd.H && p.detectMode !== 'basic') detect = { ok: false, reason: fwd.reason, candidates: [] };
             else {
                 const prev = at(2 * s), next = slot;
+                stack = { cur: cur.grey, prev: prev.grey, next: next.grey, Hb: back.H, Hf: fwd.H || null };
                 // where the objects the user keeps tracking should be in frame t: the
                 // background-shift check must not drop them
                 const tracked = p.shiftCheck && egoPrev && egoPrev.ok
@@ -298,9 +304,16 @@ export function createPipeline(cv, params) {
             tracker.setParams(trackParams(p));
             if (cause && geom) setup(geom.srcW, geom.srcH, cause);
         },
+        // A 32×32 3-frame crop (crops.js) around (cx, cy) in the frame of the last result
+        // (processing px), or null before there is one. Valid until the next push.
+        crop(cx, cy, side = CROP) {
+            if (!stack) return null;
+            const g = m => (m ? { cols: m.cols, rows: m.rows, data: m.data } : null);
+            return stackCrop({ cur: g(stack.cur), prev: g(stack.prev), next: g(stack.next), Hb: stack.Hb, Hf: stack.Hf }, cx, cy, side);
+        },
         // ids of tracks to keep watching (pinned by the user)
         setPinned(ids) { tracker.setPinned(ids); },
-        reset(cause = 'reset') { resetCause = cause; count = 0; ego.reset(); tracker.reset(); },
+        reset(cause = 'reset') { resetCause = cause; count = 0; stack = null; ego.reset(); tracker.reset(); },
         dispose() {
             freeAll();
             for (const m of Object.values(scratch)) m.delete();
