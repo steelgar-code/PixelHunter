@@ -63,8 +63,7 @@ try {
     await page.waitForFunction(() => __ph.results.length >= 1 && /^scene-/.test(document.getElementById('srcLabel').textContent) && document.getElementById('loading').hidden, null, { timeout: 30000 });
     await page.evaluate(() => { __ph.results.length = 0; });
     await page.click('#play');
-    await page.waitForFunction(() => !__ph.loop.playing && __ph.results.length >= 50, null, { timeout: 120000 })
-        ;
+    await page.waitForFunction(() => !__ph.loop.playing && __ph.results.length >= 50, null, { timeout: 120000 });
     const fileW = await page.evaluate(collect, 0);
     const timings = await page.evaluate(() => __ph.results.slice(-20).map(r => r.timings.total));
     ok('a file played every frame with Workers: a result for every frame', Object.keys(fileW).length >= 55, Object.keys(fileW).length);

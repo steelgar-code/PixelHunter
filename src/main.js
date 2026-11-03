@@ -512,7 +512,12 @@ function onFrame(f) {
     const p = pipeline;
     const out = p.push({ image: f.video, imageData: f.imageData, width: f.width, height: f.height, time: f.time,
         frame: f.frame, seq: f.seq, gap: f.gap, jump: f.jump, jumpReason: f.jumpReason, truth: f.truth });
-    if (out && typeof out.then === 'function') return out.then(o => { if (p === pipeline) afterPush(f, o); });
+    if (out && typeof out.then === 'function') {
+        const shown = out.then(o => { if (p === pipeline) afterPush(f, o); });
+        // playing: the next frame comes in while this one is detected (results still in order);
+        // stepping: wait for this frame's result
+        return p.accepting && loop && loop.playing ? p.accepting : shown;
+    }
     afterPush(f, out);
     return null;
 }

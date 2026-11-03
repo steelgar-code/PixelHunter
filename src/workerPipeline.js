@@ -10,7 +10,9 @@
 // Results match pipeline.js (a strip's noise tiles are the full frame's; scores agree to ~1e-4).
 //
 // push(f) returns a Promise; the frame is grabbed at once (f.image may change after the call)
-// and frames are processed in order. Debug views: Original and Stabilised; Raw diff and Mask
+// and frames are processed in order, in two overlapping stages (stageA / stageB): while frame n
+// is detected, frame n+1 is taken in and its camera motion fitted. `accepting` says when the
+// next frame may be pushed. Debug views: Original and Stabilised; Raw diff and Mask
 // are main-thread only for now.
 
 import { createTracker } from './tracker.js';
@@ -22,8 +24,9 @@ import { stackCrop, CROP } from './crops.js';
 import { makeCanvas, egoParams, detectParams, trackParams, MAX_FPS, NEAR_MISSES, NEAR_MAX_R, MAX_STRIDE } from './pipeline.js';
 import { CV_URL } from './cvLoader.js';
 
-// detection workers by default: the cores left after the page and the camera-motion worker
-export const autoWorkers = () => Math.max(1, Math.min(6, ((typeof navigator !== 'undefined' && navigator.hardwareConcurrency) || 4) - 2));
+// detection workers by default: one per core but one (measured on 4 cores at 1280×720: 2 → 84,
+// 3 → 68, 4 → 82 ms per frame; the page and the camera-motion worker are mostly waiting)
+export const autoWorkers = () => Math.max(1, Math.min(7, ((typeof navigator !== 'undefined' && navigator.hardwareConcurrency) || 4) - 1));
 
 function spawn(role, params) {
     const w = new Worker(new URL('./procWorker.js', import.meta.url), { type: 'module' });
@@ -72,7 +75,8 @@ export function createWorkerPipeline(cv, params) {
     let stack = null;
     const scratch = {};
     let viewData = null;
-    let chainP = Promise.resolve();
+    let chainA = Promise.resolve(), chainB = Promise.resolve();
+    let lastB = Promise.resolve();       // stage B of the frame before the newest
     let detectId = 0;
     let disposed = false;
 
@@ -99,8 +103,9 @@ export function createWorkerPipeline(cv, params) {
         geom = { srcW, srcH, w, h, scale: w / srcW, sw, sh, kx: w / sw, ky: h / sh, stride: s };
         tmpCanvas = null;
         rgba = new cv.Mat(h, w, cv.CV_8UC4);
-        for (let i = 0; i < 2 * s + 1; i++) slots.push({ grey: new cv.Mat(h, w, cv.CV_8UC1), small: new cv.Mat(sh, sw, cv.CV_8UC1), meta: null, egoIn: null, view: null });
-        for (let i = 0; i < s + 1; i++) {
+        // one frame more than detection needs: the next frame comes in while this one is detected
+        for (let i = 0; i < 2 * s + 2; i++) slots.push({ grey: new cv.Mat(h, w, cv.CV_8UC1), small: new cv.Mat(sh, sw, cv.CV_8UC1), meta: null, egoIn: null, view: null });
+        for (let i = 0; i < s + 2; i++) {
             const canvas = makeCanvas(w, h);
             views.push({ canvas, ctx: canvas.getContext('2d', { willReadFrequently: true }) });
         }
@@ -138,17 +143,6 @@ export function createWorkerPipeline(cv, params) {
 
     const restarted = () => (resetCause && resetCause !== 'start' ? ` (restarted: ${resetCause})` : '');
 
-    function chain(back, n) {
-        const fits = [];
-        for (let i = back; i < back + n; i++) {
-            const e = at(i).egoIn;
-            if (!e || !e.ok) return { reason: e ? `camera motion: ${e.reason}` : `no previous frame${restarted()}` };
-            fits.push(e);
-        }
-        const err = Math.max(...fits.map(e => (e.err90 ?? 0.15) * geom.kx)) * Math.sqrt(n);
-        return { H: normalize(composeNewestFirst(fits.map(e => e.Hfull))), Hs: normalize(composeNewestFirst(fits.map(e => e.H))), err };
-    }
-
     // detection over the parts, merged
     async function detectParts(args) {
         const parts = stripsOf(geom.w, geom.h, detW.length, p.include);
@@ -171,19 +165,23 @@ export function createWorkerPipeline(cv, params) {
         return out;
     }
 
-    async function pushNow(f, image) {
+    // Stage A, in order: the frame into the history, sent to the workers, its camera motion.
+    // Stage B, in order: detection and tracking of frame t = newest − s. B of one frame runs
+    // while A of the next does (pipelined: the history keeps one frame more for that).
+    async function stageA(f, image, prevB) {
         await ready;
-        if (disposed) return { slot: null, result: null };
+        if (disposed) return null;
         const t0 = performance.now();
-        stack = null;
-        if (!geom) setup(f.width, f.height);
-        else if (geom.srcW !== f.width || geom.srcH !== f.height) setup(f.width, f.height, `video size changed to ${f.width}×${f.height}`);
-        else if (geom.stride !== stride()) setup(f.width, f.height, 'frame stride changed');
+        const needs = !geom ? 'start' : geom.srcW !== f.width || geom.srcH !== f.height ? `video size changed to ${f.width}×${f.height}`
+            : geom.stride !== stride() ? 'frame stride changed' : null;
+        if (needs) {
+            await prevB;           // nothing may still be reading the history
+            setup(f.width, f.height, needs);
+        }
         const s = geom.stride;
         if (f.jump) {
             resetCause = f.jumpReason || (f.seq === 0 ? 'start' : 'seek');
             count = 0;
-            tracker.reset();
             egoW.post({ type: 'reset' });
         }
         head = (head + 1) % slots.length;
@@ -191,12 +189,12 @@ export function createWorkerPipeline(cv, params) {
         slot.meta = { seq: f.seq, frame: f.frame, time: f.time, gap: f.gap, jump: f.jump, truth: f.truth };
         slot.egoIn = null;
         slot.view = views[pushed++ % views.length];
-        // grey and small grey, as pipeline.js grab()
         slot.view.ctx.putImageData(image, 0, 0);
         rgba.data.set(image.data);
         cv.cvtColor(rgba, slot.grey, cv.COLOR_RGBA2GRAY);
         cv.resize(slot.grey, slot.small, new cv.Size(geom.sw, geom.sh), 0, 0, cv.INTER_AREA);
-        count = Math.min(count + 1, slots.length);
+        count = Math.min(count + 1, 2 * s + 1);
+        const ctx = { head, count, s, slot, jump: f.jump, t0, grabMs: image.grabMs || 0 };
         const grey = slot.grey.data, small = slot.small.data;
         // copies handed over (transferred, not cloned again)
         for (const w of detW) {
@@ -205,32 +203,51 @@ export function createWorkerPipeline(cv, params) {
         }
         const es = small.slice();
         const egoP = egoW.ask({ type: 'ego', seq: f.seq, small: es, w: geom.sw, h: geom.sh }, `e${f.seq}`, [es.buffer]);
-        const t1 = performance.now();
+        ctx.t1 = performance.now();
         const em = await egoP;
-        if (count >= 2 && em.e) {
+        if (ctx.count >= 2 && em.e) {
             const e = em.e;
             if (e.H) e.Hfull = jitter(scaleH(e.H, geom.kx, geom.ky), f.seq);
             slot.egoIn = e;
         }
-        const t2 = performance.now();
-        if (count < s + 1) return { slot: at(count - 1), result: null };
+        ctx.t2 = performance.now();
+        return ctx;
+    }
 
+    async function stageB(ctx) {
+        if (!ctx || disposed) return { slot: null, result: null };
+        const { s } = ctx;
+        const L = slots.length;
+        const at = back => slots[(ctx.head - back + L * 2) % L];
+        if (ctx.jump) tracker.reset();
+        const tB = performance.now();
+        if (ctx.count < s + 1) return { slot: at(ctx.count - 1), result: null };
         const cur = at(s);
-        const egoPrev = count >= s + 2 ? cur.egoIn : null;
+        const egoPrev = ctx.count >= s + 2 ? cur.egoIn : null;
         let dt = (cur.meta.gap || 0) + 1;
-        const prevT = count >= s + 2 ? at(s + 1).meta?.time : null;
+        const prevT = ctx.count >= s + 2 ? at(s + 1).meta?.time : null;
         if (Number.isFinite(prevT) && Number.isFinite(cur.meta.time) && cur.meta.time > prevT) dt = Math.min(dt, Math.max(1, Math.round((cur.meta.time - prevT) * MAX_FPS)));
+        const chainAt = (back, n) => {
+            const fits = [];
+            for (let i = back; i < back + n; i++) {
+                const e = at(i).egoIn;
+                if (!e || !e.ok) return { reason: e ? `camera motion: ${e.reason}` : `no previous frame${restarted()}` };
+                fits.push(e);
+            }
+            const err = Math.max(...fits.map(e => (e.err90 ?? 0.15) * geom.kx)) * Math.sqrt(n);
+            return { H: normalize(composeNewestFirst(fits.map(e => e.Hfull))), Hs: normalize(composeNewestFirst(fits.map(e => e.H))), err };
+        };
         let detect;
-        stack = { cur: cur.grey, prev: null, next: null, Hb: null, Hf: null };
-        if (count < 2 * s + 1) {
-            detect = { ok: false, reason: (count === s + 1 ? 'no previous frame' : `waiting for ${s} frames before`) + restarted(), candidates: [] };
+        let stk = { cur: cur.grey, prev: null, next: null, Hb: null, Hf: null };
+        if (ctx.count < 2 * s + 1) {
+            detect = { ok: false, reason: (ctx.count === s + 1 ? 'no previous frame' : `waiting for ${s} frames before`) + restarted(), candidates: [] };
         } else {
-            const back = chain(s, s), fwd = chain(0, s);
+            const back = chainAt(s, s), fwd = chainAt(0, s);
             if (!back.H) detect = { ok: false, reason: back.reason, candidates: [] };
             else if (!fwd.H && p.detectMode !== 'basic') detect = { ok: false, reason: fwd.reason, candidates: [] };
             else {
-                const prev = at(2 * s), next = slot;
-                stack = { cur: cur.grey, prev: prev.grey, next: next.grey, Hb: back.H, Hf: fwd.H || null };
+                const prev = at(2 * s), next = ctx.slot;
+                stk = { cur: cur.grey, prev: prev.grey, next: next.grey, Hb: back.H, Hf: fwd.H || null };
                 const tracked = p.shiftCheck && egoPrev && egoPrev.ok
                     ? tracker.predict(egoPrev.Hfull, dt, { onlyPinned: true }).map(t => ({ x: t.x, y: t.y })) : [];
                 const near = p.nearMargin > 0 && egoPrev && egoPrev.ok
@@ -250,7 +267,8 @@ export function createWorkerPipeline(cv, params) {
             for (const b of blobs) if (b.score !== undefined) b.strength = b.score / p.sigmas;
             if (p.minSpatial > 0) for (const b of blobs) b.spatial = contrastOf(cur.grey, b);
             tracks = tracker.step(blobs, egoPrev && egoPrev.ok ? egoPrev.Hfull : null, dt, meta);
-        } else if (count >= 2 * s + 1) tracks = tracker.step([], null, dt, meta);
+        } else if (ctx.count >= 2 * s + 1) tracks = tracker.step([], null, dt, meta);
+        stack = stk;
         const t3 = performance.now();
         const result = {
             ...cur.meta,
@@ -265,10 +283,13 @@ export function createWorkerPipeline(cv, params) {
             tracks: tracks || [],
             confirmed: tracks ? tracks.filter(t => t.state === 'confirmed' && t.matched) : [],
             held: tracks ? tracks.filter(t => t.state === 'held') : [],
-            timings: { grab: t1 - t0, ego: t2 - t1, detect: t3 - t2, total: t3 - t0 + (image.grabMs || 0) },
+            // grab: taking the frame and sending it; ego: waiting for camera motion; detect:
+            // detection and tracking; total: the frame's own work (with the stages overlapping,
+            // frames are taken faster than this)
+            timings: { grab: ctx.t1 - ctx.t0 + ctx.grabMs, ego: ctx.t2 - ctx.t1, detect: t3 - tB, total: ctx.t2 - ctx.t0 + ctx.grabMs + (t3 - tB) },
             engine: 'workers',
         };
-        return { slot: cur, result };
+        return { slot: cur, result, prevSlot: at(s + 1) };
     }
 
     function greyToCanvas(mat, ctx) {
@@ -279,14 +300,25 @@ export function createWorkerPipeline(cv, params) {
     }
 
     return {
+        // Resolves with { slot, result } of frame t; `accepting` resolves as soon as the next frame
+        // can be pushed (this one's stage A and the previous one's stage B are done).
         push(f) {
             const t0 = performance.now();
             const image = grabNow(f);
             image.grabMs = performance.now() - t0;
-            const run = chainP.then(() => pushNow(f, image));
-            chainP = run.catch(() => {});
-            return run;
+            // stage A of this frame waits for stage B of the frame before last: the history holds
+            // one frame more than a detection reads, so at most one frame may be ahead
+            const bBeforeLast = lastB;
+            const prevB = chainB;
+            const a = Promise.all([chainA, bBeforeLast]).then(() => stageA(f, image, prevB));
+            chainA = a.catch(() => null);
+            lastB = prevB;
+            const b = Promise.all([a, prevB]).then(([ctx]) => stageB(ctx));
+            chainB = b.catch(() => null);
+            this.accepting = Promise.all([chainA, prevB]);
+            return b;
         },
+        accepting: Promise.resolve(),
         renderView(view, out, ctx) {
             const slot = out.slot, r = out.result;
             if (!slot) return null;
@@ -295,7 +327,7 @@ export function createWorkerPipeline(cv, params) {
                     ctx.drawImage(slot.view.canvas, 0, 0);
                     return r && r.egoPrev ? `no camera motion for this frame: ${r.egoPrev.reason}` : `no previous frame${restarted()}`;
                 }
-                const prev = at(geom.stride + 1);
+                const prev = out.prevSlot || at(geom.stride + 1);
                 scratch.warped ??= new cv.Mat();
                 scratch.blend ??= new cv.Mat();
                 const M = cv.matFromArray(3, 3, cv.CV_64F, r.egoPrev.Hfull);
@@ -322,7 +354,7 @@ export function createWorkerPipeline(cv, params) {
             tracker.setParams(trackParams(p));
             egoW.post({ type: 'params', params: egoParams(p) });
             for (const w of detW) w.post({ type: 'params', params: detectParams(p) });
-            if (cause && geom) chainP = chainP.then(() => setup(geom.srcW, geom.srcH, cause));
+            if (cause && geom) { const g = geom; chainA = chainA.then(() => chainB).then(() => setup(g.srcW, g.srcH, cause)); }
         },
         crop(cx, cy, side = CROP) {
             if (!stack) return null;
@@ -333,7 +365,7 @@ export function createWorkerPipeline(cv, params) {
         reset(cause = 'reset') { resetCause = cause; count = 0; stack = null; tracker.reset(); egoW.post({ type: 'reset' }); },
         dispose() {
             disposed = true;
-            chainP.then(() => {
+            Promise.all([chainA, chainB]).then(() => {
                 freeAll();
                 for (const m of Object.values(scratch)) m.delete();
             });

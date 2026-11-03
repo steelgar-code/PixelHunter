@@ -75,7 +75,9 @@ export function createFrameLoop({ video, onFrame, mode = 'realtime', live = fals
     let speed = 1;              // playback speed: real-time mode plays at it, every-frame mode at most at it
     let jumpWhy = 'start';      // reason for the pending jump
     const markJump = why => { jumpPending = true; jumpWhy = why; };
-    let ownSeek = false;
+    // the loop's own seeks whose 'seeking' event hasn't come yet (a late 'seeked' of an earlier
+    // seek must not make the next own seek look like the browser's)
+    const ownSeeks = [];
     let playing = false;        // what the user asked for; the video may be paused while stepping
     let stepping = false;       // every-frame mode below MIN_RATE: driving the video by seeks
     let stepWaiter = null;
@@ -275,7 +277,7 @@ export function createFrameLoop({ video, onFrame, mode = 'realtime', live = fals
             stepArrived = () => { clearTimeout(quiet); clearTimeout(timeout); video.removeEventListener('seeked', onSeekedOnce); };
             video.addEventListener('seeked', onSeekedOnce, { once: true });
             arm();
-            ownSeek = true;
+            ownSeeks.push(target);
             video.currentTime = target;
         });
     }
@@ -315,8 +317,13 @@ export function createFrameLoop({ video, onFrame, mode = 'realtime', live = fals
         return found;
     }
 
-    const onSeeking = () => { if (!ownSeek) markJump('the browser seeked'); };
-    const onSeeked = () => { ownSeek = false; };
+    // every seek fires one 'seeking': the loop's own come first, in order (the browser may report
+    // a slightly different time than asked for, e.g. on a variable frame rate)
+    const onSeeking = () => {
+        if (ownSeeks.length) ownSeeks.shift();
+        else markJump('the browser seeked');
+    };
+    const onSeeked = () => {};
     const onEnded = () => { playing = false; stepping = false; };
     video.addEventListener('seeking', onSeeking);
     video.addEventListener('seeked', onSeeked);
