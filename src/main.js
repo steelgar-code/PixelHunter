@@ -9,6 +9,7 @@ import { PARAM_DEFS, PRESETS, matchingPreset, resolveParams, parseHash, loadSave
 import { HELP, SECTION_HELP } from './help.js';
 import { loadPresets, savePresets, presetFrom, upsert, remove, find, changesOf, describe, toFile, fromFile } from './userPresets.js';
 import { createPipeline } from './pipeline.js';
+import { createWorkerPipeline } from './workerPipeline.js';
 import { createScore } from './score.js';
 import { createExportLog, download } from './exportLog.js';
 import { createObjects } from './objects.js';
@@ -295,6 +296,7 @@ function setParam(key, value) {
     save(localStorage, params);
     updateConditional();
     if (key === 'mode') { if (loop) loop.setMode(value); }
+    else if (key === 'engine' || key === 'workers') switchEngine();
     else if (key === 'speed') { if (loop) loop.setSpeed(Number(value)); }
     else if (VIEW_KEYS.includes(key)) { render(); updateStats(); }
     else if (DEF_GROUP.get(key) === 'objects') { /* read when needed */ }
@@ -485,9 +487,38 @@ function scoredTargets(r) {
         && (!params.include.length || inZones(params.include, t.cx, t.cy, r.width, r.height)));
 }
 
+// The pipeline of the chosen engine: pipeline.js (main thread) or workerPipeline.js (Workers).
+const makePipeline = (cv, p) => (p.engine === 'workers' ? createWorkerPipeline(cv, p) : createPipeline(cv, p));
+
+// Engine changed: a new pipeline; the frame shown is processed again from a few frames back.
+function switchEngine() {
+    if (!cvState.ready) return;
+    const old = pipeline;
+    pipeline = makePipeline(cvState.cv, params);
+    ph.pipeline = pipeline;
+    if (old) old.dispose();
+    lastOut = null;
+    if (pipeline.ready) setLoading('engine', 'Starting the workers (each loads OpenCV.js)…');
+    Promise.resolve(pipeline.ready).catch(e => showBanner(`Workers could not start: ${e.message}. Engine: Main thread works everywhere.`))
+        .finally(() => {
+            setLoading('engine', null);
+            if (loop && !loop.playing && ph.shown && Number.isFinite(ph.shown.time) && !(source && source.isLive)) goToTime(ph.shown.time, 'engine changed');
+        });
+}
+
+// A frame from the loop. With the Workers engine the result comes later: returns a Promise the
+// loop waits for.
 function onFrame(f) {
-    const out = pipeline.push({ image: f.video, imageData: f.imageData, width: f.width, height: f.height, time: f.time,
+    const p = pipeline;
+    const out = p.push({ image: f.video, imageData: f.imageData, width: f.width, height: f.height, time: f.time,
         frame: f.frame, seq: f.seq, gap: f.gap, jump: f.jump, jumpReason: f.jumpReason, truth: f.truth });
+    if (out && typeof out.then === 'function') return out.then(o => { if (p === pipeline) afterPush(f, o); });
+    afterPush(f, out);
+    return null;
+}
+
+function afterPush(f, out) {
+    if (!out || !out.slot) return;
     if (params.simLoad > 0) busyWait(params.simLoad);
     lastOut = out;
     const r = out.result;
@@ -1392,7 +1423,7 @@ async function start() {
             return;
         }
         Object.assign(cvState, { ready: true, cv, ms });
-        pipeline = createPipeline(cv, params);
+        pipeline = makePipeline(cv, params);
         ph.pipeline = pipeline;
         new ResizeObserver(() => render()).observe(stage);
         status.textContent = `OpenCV.js ${CV_VERSION} ready`;

@@ -12,6 +12,7 @@
 import { PRESETS, PARAM_DEFS, coerce } from './params.js';
 import { PRESET_KEYS } from './userPresets.js';
 import { createPipeline } from './pipeline.js';
+import { createWorkerPipeline } from './workerPipeline.js';
 import { createFrameLoop } from './frameLoop.js';
 import { createSyntheticLoop } from './synthLoop.js';
 import { scoreRun, compactPts } from './benchScore.js';
@@ -62,7 +63,7 @@ export function createBenchView(d) {
         }
         return { ...p, mode: 'everyFrame' };
     }
-    const keptParams = p => ({ ...Object.fromEntries(PRESET_KEYS.map(k => [k, p[k]])), zones: p.zones || [], include: p.include || [] });
+    const keptParams = p => ({ ...Object.fromEntries(PRESET_KEYS.map(k => [k, p[k]])), engine: p.engine, workers: p.workers, zones: p.zones || [], include: p.include || [] });
 
     // --- running -----------------------------------------------------------------------------
 
@@ -83,7 +84,7 @@ export function createBenchView(d) {
         d.pause();
         const sets = defs.map(def => {
             const params = paramsOf(def.key);
-            return { key: def.key, name: def.name, params: keptParams(params), pipe: createPipeline(cv, params), times: [], tracks: new Map(), ms: [] };
+            return { key: def.key, name: def.name, params: keptParams(params), pipe: params.engine === 'workers' ? createWorkerPipeline(cv, params) : createPipeline(cv, params), times: [], tracks: new Map(), ms: [] };
         });
         let cancelled = false, loop = null, video = null, url = null;
         const t0 = performance.now();
@@ -92,12 +93,18 @@ export function createBenchView(d) {
         progress = { at: 0, duration: null, started: t0 };
         renderControls();
 
+        // every set's pipeline takes the frame at once; Workers ones answer later (all in parallel)
         function onFrame(f) {
-            for (const s of sets) {
-                const out = s.pipe.push({ image: f.video, imageData: f.imageData, width: f.width, height: f.height, time: f.time, frame: f.frame,
-                    seq: f.seq, gap: f.gap, jump: f.jump, jumpReason: f.jumpReason });
-                const r = out.result;
-                if (!r) continue;
+            const outs = sets.map(s => s.pipe.push({ image: f.video, imageData: f.imageData, width: f.width, height: f.height, time: f.time, frame: f.frame,
+                seq: f.seq, gap: f.gap, jump: f.jump, jumpReason: f.jumpReason }));
+            if (outs.some(o => o && typeof o.then === 'function')) return Promise.all(outs).then(all => noteOuts(f, all));
+            noteOuts(f, outs);
+            return null;
+        }
+        function noteOuts(f, outs) {
+            sets.forEach((s, i) => {
+                const r = outs[i] && outs[i].result;
+                if (!r) return;
                 s.times.push(r.time);
                 s.ms.push(r.timings.total);
                 const sc = r.scale || 1;
@@ -107,7 +114,7 @@ export function createBenchView(d) {
                     if (!tr) s.tracks.set(t.id, tr = { id: t.id, pts: [] });
                     tr.pts.push([r.time, (b.cx + 0.5) / sc - 0.5, (b.cy + 0.5) / sc - 0.5, b.w / sc, b.h / sc]);
                 }
-            }
+            });
             progress.at = f.time;
             const now = performance.now();
             if (!progress.shown || now - progress.shown > 250) { progress.shown = now; renderProgress(); }
@@ -310,7 +317,7 @@ export function createBenchView(d) {
     // --- binding -----------------------------------------------------------------------------
 
     function bind() {
-        const keys = PRESET_KEYS.filter(k => DEF.get(k) && ['number', 'choice', 'bool'].includes(DEF.get(k).type));
+        const keys = ['engine', ...PRESET_KEYS].filter(k => DEF.get(k) && ['number', 'choice', 'bool'].includes(DEF.get(k).type));
         $('benchChangeKey').replaceChildren(...keys.map(k => new Option(DEF.get(k).label, k)));
         const hint = () => {
             const def = DEF.get($('benchChangeKey').value);
