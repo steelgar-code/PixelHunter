@@ -63,7 +63,9 @@ function handle(msg) {
         if (!P || !C) return { type: 'detected', id: msg.id, d: { ok: false, reason: 'frame missing in a worker', candidates: [] } };
         const d = det.detect({ prev: P.grey, cur: C.grey, next: N ? N.grey : null, Hprev: msg.Hprev, Hnext: msg.Hnext,
             small: { prev: P.small, cur: C.small, next: N ? N.small : null, Hprev: msg.Hs.Hprev, Hnext: msg.Hs.Hnext },
-            fitErr: msg.fitErr, tracked: msg.tracked, near: msg.near, part: msg.part });
+            fitErr: msg.fitErr, tracked: msg.tracked, near: msg.near, part: msg.part, views: !!msg.views });
+        // the debug views of this part, when one is shown (Raw diff / Mask)
+        if (msg.views && d.ok) d.views = det.partViews();
         return { type: 'detected', id: msg.id, d };
     }
     case 'dispose':

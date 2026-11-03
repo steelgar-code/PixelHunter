@@ -1,6 +1,7 @@
 // The Workers engine (src/workerPipeline.js, src/procWorker.js): the same candidates and objects
 // as the main thread, on a synthetic scene and on a video file; switching engines while paused;
-// stepping and going back; the debug views it has; a Benchmark run comparing both engines.
+// stepping and going back; the debug views (Stabilised, Raw diff, Mask); a Benchmark run
+// comparing both engines.
 import { launch, ok, openApp, loadScene, showTab } from './lib/env.mjs';
 import { sceneClip } from './lib/clips.mjs';
 
@@ -54,7 +55,13 @@ try {
     await page.click('label:has(input[name=param-view][value=stabilised])');
     ok('Stabilised view works', (await page.evaluate(() => __ph.note)) === null);
     await page.click('label:has(input[name=param-view][value=mask])');
-    ok('Mask view: says it is main-thread only', /Main thread/.test(await page.evaluate(() => __ph.note) || ''));
+    ok('Mask view: from the next frame processed', /next frame/.test(await page.evaluate(() => __ph.note) || ''));
+    await page.click('#step');
+    await page.waitForFunction(f => !__ph.navigating && __ph.shown.frame === f, shown, { timeout: 30000 });
+    const lit = () => { const c = document.getElementById('display'), d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data; let n = 0; for (let i = 0; i < d.length; i += 4) if (d[i] > 128) n++; return n; };
+    ok('… then the mask, assembled from the workers\' strips (mostly black, the movers white)', (await page.evaluate(() => __ph.note)) === null && (await page.evaluate(lit)) > 3 && (await page.evaluate(lit)) < 5000, await page.evaluate(lit));
+    await page.click('label:has(input[name=param-view][value=diff])');
+    ok('Raw diff view too', (await page.evaluate(() => __ph.note)) === null);
     await page.click('label:has(input[name=param-view][value=original])');
 
     // --- a video file played every frame ---

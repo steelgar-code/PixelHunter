@@ -12,8 +12,8 @@
 // push(f) returns a Promise; the frame is grabbed at once (f.image may change after the call)
 // and frames are processed in order, in two overlapping stages (stageA / stageB): while frame n
 // is detected, frame n+1 is taken in and its camera motion fitted. `accepting` says when the
-// next frame may be pushed. Debug views: Original and Stabilised; Raw diff and Mask
-// are main-thread only for now.
+// next frame may be pushed. Debug views: Stabilised on the main thread; Raw diff / Mask: while
+// one is shown, the workers send their parts with each frame.
 
 import { createTracker } from './tracker.js';
 import { stripsOf, DETECT_DEFAULTS } from './detect.js';
@@ -143,13 +143,36 @@ export function createWorkerPipeline(cv, params) {
 
     const restarted = () => (resetCause && resetCause !== 'start' ? ` (restarted: ${resetCause})` : '');
 
+    // Raw diff / Mask: asked of the workers only while one of them is shown (renderView)
+    let wantViews = false;
+    let viewsOf = null;              // the result the assembled views belong to
+    function assembleViews(list) {
+        for (const k of ['vMask', 'vDiff']) {
+            scratch[k] ??= new cv.Mat();
+            scratch[k].create(geom.h, geom.w, cv.CV_8UC1);
+            scratch[k].setTo(new cv.Scalar(0));
+        }
+        const M = scratch.vMask.data, D = scratch.vDiff.data;
+        for (const v of list) {
+            const o = v.y0 * v.w;
+            for (let i = 0; i < v.mask.length; i++) {
+                if (v.mask[i] > M[o + i]) M[o + i] = v.mask[i];
+                if (v.diff[i] > D[o + i]) D[o + i] = v.diff[i];
+            }
+        }
+        viewsOf = 'next';
+    }
+
     // detection over the parts, merged
     async function detectParts(args) {
         const parts = stripsOf(geom.w, geom.h, detW.length, p.include);
         const id0 = detectId;
         detectId += parts.length;
-        const outs = await Promise.all(parts.map((part, i) => detW[i].ask({ type: 'detect', id: id0 + i, ...args, part }, `d${id0 + i}`)));
+        const views = wantViews;
+        const outs = await Promise.all(parts.map((part, i) => detW[i].ask({ type: 'detect', id: id0 + i, ...args, part, views }, `d${id0 + i}`)));
         const ds = outs.map(o => o.d);
+        if (views && ds.every(d => d.ok && d.views)) assembleViews(ds.map(d => d.views));
+        for (const d of ds) delete d.views;
         const bad = ds.find(d => !d.ok);
         if (bad) return bad;
         const sum = k => ds.reduce((a, d) => a + (d[k] || 0), 0);
@@ -270,6 +293,8 @@ export function createWorkerPipeline(cv, params) {
         } else if (ctx.count >= 2 * s + 1) tracks = tracker.step([], null, dt, meta);
         stack = stk;
         const t3 = performance.now();
+        const hasViews = viewsOf === 'next';
+        if (hasViews) viewsOf = null;
         const result = {
             ...cur.meta,
             width: geom.w, height: geom.h, scale: geom.scale, stride: s,
@@ -289,6 +314,7 @@ export function createWorkerPipeline(cv, params) {
             timings: { grab: ctx.t1 - ctx.t0 + ctx.grabMs, ego: ctx.t2 - ctx.t1, detect: t3 - tB, total: ctx.t2 - ctx.t0 + ctx.grabMs + (t3 - tB) },
             engine: 'workers',
         };
+        if (hasViews) viewsOf = result;
         return { slot: cur, result, prevSlot: at(s + 1) };
     }
 
@@ -337,8 +363,17 @@ export function createWorkerPipeline(cv, params) {
                 greyToCanvas(scratch.blend, ctx);
                 return null;
             }
+            if (view === 'diff' || view === 'mask') {
+                wantViews = true;
+                if (r && viewsOf === r && scratch.vMask) {
+                    greyToCanvas(view === 'mask' ? scratch.vMask : scratch.vDiff, ctx);
+                    return null;
+                }
+                ctx.drawImage(slot.view.canvas, 0, 0);
+                return r && !r.detect.ok ? `no detection for this frame: ${r.detect.reason}` : 'shown from the next frame processed (Workers engine)';
+            }
+            wantViews = false;
             ctx.drawImage(slot.view.canvas, 0, 0);
-            if (view === 'diff' || view === 'mask') return 'Raw diff and Mask views: with Engine = Main thread only';
             return null;
         },
         get geometry() { return geom; },

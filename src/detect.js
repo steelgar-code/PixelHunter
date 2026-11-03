@@ -187,6 +187,7 @@ export function createDetector(cv, options = {}) {
     let tracked = [];          // objects the user keeps tracking, expected in this frame (shift check)
     let near = [];             // confirmed objects expected in this frame: { x, y, r } (nearMargin)
     let absTiles = false;      // this detection is a strip of the frame: noise tiles on the full frame's grid
+    let lastPart = null;       // the last detection's strip: { core, region }
 
     function setup(w, h) {
         for (const k of Object.keys(m)) { m[k].delete(); delete m[k]; }
@@ -799,7 +800,9 @@ export function createDetector(cv, options = {}) {
             absTiles = true;
             core = part.strip;
         }
-        lastCropped = regions !== null && !part;
+        // debug views of inclusion regions go into full-frame Mats (for a part: only if asked)
+        lastCropped = regions !== null && (!part || (!!part.regions && !!args.views));
+        lastPart = part && part.strip ? { core: part.strip, region: regions[0] } : null;
         let brightness;
         if (mode === 'robust' || mode === 'adaptive') {
             const { small, Hnext } = args;
@@ -811,7 +814,7 @@ export function createDetector(cv, options = {}) {
             brightness = [offPrev, offNext];
             if (!Hnext) throw new Error('robust detection needs Hnext');
         }
-        if (regions && !part) {
+        if (lastCropped) {
             for (const k of ['vMask', 'vDiff']) {
                 m[k] ??= new cv.Mat();
                 m[k].create(size.h, size.w, cv.CV_8UC1);
@@ -857,16 +860,16 @@ export function createDetector(cv, options = {}) {
         // tracked: where the objects the user keeps tracking should be in frame t, [{ x, y }]
         // (processing px): kept by the background-shift check.
         // near: where confirmed objects are expected, [{ x, y, r }] (processing px), for nearMargin.
-        detect({ prev, cur, next, Hprev, Hnext, small, fitErr, tracked: tr = [], near: nr = [], part = null }) {
+        detect({ prev, cur, next, Hprev, Hnext, small, fitErr, tracked: tr = [], near: nr = [], part = null, views = false }) {
             if (!size || size.w !== cur.cols || size.h !== cur.rows) setup(cur.cols, cur.rows);
             tracked = tr || [];
             near = nr || [];
             if (!prev || !Hprev) return { ok: false, reason: 'no camera motion for t−1 → t', candidates: [] };
             lastMode = p.detectMode;
-            if (p.detectMode === 'basic') return { ok: true, reason: null, mode: 'basic', ...run('basic', { prev, cur, Hprev, part }) };
+            if (p.detectMode === 'basic') return { ok: true, reason: null, mode: 'basic', ...run('basic', { prev, cur, Hprev, part, views }) };
             if (!next || !Hnext) return { ok: false, reason: 'no camera motion for t → t+1', candidates: [] };
             const mode = p.detectMode === 'adaptive' ? 'adaptive' : 'robust';
-            return { ok: true, reason: null, mode, ...run(mode, { prev, cur, next, Hprev, Hnext, small, fitErr, part }) };
+            return { ok: true, reason: null, mode, ...run(mode, { prev, cur, next, Hprev, Hnext, small, fitErr, part, views }) };
         },
         // Debug views of the last detection: 'diff' (×4 so faint differences show; robust mode:
         // the smaller of the two differences, i.e. what survives the AND) or 'mask'.
@@ -895,6 +898,19 @@ export function createDetector(cv, options = {}) {
                 return m.view;
             }
             return null;
+        },
+        // The debug views of the last detection on a part (Workers engine): { y0, rows, w, mask,
+        // diff } (grey arrays): a strip's own rows, or the whole frame for inclusion regions.
+        partViews() {
+            if (!size) return null;
+            const mk = this.viewMat('mask'), df = this.viewMat('diff');
+            if (!mk || !df) return null;
+            if (lastPart) {
+                const { core, region } = lastPart, w = region.w;
+                const a = (core.y0 - region.y) * w, b = (core.y1 - region.y) * w;
+                return { y0: core.y0, rows: core.y1 - core.y0, w, mask: mk.data.slice(a, b), diff: df.data.slice(a, b) };
+            }
+            return { y0: 0, rows: size.h, w: size.w, mask: mk.data.slice(), diff: df.data.slice() };
         },
         setParams(next) { p = { ...p, ...next }; },
         get params() { return p; },

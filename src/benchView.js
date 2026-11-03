@@ -97,10 +97,17 @@ export function createBenchView(d) {
         function onFrame(f) {
             const outs = sets.map(s => s.pipe.push({ image: f.video, imageData: f.imageData, width: f.width, height: f.height, time: f.time, frame: f.frame,
                 seq: f.seq, gap: f.gap, jump: f.jump, jumpReason: f.jumpReason }));
-            if (outs.some(o => o && typeof o.then === 'function')) return Promise.all(outs).then(all => noteOuts(f, all));
+            if (outs.some(o => o && typeof o.then === 'function')) {
+                // results noted in order; the next frame comes as soon as every engine can take it
+                // (Workers: while this one is still being detected)
+                pendingNotes = Promise.all(outs).then(all => noteOuts(f, all));
+                const accepting = sets.map((s, i) => (outs[i] && typeof outs[i].then === 'function' ? s.pipe.accepting || outs[i] : null)).filter(Boolean);
+                return Promise.all(accepting);
+            }
             noteOuts(f, outs);
             return null;
         }
+        let pendingNotes = Promise.resolve();
         function noteOuts(f, outs) {
             sets.forEach((s, i) => {
                 const r = outs[i] && outs[i].result;
@@ -152,6 +159,7 @@ export function createBenchView(d) {
                     check();
                 });
             }
+            await pendingNotes;           // the last frames' results
             const fps = (loop.stats().sourceFps) || (source.scene ? source.scene.fps : 25);
             if (!cancelled) {
                 result = {
