@@ -1,0 +1,62 @@
+# MediaMTX gateway for PixelHunter: turns cameras' RTSP / RTMP / SRT streams into WebRTC (WHEP)
+# and HLS, which a browser can play. Tested with MediaMTX v1.21.3; settings not given here keep
+# MediaMTX's defaults (https://github.com/bluenviron/mediamtx).
+#
+# Run (on a computer the cameras and the browser can both reach):
+#   1. Download MediaMTX for your system from its GitHub releases page and unpack it.
+#   2. Copy this file next to it and run:   ./mediamtx mediamtx.yml
+#   3. In PixelHunter: Open → URL, with type Auto:
+#        WebRTC (lowest delay):  http://<gateway-host>:8889/<path>/whep
+#        HLS (a few seconds):    http://<gateway-host>:8888/<path>/index.m3u8
+#      Typing the camera's rtsp://<gateway-host>:8554/<path> offers both.
+#
+# PixelHunter served over https:// (GitHub Pages) can't open http:// streams from another
+# computer (mixed content): run PixelHunter locally (python3 -m http.server in its folder, then
+# http://localhost:8000/), or set hlsEncryption / webrtcEncryption below with a certificate the
+# browser trusts. On the gateway's own computer, http://localhost works either way.
+#
+# Small objects need every pixel: use the camera's main stream (highest resolution and
+# bitrate), H.264 (WebRTC in most browsers; H.265 only over HLS, and not everywhere).
+# More: PixelH docs/streams.md.
+
+logLevel: info
+
+# Browsers on other sites (PixelHunter's page) may read the streams (CORS). The defaults
+# already allow every origin; narrow to PixelHunter's address if you like, e.g.
+# ['http://localhost:8000', 'https://<user>.github.io'].
+hlsAllowOrigins: ['*']
+webrtcAllowOrigins: ['*']
+
+# WebRTC: the addresses the browser connects to for the picture (UDP 8189). Add the gateway's LAN
+# address when the browser is on another computer, or when "no picture arrived" is reported.
+webrtcLocalUDPAddress: :8189
+webrtcAdditionalHosts: []
+#webrtcAdditionalHosts: [192.168.1.20]
+
+# HLS: low-latency variant (the default). Recordings and live both work.
+hlsVariant: lowLatency
+
+# Readers need no password (PixelHunter sends none); publishing too, on a private network.
+# Put a password on publishing if the gateway can be reached from outside.
+authInternalUsers:
+  - user: any
+    pass:
+    ips: []
+    permissions:
+      - action: publish
+      - action: read
+      - action: playback
+
+paths:
+  # A camera's own RTSP address, pulled when someone watches (example: replace the address,
+  # keep or rename the path). Open as http://<gateway-host>:8889/cam1/whep
+  #cam1:
+  #  source: rtsp://user:password@192.168.1.64:554/Streaming/Channels/101
+  #  sourceOnDemand: yes
+  #  rtspTransport: tcp
+
+  # Anything published to the gateway (ffmpeg, OBS, a drone app):
+  #   ffmpeg -re -stream_loop -1 -i clip.mp4 -c copy -f rtsp rtsp://<gateway-host>:8554/test
+  #   OBS: Settings → Stream → Custom, server rtmp://<gateway-host>:1935/live, key "drone"
+  #     → open http://<gateway-host>:8889/live/drone/whep
+  all_others:

@@ -93,7 +93,7 @@ export function createBenchView(d) {
             const params = paramsOf(def.key);
             return { key: def.key, name: def.name, params: keptParams(params), pipe: params.engine === 'workers' ? createWorkerPipeline(cv, params) : createPipeline(cv, params), times: [], tracks: new Map(), ms: [] };
         });
-        let cancelled = false, loop = null, video = null, url = null, borrowed = false;
+        let cancelled = false, loop = null, video = null, copy = null, borrowed = false;
         const t0 = performance.now();
         let duration = null;
         running = { cancel() { cancelled = true; if (loop) loop.pause(); } };
@@ -145,19 +145,14 @@ export function createBenchView(d) {
                 video.preload = 'auto';
                 video.className = 'bench-video';
                 document.body.append(video);
-                if (source.kind === 'url') video.crossOrigin = 'anonymous';
-                url = source.file ? URL.createObjectURL(source.file) : null;
-                const ready = new Promise((resolve, reject) => {
-                    video.addEventListener('loadeddata', resolve, { once: true });
-                    video.addEventListener('error', () => reject(new Error('the video could not be loaded for the run')), { once: true });
-                });
-                video.src = url || source.url;
-                await ready;
+                // the same clip opened again on it (file, URL, HLS recording: as the player did)
+                copy = d.copySource(source);
+                await copy.start(video);
                 // frames from a hidden video? (some browsers don't render them): else the player
                 if (bench.testHiddenFails || !(await framesCome(video))) {
-                    video.pause(); video.removeAttribute('src'); video.load(); video.remove();
-                    if (url) URL.revokeObjectURL(url);
-                    url = null;
+                    copy.stop(video);
+                    copy = null;
+                    video.remove();
                     video = d.borrowPlayer();
                     borrowed = true;
                     renderControls('This browser gives no frames from a hidden video: the run uses the player (the clip is opened again after it).');
@@ -194,8 +189,7 @@ export function createBenchView(d) {
         } finally {
             if (loop) loop.destroy();
             for (const s of sets) s.pipe.dispose();
-            if (video && !borrowed) { video.pause(); video.removeAttribute('src'); video.load(); video.remove(); }
-            if (url) URL.revokeObjectURL(url);
+            if (video && !borrowed) { if (copy) copy.stop(video); video.remove(); }
             const err = progress.error, wasCancelled = cancelled, kept = result;
             running = null;
             progress = null;

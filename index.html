@@ -16,9 +16,16 @@
             <input type="file" id="file" accept="video/*" hidden>
             <button type="button" data-open>Video file…</button>
             <form id="urlForm" class="row">
-                <input type="url" id="srcUrl" class="mono" placeholder="https://…/video.mp4" aria-label="Video URL" spellcheck="false">
+                <input type="text" id="srcUrl" class="mono" placeholder="https://…/video.mp4 · …/index.m3u8 · …/whep · rtsp://…" aria-label="Video or stream URL" spellcheck="false" autocomplete="url">
+                <select id="srcKind" aria-label="What the URL is">
+                    <option value="auto">Auto</option>
+                    <option value="file">Video file</option>
+                    <option value="hls">HLS stream</option>
+                    <option value="whep">WebRTC (WHEP)</option>
+                </select>
                 <button type="submit">Open URL</button>
             </form>
+            <div id="urlHint" class="url-hint" hidden></div>
             <div class="row">
                 <select id="camera" aria-label="Camera or capture device"></select>
                 <button type="button" id="openCamera">Open camera</button>
@@ -30,7 +37,7 @@
                 <select id="scene" aria-label="Synthetic scene"></select>
                 <button type="button" id="openScene">Load</button>
             </div>
-            <p class="muted">Camera: webcams, capture cards, OBS Virtual Camera (which can show an RTSP stream). Capture: open the stream's address in another tab, show it at full size, then pick that tab; it comes in as drawn there. Synthetic scenes come with ground truth and a live score. A video file can also be dropped on the player.</p>
+            <p class="muted">URL: a video file, an HLS stream (…/index.m3u8) or a WebRTC stream (…/whep), e.g. from a MediaMTX gateway in front of RTSP / RTMP cameras (an rtsp:// address shows the gateway's addresses to open; sample config: gateway/mediamtx.yml). Camera: webcams, capture cards, OBS Virtual Camera (which can show an RTSP stream). Capture: open the stream's address in another tab, show it at full size, then pick that tab; it comes in as drawn there. Synthetic scenes come with ground truth and a live score. A video file can also be dropped on the player.</p>
         </div>
         <span id="srcLabel" class="src-label muted">No video</span>
     </div>

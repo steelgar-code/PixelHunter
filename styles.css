@@ -310,3 +310,10 @@ button[aria-pressed=true] { background: color-mix(in srgb, var(--danger) 25%, va
 .bench-table th[title] { cursor: help; text-decoration: underline dotted; }
 #panel-bench .muted { word-break: normal; overflow-wrap: break-word; }
 .bench-change #benchChangeValueHost select { max-width: 140px; }
+
+/* the Open menu: stream type, gateway suggestions */
+#urlForm #srcUrl { flex: 1 1 160px; min-width: 0; }
+#urlForm #srcKind { flex: none; }
+.url-hint { margin: 4px 0 8px; padding: 6px 8px; border: 1px solid var(--line); border-radius: var(--radius); font-size: 12px; display: flex; flex-direction: column; gap: 4px; }
+.url-hint p { margin: 0; word-break: normal; overflow-wrap: anywhere; }
+.url-hint button { align-self: flex-start; font-size: 12px; padding: 2px 8px; max-width: 100%; overflow-wrap: anywhere; text-align: left; }

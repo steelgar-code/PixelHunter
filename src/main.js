@@ -1,6 +1,6 @@
 // Wiring: OpenCV.js startup check, sources, frame loop, parameter controls and stats.
 import { loadCv, checkCv, CV_VERSION } from './cvLoader.js';
-import { fileSource, urlSource, cameraSource, listCameras, displaySource } from './sources.js';
+import { fileSource, urlSource, cameraSource, listCameras, displaySource, hlsSource, whepSource, streamKind, gatewayUrls } from './sources.js';
 import { createFrameLoop } from './frameLoop.js';
 import { createSyntheticLoop } from './synthLoop.js';
 import { createScene } from './synth.js';
@@ -50,7 +50,7 @@ const skipped = { count: 0, reasons: {} };
 let score = null;                // synthetic sources: candidates against ground truth
 let confScore = null;            // … and confirmed detections
 const log = createExportLog();
-const APP_VERSION = '0.10.0';
+const APP_VERSION = '0.11.0';
 
 // Test hook (see tests/): recent frames and state, no effect on the UI.
 const FRAME_LOG = 5000;
@@ -968,6 +968,8 @@ const bench = createBenchView({
     fmtTime,
     userPresets: () => userPresets,
     download,
+    // the open clip as a new source, for the run's own hidden video
+    copySource: s => (s.kind === 'file' ? fileSource(s.file) : s.kind === 'hls' ? hlsSource(s.url) : urlSource(s.url)),
     // a run whose hidden video gives no frames (some browsers don't render hidden videos) uses
     // the player itself, then the clip is opened again
     borrowPlayer() {
@@ -1174,10 +1176,58 @@ function openCamera() {
 
 const URL_KEY = 'pixelhunter.url.v1';
 
-function openUrl(href) {
+const KIND_KEY = 'pixelhunter.urlKind.v1';
+
+// A URL: a video file, an HLS stream, a WebRTC (WHEP) stream, by the type picked in the Open
+// menu or (Auto) by the URL. RTSP / RTMP need a gateway: the menu offers MediaMTX's addresses.
+function openUrl(href, kind = $('srcKind').value) {
     if (!href || !cvState.ready) return;
-    try { localStorage.setItem(URL_KEY, href); } catch { /* not remembered */ }
-    openSource(urlSource(href));
+    try { localStorage.setItem(URL_KEY, href); localStorage.setItem(KIND_KEY, kind); } catch { /* not remembered */ }
+    const k = streamKind(href, kind);
+    showUrlHint(k === 'gateway' ? href : null);
+    if (k === 'gateway') { setMenu(true); return; }
+    $('urlHint').hidden = true;
+    if (k === 'hls') openSource(hlsSource(href));
+    else if (k === 'whep') {
+        const src = whepSource(href, { onEnded: why => {
+            if (source !== src) return;
+            if (loop) loop.pause();
+            updateTransport();
+            $('play').disabled = true;
+            showBanner(`The WebRTC stream stopped (${why}). Open it again from the Open menu.`);
+        } });
+        openSource(src);
+    } else openSource(urlSource(href));
+}
+
+// RTSP / RTMP typed in: what to open instead, through a MediaMTX gateway (default ports).
+function showUrlHint(href) {
+    const host = $('urlHint');
+    const g = href ? gatewayUrls(href) : null;
+    host.hidden = !href;
+    if (!href) return;
+    const p = document.createElement('p');
+    if (!g) {
+        p.textContent = 'Browsers can\'t play this kind of stream directly: put a gateway such as MediaMTX in between and open its WebRTC or HLS address.';
+        host.replaceChildren(p);
+        return;
+    }
+    p.textContent = 'Browsers can\'t play RTSP / RTMP. If this is a MediaMTX gateway (it has the stream at this path), open it as:';
+    const btn = (text, url, kind, title) => {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.textContent = `${text}: ${url}`;
+        b.title = title;
+        b.addEventListener('click', () => { $('srcUrl').value = url; $('srcKind').value = kind; openUrl(url, kind); });
+        return b;
+    };
+    const more = document.createElement('p');
+    more.className = 'muted';
+    more.textContent = `A camera's own address: add it to the gateway (gateway/mediamtx.yml: paths → ${g.path} → source: ${href.split('?')[0]}), then open the gateway's address for that path.`;
+    host.replaceChildren(p,
+        btn('WebRTC', g.whep, 'whep', 'Lowest delay (well under a second)'),
+        btn('HLS', g.hls, 'hls', 'A few seconds of delay; also through proxies and with H.265 in some browsers'),
+        more);
 }
 
 function openFile(file) {
@@ -1313,6 +1363,8 @@ function bindTransport() {
     for (const b of document.querySelectorAll('[data-open]')) b.addEventListener('click', () => $('file').click());
     $('file').addEventListener('change', e => { openFile(e.target.files[0]); e.target.value = ''; });
     try { $('srcUrl').value = hash.src || localStorage.getItem(URL_KEY) || ''; } catch { /* storage blocked */ }
+    try { const k = hash.srcKind || localStorage.getItem(KIND_KEY); if (k && [...$('srcKind').options].some(o => o.value === k)) $('srcKind').value = k; } catch { /* default */ }
+    $('srcUrl').addEventListener('input', () => { if (streamKind($('srcUrl').value, 'auto') !== 'gateway') $('urlHint').hidden = true; });
     $('urlForm').addEventListener('submit', e => { e.preventDefault(); openUrl($('srcUrl').value.trim()); });
     const pick = $('scene');
     for (const [key, s] of Object.entries(SCENES)) pick.append(new Option(s.label, key));
