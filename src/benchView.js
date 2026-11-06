@@ -38,7 +38,14 @@ export function createBenchView(d) {
 
     // --- settings sets -------------------------------------------------------------------------
 
-    const changeName = c => `Current · ${DEF.get(c.key).label} ${c.value}`;
+    // a setting's value as shown: the choice's label, On / Off, or the number with its unit
+    function valueText(key, value) {
+        const def = DEF.get(key);
+        if (def.type === 'choice') { const c = def.choices.find(x => String(x[0]) === String(value)); return c ? c[1] : String(value); }
+        if (def.type === 'bool') return String(value) === 'true' ? 'on' : 'off';
+        return `${value}${def.unit && !def.unit.startsWith('(') ? ` ${def.unit}` : ''}`;
+    }
+    const changeName = c => `Current · ${DEF.get(c.key).label}: ${valueText(c.key, c.value)}`;
     function allSets() {
         const out = Object.entries(PRESETS).map(([k, p]) => ({ key: `preset:${k}`, name: p.label }));
         for (const p of d.userPresets()) if (p.values) out.push({ key: `user:${p.name}`, name: `${p.name} (mine)` });
@@ -86,7 +93,7 @@ export function createBenchView(d) {
             const params = paramsOf(def.key);
             return { key: def.key, name: def.name, params: keptParams(params), pipe: params.engine === 'workers' ? createWorkerPipeline(cv, params) : createPipeline(cv, params), times: [], tracks: new Map(), ms: [] };
         });
-        let cancelled = false, loop = null, video = null, url = null;
+        let cancelled = false, loop = null, video = null, url = null, borrowed = false;
         const t0 = performance.now();
         let duration = null;
         running = { cancel() { cancelled = true; if (loop) loop.pause(); } };
@@ -146,6 +153,16 @@ export function createBenchView(d) {
                 });
                 video.src = url || source.url;
                 await ready;
+                // frames from a hidden video? (some browsers don't render them): else the player
+                if (bench.testHiddenFails || !(await framesCome(video))) {
+                    video.pause(); video.removeAttribute('src'); video.load(); video.remove();
+                    if (url) URL.revokeObjectURL(url);
+                    url = null;
+                    video = d.borrowPlayer();
+                    borrowed = true;
+                    renderControls('This browser gives no frames from a hidden video: the run uses the player (the clip is opened again after it).');
+                    if (video.currentTime > 0) await new Promise(r => { video.addEventListener('seeked', r, { once: true }); video.currentTime = 0; });
+                }
                 duration = video.duration;
                 loop = createFrameLoop({ video, onFrame, mode: 'everyFrame' });
                 loop.setSpeed(2);
@@ -177,14 +194,33 @@ export function createBenchView(d) {
         } finally {
             if (loop) loop.destroy();
             for (const s of sets) s.pipe.dispose();
-            if (video) { video.pause(); video.removeAttribute('src'); video.load(); video.remove(); }
+            if (video && !borrowed) { video.pause(); video.removeAttribute('src'); video.load(); video.remove(); }
             if (url) URL.revokeObjectURL(url);
-            const err = progress.error;
+            const err = progress.error, wasCancelled = cancelled, kept = result;
             running = null;
             progress = null;
-            renderControls(err ? `Run failed: ${err}` : cancelled ? 'Run cancelled.' : null);
+            if (borrowed) {
+                // the clip opened again (its latest saved run comes back; this one if it wasn't saved)
+                await d.returnPlayer();
+                if (kept && !result) result = kept;
+            }
+            renderControls(err ? `Run failed: ${err}` : wasCancelled ? 'Run cancelled.' : borrowed ? 'Done (the run used the player; the clip was opened again).' : null);
             render();
         }
+    }
+
+    // Does this (hidden) video hand over frames? A short seek must bring a frame callback.
+    function framesCome(video, ms = 2500) {
+        return new Promise(resolve => {
+            let handle = null;
+            const timer = setTimeout(() => { if (handle !== null) video.cancelVideoFrameCallback(handle); resolve(false); }, ms);
+            handle = video.requestVideoFrameCallback(() => {
+                clearTimeout(timer);
+                video.addEventListener('seeked', () => resolve(true), { once: true });
+                video.currentTime = 0;
+            });
+            video.currentTime = Math.min(0.1, (video.duration || 1) / 2);
+        });
     }
 
     async function saveResult() {
@@ -327,17 +363,38 @@ export function createBenchView(d) {
     function bind() {
         const keys = ['engine', ...PRESET_KEYS].filter(k => DEF.get(k) && ['number', 'choice', 'bool'].includes(DEF.get(k).type));
         $('benchChangeKey').replaceChildren(...keys.map(k => new Option(DEF.get(k).label, k)));
-        const hint = () => {
+        // the value control follows the setting: a list of its choices, On / Off, or a number in
+        // its range (starting at the current value)
+        const valueControl = () => {
             const def = DEF.get($('benchChangeKey').value);
-            $('benchChangeValue').placeholder = def.type === 'choice' ? def.choices.map(c => c[0]).join(' / ') : def.type === 'bool' ? 'true / false' : `${def.min}–${def.max}`;
-            $('benchChangeValue').value = String(d.params[def.key]);
+            let input;
+            if (def.type === 'choice' || def.type === 'bool') {
+                input = document.createElement('select');
+                const opts = def.type === 'bool' ? [['true', 'On'], ['false', 'Off']] : def.choices.map(([v, label]) => [String(v), label]);
+                input.replaceChildren(...opts.map(([v, label]) => new Option(label, v)));
+                const cur = String(d.params[def.key]);
+                // the other value first: a change is what is wanted
+                input.value = opts.find(o => o[0] !== cur) ? opts.find(o => o[0] !== cur)[0] : cur;
+            } else {
+                input = document.createElement('input');
+                input.type = 'number';
+                input.min = def.min;
+                input.max = def.max;
+                input.step = def.step || 'any';
+                input.value = String(d.params[def.key]);
+                input.className = 'mono';
+                input.title = `${def.min}–${def.max}${def.unit ? ` ${def.unit}` : ''}`;
+            }
+            input.id = 'benchChangeValue';
+            input.setAttribute('aria-label', `${def.label}: value`);
+            $('benchChangeValueHost').replaceChildren(input);
         };
-        $('benchChangeKey').addEventListener('change', hint);
-        hint();
+        $('benchChangeKey').addEventListener('change', valueControl);
+        valueControl();
         $('benchChangeForm').addEventListener('submit', e => {
             e.preventDefault();
             const key = $('benchChangeKey').value, v = coerce(key, $('benchChangeValue').value.trim());
-            if (v === undefined) { renderControls(`Not a value for ${DEF.get(key).label}.`); return; }
+            if (v === undefined) { const def = DEF.get(key); renderControls(`${def.label}: a number from ${def.min} to ${def.max}.`); return; }
             const c = { key, value: String(v) };
             if (!changes.some(x => x.key === c.key && x.value === c.value)) changes.push(c);
             chosen.add(`change:${c.key}=${c.value}`);
@@ -355,7 +412,8 @@ export function createBenchView(d) {
         });
     }
 
-    return {
+    const bench = {
+        testHiddenFails: false,          // tests: behave as if hidden videos gave no frames
         bind() { bind(); render(); renderControls(); },
         run,
         render,
@@ -376,4 +434,5 @@ export function createBenchView(d) {
         get result() { return result; },
         scores: () => scoreAll().map(x => ({ name: x.set.name, key: x.set.key, ...x.score.summary, perLabel: x.score.perLabel, perTrack: x.score.perTrack })),
     };
+    return bench;
 }

@@ -968,6 +968,16 @@ const bench = createBenchView({
     fmtTime,
     userPresets: () => userPresets,
     download,
+    // a run whose hidden video gives no frames (some browsers don't render hidden videos) uses
+    // the player itself, then the clip is opened again
+    borrowPlayer() {
+        if (loop) { loop.pause(); loop.destroy(); loop = null; ph.loop = null; }
+        for (const id of ['play', 'step', 'back', 'timeline', 'bookmark']) $(id).disabled = true;
+        return video;
+    },
+    async returnPlayer() {
+        if (source) await openSource(source);
+    },
 });
 ph.bench = bench;
 // a synthetic scene from its options (tests)
@@ -1349,6 +1359,9 @@ function exportJson() {
 function updateStats() {
     view.render();
     $('clearObjects').disabled = !objs.list().length && !log.count;
+    $('stEngine').textContent = !pipeline ? '–' : pipeline.engine === 'workers'
+        ? `Workers · ${pipeline.workers} detection + 1 camera motion${pipeline.state === 'ready' ? '' : ` (${pipeline.state === 'starting' ? 'starting…' : pipeline.state})`}`
+        : 'Main thread';
     if (!loop) { $('hud').hidden = true; return; }
     const s = loop.stats();
     const fps = v => (v === null ? '–' : v.toFixed(1));

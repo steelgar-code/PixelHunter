@@ -309,3 +309,4 @@ button[aria-pressed=true] { background: color-mix(in srgb, var(--danger) 25%, va
 #benchResults p, .bench-details { word-break: normal; overflow-wrap: break-word; }
 .bench-table th[title] { cursor: help; text-decoration: underline dotted; }
 #panel-bench .muted { word-break: normal; overflow-wrap: break-word; }
+.bench-change #benchChangeValueHost select { max-width: 140px; }

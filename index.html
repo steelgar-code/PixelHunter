@@ -246,6 +246,7 @@
 
         <div id="panel-stats" class="tab-panel" role="tabpanel" aria-labelledby="tab-stats" hidden>
             <dl class="stats mono">
+                <dt>Engine</dt><dd id="stEngine" title="Settings → Playback and view → Engine">–</dd>
                 <dt>Source</dt><dd id="stSource">–</dd>
                 <dt>Processed</dt><dd id="stFps">–</dd>
                 <dt>Dropped</dt><dd id="stDropped">–</dd>
@@ -281,7 +282,7 @@
             <form id="benchChangeForm" class="row bench-change">
                 <span class="muted">Current with</span>
                 <select id="benchChangeKey" aria-label="Setting to change"></select>
-                <input type="text" id="benchChangeValue" class="mono" aria-label="Its value" spellcheck="false">
+                <span id="benchChangeValueHost"></span>
                 <button type="submit" title="Add the current settings with this one changed as a set">Add</button>
             </form>
             <div class="row">

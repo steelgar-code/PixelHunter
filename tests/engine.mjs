@@ -38,6 +38,8 @@ try {
     const main = await page.evaluate(collect, 0);
     await setEngine(page, 'workers');
     ok('switching to Workers: workers running, the frame shown processed again', await page.evaluate(() => __ph.pipeline.engine === 'workers' && __ph.pipeline.workers >= 1 && __ph.pipeline.state === 'ready'));
+    await page.waitForTimeout(300);
+    ok('Stats name the engine and its workers', /^Workers · \d+ detection \+ 1 camera motion$/.test(await page.textContent('#stEngine')), await page.textContent('#stEngine'));
     await page.evaluate(() => { __ph.results.length = 0; });
     await loadScene(page, 'pan-dots');
     await page.waitForFunction(() => __ph.results.length >= 1, null, { timeout: 30000 });
@@ -87,7 +89,7 @@ try {
     // --- the Benchmark: current settings on each engine ---
     await showTab(page, 'bench');
     await page.selectOption('#benchChangeKey', 'engine');
-    await page.fill('#benchChangeValue', 'workers');
+    await page.selectOption('#benchChangeValue', 'workers');
     await page.click('#benchChangeForm button[type=submit]');
     await page.evaluate(() => { for (const b of document.querySelectorAll('#benchSets input[type=checkbox]')) if (b.checked !== ['current', 'change:engine=workers'].includes(b.dataset.key)) b.click(); });
     await page.click('#benchRun');

@@ -193,6 +193,11 @@ try {
     ok('… and their crops', crop2 > 50, crop2);
     const bad = await p2.evaluate(() => __ph.labels.importFiles([new File(['{"kind":"presets"}'], 'x.json')]));
     ok('… a file that isn\'t labels is refused', bad.imported === 0 && bad.bad === 1);
+    // a change saved even when another clip is opened at once (before the 1 s save delay)
+    await p2.check('#labelsComplete');
+    await p2.setInputFiles('#file', copy);
+    await p2.waitForFunction(() => __ph.labels.set && /renamed/.test(__ph.labels.set.clip.name), null, { timeout: 30000 });
+    ok('a change just made is kept when another file is opened at once', await p2.evaluate(() => __ph.labels.set.complete === true));
     ok('no page errors', errors.length === 0 && e2.length === 0, [...errors, ...e2]);
     await ctx2.close();
 } finally {
