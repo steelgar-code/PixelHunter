@@ -101,15 +101,17 @@ try {
     await page.evaluate(() => { const x = [...document.querySelectorAll('#benchSets label')].find(l => /: off/.test(l.textContent)); if (x) x.querySelector('button.icon').click(); });
 
     // two sets, one of them "current with a change"
-    await page.selectOption('#benchChangeKey', 'minContrast');
-    await page.fill('#benchChangeValue', '30');
+    // (min blob area 50 px: a 3×3 px target is never that large. It was min contrast 30 until
+    // 0.12.0, whose smaller allowance for misalignment finds contrast 20 as often with it as without)
+    await page.selectOption('#benchChangeKey', 'minArea');
+    await page.fill('#benchChangeValue', '50');
     await page.click('#benchChangeForm button[type=submit]');
-    ok('"Current with …" adds a set', await page.isChecked('#benchSets input[data-key="change:minContrast=30"]'));
-    await choose(page, ['preset:mid', 'change:minContrast=30']);
+    ok('"Current with …" adds a set', await page.isChecked('#benchSets input[data-key="change:minArea=50"]'));
+    await choose(page, ['preset:mid', 'change:minArea=50']);
     await page.click('#benchRun');
     await runDone(page);
     const two = await page.evaluate(() => __ph.bench.scores());
-    ok('two sets in one run, scored apart (min contrast 30 finds less at contrast 20)', two.length === 2 && two[0].found === mid.found && two[0].frameRecall === mid.frameRecall && two[1].frameRecall < mid.frameRecall && two[1].name.includes('min contrast'), two.map(x => [x.name, x.found, x.frameRecall]));
+    ok('two sets in one run, scored apart (min blob area 50 px finds less of 3×3 px targets)', two.length === 2 && two[0].found === mid.found && two[0].frameRecall === mid.frameRecall && two[1].frameRecall < mid.frameRecall && /min blob area/i.test(two[1].name), two.map(x => [x.name, x.found, x.frameRecall]));
     ok('the run is saved with the clip', !!(await page.evaluate(() => __ph.labels.store.latestResult(__ph.labels.set.clip))));
     // opened again: the latest run is shown
     await page.evaluate(o => __ph.openScene('Scenario C', o), C);
