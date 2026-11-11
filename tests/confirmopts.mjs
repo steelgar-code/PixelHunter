@@ -39,7 +39,8 @@ try {
         targets: [{ size: 3, contrast: 40, x: 0, y: 0, vx, vy, to: 40 }, { size: 3, contrast: 9, x: vx * 41, y: vy * 41, vx, vy, from: 41 }] };
     const off = await run(fade, {}, 45), near = await run(fade, { nearMargin: 2 }, 45);
     console.log(`fading target, confirmed after it fades: ${off.hit} (off) → ${near.hit} (2σ lower near it)`);
-    ok('lower threshold near a confirmed object: a fading target is kept longer', near.hit >= off.hit + 0.05, [off.hit, near.hit]);
+    // (without it 0.92 since the camera-motion fit of 0.12.0, 0.74 before; with it 0.97, 0.82 before: less left to gain)
+    ok('lower threshold near a confirmed object: a fading target is kept longer', near.hit > off.hit + 0.02, [off.hit, near.hit]);
 
     const dots = SCENES['pan-dots'].options;
     const base = await run(dots, {}), sp = await run(dots, { minSpatial: 4 });

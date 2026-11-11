@@ -19,8 +19,9 @@ const QUICK = ['homography', 'tracker', 'score', 'synth', 'params', 'objects', '
 const only = args.filter(a => !a.startsWith('--')).map(a => a.replace(/\.mjs$/, '')).flatMap(a => (a === 'quick' ? QUICK : [a]));
 const suites = fs.readdirSync(here)
     .filter(f => f.endsWith('.mjs') && f !== 'run.mjs')
-    // the benchmark is long: only when named (node run.mjs bench)
-    .filter(f => !f.startsWith('bench') || only.includes(f.replace(/\.mjs$/, '')))
+    // the benchmark is long: only when named (node run.mjs bench). (Its neighbours benchpanel
+    // and benchscore are ordinary suites: a test on the name's start left them out of full runs.)
+    .filter(f => f !== 'bench.mjs' || only.includes('bench'))
     .filter(f => !only.length || only.includes(f.replace(/\.mjs$/, '')))
     .sort();
 
