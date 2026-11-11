@@ -72,7 +72,7 @@ export const PARAM_DEFS = [
     // camera motion (egomotion.js)
     { key: 'estWidth', label: 'Estimation width', group: 'motion', type: 'number', default: 320, min: 160, max: 640, step: 16, unit: 'px' },
     { key: 'features', label: 'Features', group: 'motion', type: 'number', default: 400, min: 100, max: 1000, step: 50 },
-    { key: 'lkWin', label: 'LK window', group: 'motion', type: 'number', default: 21, min: 9, max: 31, step: 2, unit: 'px' },
+    { key: 'lkWin', label: 'LK window', group: 'motion', type: 'number', default: 15, min: 9, max: 31, step: 2, unit: 'px' },
     { key: 'lkLevels', label: 'LK pyramid levels', group: 'motion', type: 'number', default: 3, min: 1, max: 4, step: 1 },
     { key: 'fbMax', label: 'Forward-backward max', group: 'motion', type: 'number', default: 1, min: 0.3, max: 3, step: 0.1, unit: 'px' },
     { key: 'reseedBelow', label: 'Re-seed below', group: 'motion', type: 'number', default: 100, min: 30, max: 300, step: 10, unit: 'points' },

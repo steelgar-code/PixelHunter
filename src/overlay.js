@@ -23,7 +23,8 @@ export function clear(ctx) {
     ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
 }
 
-const POINT_COLOURS = { 1: '#4cc38a', 0: '#ff5c5c', '-1': '#8b939c' };
+// used for the fit · agrees with it, but not followed precisely enough · outlier · lost
+const POINT_COLOURS = { 1: '#4cc38a', 2: '#3d7f63', 0: '#ff5c5c', '-1': '#8b939c' };
 
 // Tracked points of the motion fit from this frame to the next (small-frame px, x y x' y'
 // state per point): a dot at each point and a line to where it moves in the next frame.
@@ -34,7 +35,7 @@ export function drawPoints(ctx, tf, ego, small) {
     const toY = y => tf.y(small.ky * y + (small.ky - 1) / 2);
     const r = Math.max(1.5, 2 * tf.dpr);
     ctx.lineWidth = Math.max(1, tf.dpr);
-    for (const state of [-1, 0, 1]) {
+    for (const state of [-1, 0, 2, 1]) {
         ctx.strokeStyle = ctx.fillStyle = POINT_COLOURS[state];
         ctx.beginPath();
         for (let i = 0; i < P.length; i += 5) {

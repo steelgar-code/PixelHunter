@@ -762,11 +762,13 @@ export function createDetector(cv, options = {}) {
             m.tmp2.convertTo(m.diff, cv.CV_8U);
             if (!full && lastCropped) keepViews(r, m.diff);
             const b = blobs(m.mask, r.x, r.y);
-            // each candidate's strength: the peak Z in its box
-            const z = m.Z.data32F;
+            // each candidate's strength: the peak Z of its own pixels (the mask's: a pixel in its
+            // box that lies in an exclusion zone or outside the warped frames is not its own,
+            // however strong it is there)
+            const z = m.Z.data32F, mk = m.mask.data;
             for (const c of b.candidates) {
                 let peak = 0;
-                for (let y = c.y - r.y; y < c.y - r.y + c.h; y++) for (let x = c.x - r.x; x < c.x - r.x + c.w; x++) peak = Math.max(peak, z[y * r.w + x]);
+                for (let y = c.y - r.y; y < c.y - r.y + c.h; y++) for (let x = c.x - r.x; x < c.x - r.x + c.w; x++) if (mk[y * r.w + x] && z[y * r.w + x] > peak) peak = z[y * r.w + x];
                 c.score = peak;
             }
             // slivers along edges: dropped, shown with the shift-check rejects

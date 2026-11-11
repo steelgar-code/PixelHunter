@@ -39,6 +39,14 @@ export const egoParams = p => ({ ...pick(EGO_DEFAULTS, p), zones: p.zonesMotion 
 export const detectParams = p => ({ ...pick(DETECT_DEFAULTS, p), zones: p.zones || [], include: p.include || [] });
 export const trackParams = p => pick(TRACK_DEFAULTS, p);
 
+// How good a camera-motion fit is, at processing resolution: 90 % of the points it is made of are
+// within err90 px of where it puts them; coverage: share of grid cells it holds; corner: how
+// well those points pin it down at the frame's corners (px, 1 σ); model: 'similarity' when they
+// didn't and the simpler fit was used; used: points it is made of.
+export const fitOf = (e, geom) => (e && e.err90 !== undefined && e.err90 !== null
+    ? { err50: e.err50 * geom.kx, err90: e.err90 * geom.kx, coverage: e.coverage, used: e.used ?? e.inliers,
+        corner: Number.isFinite(e.cornerStd) ? e.cornerStd * geom.kx : null, model: e.model || 'homography' } : null);
+
 export const MAX_STRIDE = 12;
 export const MAX_FPS = 120;             // highest source frame rate assumed when checking frame gaps
 export const NEAR_MISSES = 3;           // nearMargin: around confirmed tracks missed up to this many frames
@@ -221,10 +229,7 @@ export function createPipeline(cv, params) {
             width: geom.w, height: geom.h, scale: geom.scale, stride: s,
             small: { w: geom.sw, h: geom.sh, kx: geom.kx, ky: geom.ky },
             egoPrev,                                          // t−1 → t
-            // how good that fit is, at processing resolution: 90 % of its inliers are within
-            // err90 px of where the fit puts them; coverage: share of grid cells it holds
-            fit: egoPrev && egoPrev.err90 !== undefined && egoPrev.err90 !== null
-                ? { err50: egoPrev.err50 * geom.kx, err90: egoPrev.err90 * geom.kx, coverage: egoPrev.coverage } : null,
+            fit: fitOf(egoPrev, geom),
             egoNext: at(s - 1).egoIn,                         // t → t+1
             detect,
             candidates: detect.candidates,

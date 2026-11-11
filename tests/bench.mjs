@@ -80,6 +80,18 @@ export const SCENARIOS = {
         scene: seed => SCENARIOS.C.scene(seed) },
     'F-h264': { what: 'F through H.264 CRF 28, keyframe every 30', goal: 'quiet', h264: 28, gop: 30,
         scene: seed => SCENARIOS.F.scene(seed) },
+    // sky over ground, not compressed: sensor noise is all the sky has for the camera-motion fit
+    U: { what: '3×3 px −20 and 2×2 px −30 in the sky, handheld, sky over ground', goal: 'recall',
+        scene: seed => SCENARIOS['T-h264'].scene(seed) },
+    V: { what: 'no target, handheld, sky over ground', goal: 'quiet',
+        scene: seed => SCENARIOS['S-h264'].scene(seed) },
+    // the ground only in the bottom sixth of the frame, a camera turning on a gimbal
+    W: { what: '3×3 px −20 and 2×2 px +25 in the sky, wide lens (60°) sweeping at up to 12.5°/s, ground in the bottom sixth', goal: 'recall',
+        scene: seed => ({ ...base, frames: 150, camera: 'gimbal', seed, sky: { fy: 300 }, targets: [dot(3, -20, 120, 90, 3, 0.5), dot(2, 25, 200, 200, 3.4, -0.4)] }) },
+    X: { what: 'W through a long lens (10°)', goal: 'recall',
+        scene: seed => ({ ...base, frames: 150, camera: 'tele', seed, sky: { fy: 300 }, targets: [dot(3, -20, 100, 90, 6.2 + 3, 0.5), dot(2, 25, 60, 200, 6.2 + 3.5, -0.4)] }) },
+    Y: { what: 'no target, long lens panning, ground in the bottom sixth', goal: 'quiet',
+        scene: seed => ({ ...base, frames: 250, camera: 'tele', seed, sky: { fy: 300 }, shapes: 30, targets: [] }) },
     K: { what: '1 px, contrast 25, slow (0.8 px/frame)', goal: 'recall',
         scene: seed => ({ ...base, frames: 150, camera: 'pan', seed, targets: [dot(1, 25, 200, 120, 6 + 0.8, 2.5), dot(1, -25, 380, 260, 6 - 0.6, 2.5 + 0.5)] }) },
 };

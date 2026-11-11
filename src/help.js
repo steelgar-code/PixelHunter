@@ -59,7 +59,7 @@ export const HELP = {
     features: 'How many points are tracked to work out camera motion. More = more reliable on cluttered or partly blocked views, slower.',
     lkWin: 'Size of the patch followed around each point, px. Bigger follows faster camera moves and blur, a little less precisely. Raise for whip-pans or shaky handheld video (Skipped count climbing).',
     lkLevels: 'Coarse-to-fine levels for following points: each level doubles how big a jump between frames can be followed. Raise together with the LK window for fast pans.',
-    fbMax: 'Each point is tracked forward and back again; if it doesn\'t return within this many px it is distrusted. Lower = stricter.',
+    fbMax: 'Each point is tracked forward and back again; if it doesn\'t return within this many px it is distrusted. Lower = stricter. Among the points that pass, only the precisely followed ones shape the final fit (Points view: bright green; dark green agree with it but were followed too loosely, as on flat sky).',
     reseedBelow: 'When fewer tracked points than this survive, start over with fresh points across the whole frame.',
     ransacPx: 'How far a point may be from the agreed camera motion and still count, px at the estimation width. Raise slightly for scenes with depth (near trees, far hills move differently) or wide-angle lens bending.',
     minInliers: 'If fewer points than this agree on the camera motion, the frame is skipped instead of guessed (counted under Skipped). Example: over water, featureless sky.',

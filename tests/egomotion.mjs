@@ -33,7 +33,8 @@ try {
                 const cur = toMats(f.grey, W, H, sw);
                 if (prev) {
                     const r = ego.update(prev.small, cur.small);
-                    const rec = { ok: r.ok, reason: r.reason, tracked: r.tracked, inliers: r.inliers, ratio: r.ratio };
+                    const rec = { ok: r.ok, reason: r.reason, tracked: r.tracked, inliers: r.inliers, ratio: r.ratio, used: r.used, model: r.model || 'homography',
+                        points: r.points.length / 5 };
                     if (r.ok && f.truthH) rec.err = maxCornerDiff(scaleH(r.H, cur.kx, cur.ky), f.truthH, W, H);
                     // grid cells holding at least one inlier
                     const cells = new Set();
@@ -42,6 +43,9 @@ try {
                         if (P[i + 4] === 1) cells.add(Math.min(7, Math.floor(P[i + 2] / cur.small.cols * 8)) + 8 * Math.min(5, Math.floor(P[i + 3] / cur.small.rows * 6)));
                     }
                     rec.coverage = cells.size / 48;
+                    // inliers not followed precisely enough to shape the fit, and where they are
+                    rec.loose = 0; rec.looseTop = 0;
+                    for (let i = 0; i < P.length; i += 5) if (P[i + 4] === 2) { rec.loose++; if (P[i + 1] < cur.small.rows * (opts.skyShare || 0)) rec.looseTop++; }
                     out.push(rec);
                     prev.small.delete();
                 }
@@ -67,6 +71,8 @@ try {
             return {
                 n: recs.length, ok: recs.filter(r => r.ok).length,
                 medErr: +(errs[errs.length >> 1] || 0).toFixed(3), maxErr: +(errs[errs.length - 1] || 0).toFixed(3),
+                p90Err: +(errs[Math.min(errs.length - 1, Math.floor(errs.length * 0.9))] || 0).toFixed(3),
+                simpler: recs.filter(r => r.model === 'similarity').length,
                 minRatio: +Math.min(...recs.map(r => r.ratio)).toFixed(3),
                 minCoverage: +Math.min(...recs.map(r => r.coverage)).toFixed(3),
                 reasons: [...new Set(recs.filter(r => !r.ok).map(r => r.reason))],
@@ -85,6 +91,36 @@ try {
         ok(`${camera} ${W}×${H}: corner error < 0.75 px at full resolution`, r.maxErr < 0.75, { med: r.medErr, max: r.maxErr });
         ok(`${camera} ${W}×${H}: inlier ratio > 0.9`, r.minRatio > 0.9, r.minRatio);
         ok(`${camera} ${W}×${H}: inliers in ≥ 80 % of grid cells`, r.minCoverage >= 0.8, r.minCoverage);
+    }
+
+    {
+        // sky over the top half: its "corners" are sensor noise, followed to within a pixel or so.
+        // They must not shape the fit (with them it was 1–2.5 px off at the corners)
+        const sky = { width: 640, height: 360, frames: 40, camera: 'handheld', seed: 7, noise: 2, sky: { fy: 170 } };
+        const r = await scene(sky);
+        const old = await scene(sky, { fbRel: 0, loose: 0 });
+        ok('sky over half the frame: every frame fitted', r.ok === r.n, r);
+        ok('sky over half the frame: corner error < 0.3 px (median), < 0.6 px (9 in 10)', r.medErr < 0.3 && r.p90Err < 0.6, { med: r.medErr, p90: r.p90Err, max: r.maxErr });
+        ok('… several times better than with every point that agrees', old.medErr > 3 * r.medErr, { before: old.medErr, now: r.medErr });
+        const recs = await page.evaluate(o => window.runFrames(window.sceneFrames(o), o.width, o.height, { skyShare: 0.5 }), sky);
+        ok('points on the sky agree with the motion but are not used (first frame)', recs[0].loose > 15 && recs[0].looseTop >= 0.6 * recs[0].loose && recs[0].used === recs[0].inliers - recs[0].loose,
+            { inliers: recs[0].inliers, used: recs[0].used, loose: recs[0].loose, onSky: recs[0].looseTop });
+        // (a cell is tried again every retryEmptyAfter frames: frames 3–8 lie between two tries)
+        const later = recs.slice(3, 9).map(r => r.points).sort((a, b) => a - b)[3];
+        ok('… and their cells are left alone afterwards (fewer points followed)', later < 0.9 * recs[0].points, { first: recs[0].points, later, all: recs.slice(0, 12).map(r => r.points) });
+    }
+
+    {
+        // the ground only in the bottom sixth: its points fit a homography well there and leave it
+        // nearly free in the sky above. A long lens: the simpler fit is exact enough
+        const thin = { width: 640, height: 360, frames: 60, camera: 'tele', seed: 7, noise: 2, sky: { fy: 300 } };
+        const r = await scene(thin);
+        const free = await scene(thin, { loose: 0 });
+        ok('ground in the bottom sixth: the simpler fit is used where the full one is not pinned down', r.ok === r.n && r.simpler >= 5 && r.simpler < r.n, r);
+        ok('… corner error < 1 px in 9 of 10 frames (the free fit: several px)', r.p90Err < 1 && free.p90Err > 2 * r.p90Err, { now: [r.medErr, r.p90Err, r.maxErr], free: [free.medErr, free.p90Err, free.maxErr] });
+        // a wide lens turning: the whole frame covered, the full fit stays (its perspective is needed)
+        const wide = await scene({ width: 640, height: 360, frames: 40, camera: 'gimbal', seed: 7, noise: 2 });
+        ok('wide lens turning, whole frame textured: the full fit, < 0.2 px', wide.ok === wide.n && wide.simpler === 0 && wide.maxErr < 0.2, wide);
     }
 
     {

@@ -1426,8 +1426,8 @@ function updateStats() {
     const r = lastOut && lastOut.result;
     const e = r && r.egoNext;
     $('stPoints').textContent = e ? String(e.tracked) : '–';
-    $('stInliers').textContent = e ? `${e.inliers} (${Math.round(e.ratio * 100)} %)` : '–';
-    $('stFit').textContent = r && r.fit ? `${r.fit.err90.toFixed(2)} px · ${Math.round(r.fit.coverage * 100)} %` : '–';
+    $('stInliers').textContent = e ? `${e.inliers} (${Math.round(e.ratio * 100)} %)${e.used !== undefined && e.used < e.inliers ? ` · ${e.used} used` : ''}` : '–';
+    $('stFit').textContent = r && r.fit ? `${r.fit.err90.toFixed(2)} px · ${Math.round(r.fit.coverage * 100)} %${r.fit.model === 'similarity' ? ' · simpler fit' : ''}` : '–';
     $('stSkipped').textContent = String(skipped.count);
     $('stReason').textContent = Object.entries(skipped.reasons).map(([k, n]) => `${k}: ${n}`).join(' · ');
     $('stGrab').textContent = r ? `${r.timings.grab.toFixed(1)} ms` : '–';

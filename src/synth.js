@@ -78,8 +78,28 @@ function makeWorld(w, h, rand, { octaves, shapes }) {
     return img;
 }
 
+// A camera turning about its own centre (on a gimbal or a tripod: pan, tilt, roll in rad, zoom as
+// a factor), with focal length f in px: the exact homography K·R·K⁻¹ from frame 0, so a pan
+// changes the picture's perspective across the frame, by more the wider the lens. `G` maps world
+// coordinates (origin at the centre of frame 0) to frame coordinates about the frame's centre;
+// cx / cy are where the centre looks (for the trees' parallax).
+export function rotating(f, angles) {
+    return k => {
+        const { pan = 0, tilt = 0, roll = 0, zoom = 1 } = angles(k);
+        const cy = Math.cos(pan), sy = Math.sin(pan), cp = Math.cos(tilt), sp = Math.sin(tilt), cr = Math.cos(roll), sr = Math.sin(roll);
+        // R = Rz(roll) · Rx(tilt) · Ry(pan), taking frame 0's viewing rays to frame k's
+        const Ry = [cy, 0, -sy, 0, 1, 0, sy, 0, cy], Rx = [1, 0, 0, 0, cp, -sp, 0, sp, cp], Rz = [cr, -sr, 0, sr, cr, 0, 0, 0, 1];
+        const R = mul(Rz, mul(Rx, Ry));
+        const K = [f * zoom, 0, 0, 0, f * zoom, 0, 0, 0, 1], Ki = [1 / f, 0, 0, 0, 1 / f, 0, 0, 0, 1];
+        const G = mul(K, mul(R, Ki));
+        const [x, y] = project(inv(G), 0, 0);
+        return { G, cx: x, cy: y, rot: roll, scale: zoom, px: 0, py: 0 };
+    };
+}
+
 // Camera motions, as functions of the frame index k returning pose parameters:
-// { cx, cy } world point at the frame centre, rot (rad), scale, px / py perspective (1/px).
+// { cx, cy } world point at the frame centre, rot (rad), scale, px / py perspective (1/px);
+// or { G }: the whole homography, world → frame about its centre (rotating()).
 export const CAMERAS = {
     static: () => ({ cx: 0, cy: 0, rot: 0, scale: 1, px: 0, py: 0 }),
     pan: k => ({ cx: 6 * k, cy: 2.5 * k, rot: 0, scale: 1, px: 0, py: 0 }),
@@ -100,6 +120,12 @@ export const CAMERAS = {
     // a fast yaw (about 40°/s on a wide lens: 12–16 px a frame, speeding up and slowing down)
     // with a slow roll
     yaw: k => ({ cx: 14 * k + 25 * Math.sin(k * 0.12), cy: 2 * Math.sin(k * 0.4), rot: 0.003 * k, scale: 1, px: 0, py: 0 }),
+    // a gimbal with a wide lens (60° across 640 px) sweeping 29° to one side and back, at up to
+    // 0.5° a frame (12.5°/s), with a slow tilt and a little roll; the perspective changes as it
+    // turns (the world is a plane: a turn towards 90° would stretch it without end)
+    gimbal: rotating(554, k => ({ pan: 0.5 * Math.sin(k * 0.0175) + 0.004 * Math.sin(k * 0.21), tilt: 0.012 * Math.sin(k * 0.13), roll: 0.006 * Math.sin(k * 0.09) })),
+    // the same through a long lens (10° across 640 px): 0.1° a frame, perspective nearly constant
+    tele: rotating(3658, k => ({ pan: 0.0017 * k + 0.0006 * Math.sin(k * 0.21), tilt: 0.0018 * Math.sin(k * 0.13), roll: 0.006 * Math.sin(k * 0.09) })),
 };
 
 export const DEFAULT_SCENE = {
@@ -142,6 +168,7 @@ export function createScene(options = {}) {
     // world → frame k
     function pose(k) {
         const p = camera(k);
+        if (p.G) return mul([1, 0, (W - 1) / 2, 0, 1, (H - 1) / 2, 0, 0, 1], p.G);
         const c = Math.cos(p.rot) * p.scale, n = Math.sin(p.rot) * p.scale;
         const toCentre = [1, 0, -p.cx, 0, 1, -p.cy, 0, 0, 1];
         const rs = [c, -n, 0, n, c, 0, 0, 0, 1];
