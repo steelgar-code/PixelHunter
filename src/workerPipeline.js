@@ -14,14 +14,18 @@
 // is detected, frame n+1 is taken in and its camera motion fitted. `accepting` says when the
 // next frame may be pushed. Debug views: Stabilised on the main thread; Raw diff / Mask: while
 // one is shown, the workers send their parts with each frame.
+// The slow lane (slowLane.js) runs as in pipeline.js: its plan, tracker and display on the main
+// thread, its detection as the same `detect` message to the workers (lane: 'slow'), sent along
+// with the fast lane's.
 
 import { createTracker } from './tracker.js';
 import { stripsOf, DETECT_DEFAULTS } from './detect.js';
 import { scaleH, mul, normalize, composeNewestFirst } from './homography.js';
 import { mulberry32 } from './synth.js';
-import { contrastOf } from './objects.js';
 import { stackCrop, CROP } from './crops.js';
-import { makeCanvas, egoParams, detectParams, trackParams, fitOf, fitErrOf, MAX_FPS, NEAR_MISSES, NEAR_MAX_R, MAX_STRIDE } from './pipeline.js';
+import { makeCanvas, egoParams, detectParams, trackParams, fitOf, fitErrOf, MAX_FPS, NEAR_MISSES, MAX_STRIDE,
+    laneParams, prepareBlobs, joinLanes, slowSummary, nearList } from './pipeline.js';
+import { createSlowLane, ringFrames, slowDetectParams } from './slowLane.js';
 import { CV_URL } from './cvLoader.js';
 
 // detection workers by default: one per core but one (measured on 4 cores at 1280×720: 2 → 84,
@@ -62,6 +66,7 @@ function spawn(role, params) {
 export function createWorkerPipeline(cv, params) {
     let p = { ...params };
     const tracker = createTracker(trackParams(p));
+    const lane = createSlowLane(laneParams(p));
     const nDet = Number(p.workers) > 0 ? Math.min(8, Math.round(Number(p.workers))) : autoWorkers();
     const egoW = spawn('ego', egoParams(p));
     const detW = Array.from({ length: nDet }, () => spawn('detect', detectParams(p)));
@@ -69,7 +74,7 @@ export function createWorkerPipeline(cv, params) {
     let readyState = 'starting';
     ready.then(() => { readyState = 'ready'; }, e => { readyState = `failed: ${e.message}`; });
 
-    let geom = null, slots = [], views = [], rgba = null, head = -1, count = 0, pushed = 0;
+    let geom = null, slots = [], views = [], rgba = null, head = -1, count = 0, pushed = 0, idx = -1;
     let tmpCanvas = null, grabCanvas = null;
     let resetCause = 'start';
     let stack = null;
@@ -100,11 +105,11 @@ export function createWorkerPipeline(cv, params) {
         const w = pw, h = Math.max(1, Math.round(srcH * pw / srcW));
         const sw = Math.min(w, Math.round(p.estWidth)), sh = Math.max(1, Math.round(h * sw / w));
         const s = stride();
-        geom = { srcW, srcH, w, h, scale: w / srcW, sw, sh, kx: w / sw, ky: h / sh, stride: s };
+        geom = { srcW, srcH, w, h, scale: w / srcW, sw, sh, kx: w / sw, ky: h / sh, stride: s, ring: ringFrames(s, p) };
         tmpCanvas = null;
         rgba = new cv.Mat(h, w, cv.CV_8UC4);
         // one frame more than detection needs: the next frame comes in while this one is detected
-        for (let i = 0; i < 2 * s + 2; i++) slots.push({ grey: new cv.Mat(h, w, cv.CV_8UC1), small: new cv.Mat(sh, sw, cv.CV_8UC1), meta: null, egoIn: null, view: null });
+        for (let i = 0; i < geom.ring + 1; i++) slots.push({ grey: new cv.Mat(h, w, cv.CV_8UC1), small: new cv.Mat(sh, sw, cv.CV_8UC1), meta: null, egoIn: null, view: null });
         for (let i = 0; i < s + 2; i++) {
             const canvas = makeCanvas(w, h);
             views.push({ canvas, ctx: canvas.getContext('2d', { willReadFrequently: true }) });
@@ -114,7 +119,9 @@ export function createWorkerPipeline(cv, params) {
         viewData = null;
         head = -1;
         count = 0;
+        idx = -1;
         tracker.reset();
+        lane.reset();
         toAll({ type: 'reset' });
     }
 
@@ -164,12 +171,13 @@ export function createWorkerPipeline(cv, params) {
     }
 
     // detection over the parts, merged
-    async function detectParts(args) {
+    // (lane 'slow': the slow lane's detector in each worker; no debug views)
+    async function detectParts(args, lane = null) {
         const parts = stripsOf(geom.w, geom.h, detW.length, p.include);
         const id0 = detectId;
         detectId += parts.length;
-        const views = wantViews;
-        const outs = await Promise.all(parts.map((part, i) => detW[i].ask({ type: 'detect', id: id0 + i, ...args, part, views }, `d${id0 + i}`)));
+        const views = lane ? false : wantViews;
+        const outs = await Promise.all(parts.map((part, i) => detW[i].ask({ type: 'detect', id: id0 + i, ...args, part, views, lane }, `d${id0 + i}`)));
         const ds = outs.map(o => o.d);
         if (views && ds.every(d => d.ok && d.views)) assembleViews(ds.map(d => d.views));
         for (const d of ds) delete d.views;
@@ -196,7 +204,7 @@ export function createWorkerPipeline(cv, params) {
         if (disposed) return null;
         const t0 = performance.now();
         const needs = !geom ? 'start' : geom.srcW !== f.width || geom.srcH !== f.height ? `video size changed to ${f.width}×${f.height}`
-            : geom.stride !== stride() ? 'frame stride changed' : null;
+            : geom.stride !== stride() ? 'frame stride changed' : geom.ring !== ringFrames(stride(), p) ? 'slow lane changed' : null;
         if (needs) {
             await prevB;           // nothing may still be reading the history
             setup(f.width, f.height, needs);
@@ -205,6 +213,7 @@ export function createWorkerPipeline(cv, params) {
         if (f.jump) {
             resetCause = f.jumpReason || (f.seq === 0 ? 'start' : 'seek');
             count = 0;
+            idx = -1;
             egoW.post({ type: 'reset' });
         }
         head = (head + 1) % slots.length;
@@ -216,8 +225,9 @@ export function createWorkerPipeline(cv, params) {
         rgba.data.set(image.data);
         cv.cvtColor(rgba, slot.grey, cv.COLOR_RGBA2GRAY);
         cv.resize(slot.grey, slot.small, new cv.Size(geom.sw, geom.sh), 0, 0, cv.INTER_AREA);
-        count = Math.min(count + 1, 2 * s + 1);
-        const ctx = { head, count, s, slot, jump: f.jump, t0, grabMs: image.grabMs || 0 };
+        count = Math.min(count + 1, geom.ring);
+        idx++;
+        const ctx = { head, count, idx, s, slot, jump: f.jump, t0, grabMs: image.grabMs || 0 };
         const grey = slot.grey.data, small = slot.small.data;
         // copies handed over (transferred, not cloned again)
         for (const w of detW) {
@@ -242,7 +252,7 @@ export function createWorkerPipeline(cv, params) {
         const { s } = ctx;
         const L = slots.length;
         const at = back => slots[(ctx.head - back + L * 2) % L];
-        if (ctx.jump) tracker.reset();
+        if (ctx.jump) { tracker.reset(); lane.reset(); }
         const tB = performance.now();
         if (ctx.count < s + 1) return { slot: at(ctx.count - 1), result: null };
         const cur = at(s);
@@ -260,6 +270,17 @@ export function createWorkerPipeline(cv, params) {
             const err = Math.max(...fits.map(e => fitErrOf(e, p) * geom.kx)) * Math.sqrt(n);
             return { H: normalize(composeNewestFirst(fits.map(e => e.Hfull))), Hs: normalize(composeNewestFirst(fits.map(e => e.H))), err };
         };
+        // the slow lane's pass, when one is due: its detection is sent along with the fast lane's
+        let slowPlan = null, slowP = null;
+        if (p.slow) {
+            slowPlan = lane.plan({ at, idx: ctx.idx, count: ctx.count, s, geom, wantTracked: true, nearMargin: p.nearMargin, nearOf: nearList });
+            if (slowPlan.pass) {
+                const P = slowPlan.pass;
+                slowP = detectParts({ prev: at(2 * P.n).meta.seq, cur: at(P.n).meta.seq, next: ctx.slot.meta.seq, Hprev: P.Hprev, Hnext: P.Hnext,
+                    Hs: P.Hs, fitErr: P.fitErr, tracked: P.tracked, near: P.near, params: slowDetectParams(detectParams(p), p) }, 'slow')
+                    .catch(e => ({ ok: false, reason: `detection worker: ${e.message}`, candidates: [] }));
+            }
+        }
         let detect;
         let stk = { cur: cur.grey, prev: null, next: null, Hb: null, Hf: null };
         if (ctx.count < 2 * s + 1) {
@@ -273,8 +294,7 @@ export function createWorkerPipeline(cv, params) {
                 stk = { cur: cur.grey, prev: prev.grey, next: next.grey, Hb: back.H, Hf: fwd.H || null };
                 const tracked = p.shiftCheck && egoPrev && egoPrev.ok
                     ? tracker.predict(egoPrev.Hfull, dt, { onlyPinned: true }).map(t => ({ x: t.x, y: t.y })) : [];
-                const near = p.nearMargin > 0 && egoPrev && egoPrev.ok
-                    ? tracker.predict(egoPrev.Hfull, dt, { maxMisses: NEAR_MISSES }).map(t => ({ x: t.x, y: t.y, r: Math.min(NEAR_MAX_R, Math.max(4, t.gate)) })) : [];
+                const near = p.nearMargin > 0 && egoPrev && egoPrev.ok ? nearList(tracker.predict(egoPrev.Hfull, dt, { maxMisses: NEAR_MISSES })) : [];
                 try {
                     detect = await detectParts({ prev: prev.meta.seq, cur: cur.meta.seq, next: next.meta.seq, Hprev: back.H, Hnext: fwd.H || null,
                         Hs: { Hprev: back.Hs, Hnext: fwd.Hs || null }, fitErr: Math.max(back.err, fwd.err || 0), tracked, near });
@@ -286,13 +306,24 @@ export function createWorkerPipeline(cv, params) {
         let tracks = null;
         const meta = { time: cur.meta.time, frame: cur.meta.frame };
         if (detect.ok) {
-            const blobs = detect.weak && detect.weak.length ? [...detect.candidates, ...detect.weak] : detect.candidates;
-            for (const b of blobs) if (b.score !== undefined) b.strength = b.score / p.sigmas;
-            if (p.minSpatial > 0) for (const b of blobs) b.spatial = contrastOf(cur.grey, b);
+            const blobs = prepareBlobs(detect, cur.grey, p);
             tracks = tracker.step(blobs, egoPrev && egoPrev.ok ? egoPrev.Hfull : null, dt, meta);
         } else if (ctx.count >= 2 * s + 1) tracks = tracker.step([], null, dt, meta);
         stack = stk;
         const t3 = performance.now();
+        let slow = [], slowInfo = null;
+        if (p.slow) {
+            let d = null;
+            if (slowP) {
+                const P = slowPlan.pass, u = at(P.n);
+                d = await slowP;
+                lane.step(P, d, d.ok ? prepareBlobs(d, u.grey, p) : null, ctx.idx, { time: u.meta.time, frame: u.meta.frame });
+            }
+            slow = lane.shown({ at, idx: ctx.idx, count: ctx.count, s, geom, fast: tracks || [] });
+            slowInfo = slowSummary(lane, d, performance.now() - t3);
+        }
+        const t4 = performance.now();
+        const joined = joinLanes(tracks, slow);
         const hasViews = viewsOf === 'next';
         if (hasViews) viewsOf = null;
         const result = {
@@ -304,13 +335,14 @@ export function createWorkerPipeline(cv, params) {
             egoNext: at(s - 1).egoIn,
             detect,
             candidates: detect.candidates,
-            tracks: tracks || [],
-            confirmed: tracks ? tracks.filter(t => t.state === 'confirmed' && t.matched) : [],
-            held: tracks ? tracks.filter(t => t.state === 'held') : [],
+            tracks: joined.tracks,
+            confirmed: joined.confirmed,
+            held: joined.held,
+            ...(slowInfo ? { slow: slowInfo } : {}),
             // grab: taking the frame and sending it; ego: waiting for camera motion; detect:
             // detection and tracking; total: the frame's own work (with the stages overlapping,
             // frames are taken faster than this)
-            timings: { grab: ctx.t1 - ctx.t0 + ctx.grabMs, ego: ctx.t2 - ctx.t1, detect: t3 - tB, total: ctx.t2 - ctx.t0 + ctx.grabMs + (t3 - tB) },
+            timings: { grab: ctx.t1 - ctx.t0 + ctx.grabMs, ego: ctx.t2 - ctx.t1, detect: t3 - tB, ...(slowInfo ? { slow: t4 - t3 } : {}), total: ctx.t2 - ctx.t0 + ctx.grabMs + (t4 - tB) },
             engine: 'workers',
         };
         if (hasViews) viewsOf = result;
@@ -386,6 +418,7 @@ export function createWorkerPipeline(cv, params) {
                 : next.estWidth !== p.estWidth ? 'estimation width changed' : null;
             p = { ...p, ...next };
             tracker.setParams(trackParams(p));
+            lane.setParams(laneParams(p));
             egoW.post({ type: 'params', params: egoParams(p) });
             for (const w of detW) w.post({ type: 'params', params: detectParams(p) });
             if (cause && geom) { const g = geom; chainA = chainA.then(() => chainB).then(() => setup(g.srcW, g.srcH, cause)); }
@@ -395,8 +428,8 @@ export function createWorkerPipeline(cv, params) {
             const g = m => (m ? { cols: m.cols, rows: m.rows, data: m.data } : null);
             return stackCrop({ cur: g(stack.cur), prev: g(stack.prev), next: g(stack.next), Hb: stack.Hb, Hf: stack.Hf }, cx, cy, side);
         },
-        setPinned(ids) { tracker.setPinned(ids); },
-        reset(cause = 'reset') { resetCause = cause; count = 0; stack = null; tracker.reset(); egoW.post({ type: 'reset' }); },
+        setPinned(ids) { tracker.setPinned(ids); lane.setPinned(ids); },
+        reset(cause = 'reset') { resetCause = cause; count = 0; idx = -1; stack = null; tracker.reset(); lane.reset(); egoW.post({ type: 'reset' }); },
         dispose() {
             disposed = true;
             Promise.all([chainA, chainB]).then(() => {

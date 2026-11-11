@@ -46,6 +46,10 @@ export const PARAM_DEFS = [
     { key: 'open', label: '3×3 opening (drops 1–2 px blobs)', group: 'detect', type: 'bool', default: false , when: { detectMode: ['robust', 'adaptive'] } },
     { key: 'shiftCheck', label: 'Drop background-shift edges (trees, branches)', group: 'detect', type: 'bool', default: false, preset: false },
     { key: 'shiftMax', label: 'Max background shift', group: 'detect', type: 'number', default: 2, min: 1, max: 5, step: 1, unit: 'px', preset: false , when: { shiftCheck: true } },
+    // the slow lane (slowLane.js)
+    { key: 'slow', label: 'Also look for slow objects', group: 'detect', type: 'bool', default: false },
+    { key: 'slowMax', label: 'Longest comparison', group: 'detect', type: 'number', default: 12, min: 2, max: 12, step: 1, unit: 'frames', when: { slow: true } },
+    { key: 'slowBudget', label: 'Camera movement allowed', group: 'detect', type: 'number', default: 6, min: 1, max: 20, step: 0.5, unit: 'px', when: { slow: true } },
     { key: 'zonesMotion', label: 'Also ignore zones for camera motion', group: 'zones', type: 'bool', default: true },
 
     // temporal confirmation (tracker.js)

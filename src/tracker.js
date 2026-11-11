@@ -61,6 +61,11 @@
 // other on the screen doesn't confirm. (Off when the camera follows the object: then the object
 // stays put on the screen.)
 //
+// With fixedMinMove > 0 (the slow lane's setting; 0 = always, as before) the guard only applies
+// when the background itself moved at least that many px on the screen at the track's place
+// during those sightings: on a fixed camera a slow object stays within SCREEN_FIXED px for
+// PATH_POINTS sightings and must not be dropped for it.
+//
 // Pinned tracks (setPinned: the user's objects of interest) are kept watching: never dropped
 // for being gone too long or for frames without camera motion, they wait at their last seen
 // position (carried with the scene, also out of view) and pick up movement there again under
@@ -93,6 +98,7 @@ export const TRACK_DEFAULTS = {
     confirmSecs: 0.2,      // time mode: seen confirmN times within this many seconds (0.2 s = 5 frames at 25 fps)
     minStrong: 0,          // sightings above the threshold (not weak) needed to confirm (0: any)
     minSpatial: 0,         // grey: median contrast against the surroundings needed to confirm (0: off)
+    fixedMinMove: 0,       // px: screen-fixed guard only where the background moved this much (0: always)
 };
 
 const CROWD_RADIUS = 40;       // px around a prediction in which blob density is measured
@@ -111,7 +117,7 @@ export function createTracker(options = {}) {
     let p = { ...TRACK_DEFAULTS, ...options };
     let tracks = [];
     let pinned = new Set();     // ids kept watching
-    let nextId = 1;
+    let nextId = options.firstId ?? 1;     // (the slow lane's tracker counts from its own range)
     let skipped = 0;
     let clock = 0;             // frames since the start, for the sightings' times
     let now = 0;               // media time of the current step, s
@@ -130,6 +136,8 @@ export function createTracker(options = {}) {
         [t.lx, t.ly] = project(H, t.lx, t.ly);
         t.trail = t.trail.map(([a, b]) => project(H, a, b));
         t.pts = t.pts.map(([a, b, c]) => [...project(H, a, b), c]);
+        // the screen sightings' places carried with the scene: how far the background moved there
+        if (t.rawBg) t.rawBg = t.rawBg.map(([a, b]) => project(H, a, b));
         if (t.box) {
             const [bx, by] = project(H, t.box.cx, t.box.cy);
             t.box = { ...t.box, x: t.box.x + bx - t.box.cx, y: t.box.y + by - t.box.cy, cx: bx, cy: by };
@@ -225,7 +233,7 @@ export function createTracker(options = {}) {
             const b = blobs[j];
             // seen again after a gap: its motion may have changed (stop and go), so the path
             // check starts over from here
-            if (t.misses >= PATH_RESTART) { t.pts = []; t.raw = []; t.spat = []; }
+            if (t.misses >= PATH_RESTART) { t.pts = []; t.raw = []; t.rawBg = []; t.spat = []; }
             if (restart) {
                 // picked up again after a pause (or where it stopped): same id, but it confirms
                 // afresh from here, so noise around a stopped object can't show as a detection
@@ -235,6 +243,7 @@ export function createTracker(options = {}) {
                 t.sx = b.cx; t.sy = b.cy;
                 t.pts = [];
                 t.raw = [];
+                t.rawBg = [];
                 t.reacquired = (t.reacquired || 0) + 1;
                 t.ev = 0; t.t0 = now; t.early = [];
                 t.sights = []; t.sHist = 0; t.spat = [];
@@ -260,6 +269,7 @@ export function createTracker(options = {}) {
             if (t.pts.length > PATH_POINTS) t.pts.shift();
             (t.raw ??= []).push([b.cx, b.cy]);            // on the screen, not carried with the scene
             if (t.raw.length > PATH_POINTS) t.raw.shift();
+            if (p.fixedMinMove > 0) { (t.rawBg ??= []).push([b.cx, b.cy]); while (t.rawBg.length > t.raw.length) t.rawBg.shift(); }
             t.ev += strength(b);
             if (!t.confirmed && t.early.length < EARLY_KEPT) t.early.push(sighting(b, frame, t));
         }
@@ -296,7 +306,7 @@ export function createTracker(options = {}) {
             if (usedB.has(j) || b.weak || paused) return;
             const t = { id: nextId++, x: b.cx, y: b.cy, vx: 0, vy: 0, sx: b.cx, sy: b.cy, lx: b.cx, ly: b.cy, hist: 1, hits: 1, misses: 0, age: 1,
                 matched: true, confirmed: false, box: { x: b.x, y: b.y, w: b.w, h: b.h, area: b.area, cx: b.cx, cy: b.cy },
-                trail: [[b.cx, b.cy]], pts: [[b.cx, b.cy, clock]], raw: [[b.cx, b.cy]], ev: strength(b), t0: now, early: [],
+                trail: [[b.cx, b.cy]], pts: [[b.cx, b.cy, clock]], raw: [[b.cx, b.cy]], ...(p.fixedMinMove > 0 ? { rawBg: [[b.cx, b.cy]] } : {}), ev: strength(b), t0: now, early: [],
                 sights: [], sHist: b.weak ? 0 : 1, spat: [] };
             note(t, b);
             t.early.push(sighting(b, frame, t));
@@ -310,6 +320,11 @@ export function createTracker(options = {}) {
     function fixedOnScreen(t) {
         const r = t.raw || [];
         if (r.length < 3) return false;
+        // the background did not move there (fixed camera): staying put proves nothing
+        if (p.fixedMinMove > 0) {
+            const g = t.rawBg || [];
+            if (g.length !== r.length || Math.hypot(g[0][0] - r[0][0], g[0][1] - r[0][1]) < p.fixedMinMove) return false;
+        }
         const mx = r.reduce((a, q) => a + q[0], 0) / r.length, my = r.reduce((a, q) => a + q[1], 0) / r.length;
         return r.every(([x, y]) => Math.hypot(x - mx, y - my) <= SCREEN_FIXED);
     }

@@ -154,6 +154,12 @@ export const CONFIGS = {
     low: PRESETS.low.values,
     compressed: PRESETS.compressed.values,
     'mid+shift': { shiftCheck: true },
+    // the slow lane (batch 2)
+    'mid+slow': { slow: true },
+    // the border margin along the frame's own edges in the fast lane too (the slow lane has it)
+    'mid+edge': { edgeMargin: true },
+    'mid+slow+edge': { slow: true, edgeMargin: true },
+    'highest+slow': { ...PRESETS.highest.values, slow: true },
     // the camera-motion fit as before 0.12.0 (every point that agrees, always the full fit, LK
     // window 21), for comparison: gives the numbers of 0.11.0
     'mid-0.11': { precise: false, thinFit: false, lkWin: 21 },

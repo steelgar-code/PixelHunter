@@ -50,7 +50,7 @@ const skipped = { count: 0, reasons: {} };
 let score = null;                // synthetic sources: candidates against ground truth
 let confScore = null;            // … and confirmed detections
 const log = createExportLog();
-const APP_VERSION = '0.12.0';
+const APP_VERSION = '0.13.0';
 
 // Test hook (see tests/): recent frames and state, no effect on the UI.
 const FRAME_LOG = 5000;
@@ -552,7 +552,8 @@ function afterPush(f, out) {
         ph.results.push({ seq: r.seq, frame: r.frame, time: r.time, ok: e.ok, reason: e.reason, H: e.Hfull || null,
             tracked: e.tracked, inliers: e.inliers, timings: r.timings,
             detectOk: r.detect.ok, detectReason: r.detect.reason, scale: r.scale, candidates: r.candidates.map(c => [c.cx, c.cy, c.area]), score: r.score ? { tp: r.score.tp, fp: r.score.fp, fn: r.score.fn } : null,
-            confirmed: r.confirmed.map(t => [t.id, t.box.cx, t.box.cy]) });
+            confirmed: r.confirmed.map(t => [t.id, t.box.cx, t.box.cy]),
+            ...(r.slow ? { slow: { state: r.slow.state, n: r.slow.n ?? null, ...(r.slow.list ? { candidates: r.slow.list.map(c => [c.cx, c.cy, c.area]) } : {}) } } : {}) });
         if (ph.results.length > FRAME_LOG) ph.results.shift();
     }
     ph.shown = out.slot.meta;
@@ -1408,6 +1409,15 @@ function exportJson() {
 
 // --- stats --------------------------------------------------------------------------------
 
+// The slow lane's row: its comparison, how often it runs and what its last pass found, or why it rests.
+function slowText(sl) {
+    if (!sl || sl.state === 'off') return '–';
+    if (sl.state === 'resting') return `resting: ${sl.reason}`;
+    if (sl.state === 'waiting') return 'waiting for frames';
+    const found = sl.candidates === null || sl.candidates === undefined ? (sl.reason ? `no detection: ${sl.reason}` : '–') : `${sl.candidates} candidate${sl.candidates === 1 ? '' : 's'}`;
+    return `±${sl.n} frames, every ${sl.cadence} · ${found}${sl.shown ? ` · ${sl.shown} track${sl.shown === 1 ? '' : 's'}` : ''}`;
+}
+
 function updateStats() {
     view.render();
     $('clearObjects').disabled = !objs.list().length && !log.count;
@@ -1440,6 +1450,8 @@ function updateStats() {
     $('stCand').textContent = r ? (r.detect.ok ? `${r.candidates.length}${r.detect.noisy ? '+' : ''}${dropped}` : '–') : '–';
     const nState = st => (r ? r.tracks.filter(t => t.state === st).length : 0);
     $('stTracks').textContent = r ? `${r.confirmed.length} confirmed · ${nState('tentative')} tentative${nState('held') ? ` · ${nState('held')} held` : ''}` : '–';
+    $('stSlow').hidden = $('rowSlowDt').hidden = !params.slow;
+    $('stSlow').textContent = slowText(r && r.slow);
     const sc = score && score.summary(), cs = confScore && confScore.summary();
     $('rowScore').hidden = !sc;
     const hit = v => (v === null ? '–' : `${Math.round(v * 100)} %`);

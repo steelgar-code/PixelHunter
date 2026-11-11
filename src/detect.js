@@ -121,6 +121,7 @@ export const DETECT_DEFAULTS = {
     shiftCheck: false,     // drop candidates explained by a small local shift of the background
     shiftMax: 2,           // px: largest local shift tried
     nearMargin: 0,         // adaptive: σ lower still where a confirmed object is expected (0: off)
+    edgeMargin: false,     // borderMargin also along the frame's own edges (an option of the pipeline: the slow lane's)
     shiftRingGap: 3,       // px between a candidate's box and the ring the shift check aligns (was 1)
     zones: [],             // exclusion zones, { x, y, w, h } fractions of the frame
     include: [],           // inclusion zones: when set, only these areas are processed
@@ -452,6 +453,17 @@ export function createDetector(cv, options = {}) {
         for (let i = 1; i < Hs.length; i++) {
             validRegion(Hs[i], m.valid2, r.w, r.h, p.borderMargin, size.w, size.h);
             cv.bitwise_and(m.valid, m.valid2, m.valid);
+        }
+        // (edgeMargin) the frame's own edges too: where a neighbour's warped outline lies just
+        // outside the frame (a camera still to within a pixel), warping mixes its black border
+        // into the frame's outermost rows and columns, and the erosion above, which takes the
+        // outside of the region as valid, leaves them in: on a tripod nearly every candidate was there
+        if (p.edgeMargin && p.borderMargin > 0) {
+            const b = p.borderMargin;
+            const x0 = Math.min(r.w, Math.max(0, b - r.x)), y0 = Math.min(r.h, Math.max(0, b - r.y));
+            const x1 = Math.max(x0, Math.min(r.w, size.w - b - r.x)), y1 = Math.max(y0, Math.min(r.h, size.h - b - r.y));
+            const clear = (x, y, w, h) => { if (w <= 0 || h <= 0) return; const v = m.valid.roi(new cv.Rect(x, y, w, h)); v.setTo(new cv.Scalar(0)); v.delete(); };
+            clear(0, 0, x0, r.h); clear(x1, 0, r.w - x1, r.h); clear(0, 0, r.w, y0); clear(0, y1, r.w, r.h - y1);
         }
         clearZones(m.valid, [T, ...Hs]);
         if (!p.include || !p.include.length) return;

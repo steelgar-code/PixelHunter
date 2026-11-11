@@ -3,13 +3,14 @@
 // part of the frame ('detect': a strip of rows, or some inclusion regions; detect.js).
 // Messages in: init { role, cvUrl, params } · params { params } · reset · ego { seq, small, w, h }
 // · frame { seq, grey, small, w, h, sw, sh } · detect { id, prev, cur, next (seqs), …, part }
-// · dispose. Replies: ready · ego { seq, e } · detected { id, d } · error { message }.
+// (lane: 'slow': the slow lane's detector, slowLane.js) · dispose. Replies: ready · ego { seq, e } · detected { id, d } · error { message }.
 
 import { createEgomotion } from './egomotion.js';
 import { createDetector } from './detect.js';
 
 const KEEP = 2 * 12 + 3;         // frames kept for detection (2 × the largest stride, and some)
 let cv = null, role = null, ego = null, det = null;
+let detSlow = null;              // detect: the slow lane's detector, made when first asked (its settings come with each request)
 let lastSmall = null;            // ego: the previous small frame
 const ring = new Map();          // detect: seq → { grey, small } Mats
 
@@ -61,7 +62,8 @@ function handle(msg) {
     case 'detect': {
         const P = ring.get(msg.prev), C = ring.get(msg.cur), N = msg.next !== null ? ring.get(msg.next) : null;
         if (!P || !C) return { type: 'detected', id: msg.id, d: { ok: false, reason: 'frame missing in a worker', candidates: [] } };
-        const d = det.detect({ prev: P.grey, cur: C.grey, next: N ? N.grey : null, Hprev: msg.Hprev, Hnext: msg.Hnext,
+        if (msg.lane === 'slow') { detSlow ??= createDetector(cv, msg.params); detSlow.setParams(msg.params); }
+        const d = (msg.lane === 'slow' ? detSlow : det).detect({ prev: P.grey, cur: C.grey, next: N ? N.grey : null, Hprev: msg.Hprev, Hnext: msg.Hnext,
             small: { prev: P.small, cur: C.small, next: N ? N.small : null, Hprev: msg.Hs.Hprev, Hnext: msg.Hs.Hnext },
             fitErr: msg.fitErr, tracked: msg.tracked, near: msg.near, part: msg.part, views: !!msg.views });
         // the debug views of this part, when one is shown (Raw diff / Mask)
@@ -73,6 +75,7 @@ function handle(msg) {
         if (lastSmall) lastSmall.delete();
         if (ego) ego.dispose();
         if (det) det.dispose();
+        if (detSlow) detSlow.dispose();
         self.close();
         return null;
     default:
