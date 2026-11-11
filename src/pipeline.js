@@ -48,7 +48,7 @@ export const egoParams = p => ({ ...pick(EGO_DEFAULTS, p), zones: p.zonesMotion 
 export const detectParams = p => ({ ...pick(DETECT_DEFAULTS, p), zones: p.zones || [], include: p.include || [] });
 // (with the slow lane on, the screen-fixed guard asks whether the background moved: slowLane.js)
 export const trackParams = p => ({ ...pick(TRACK_DEFAULTS, p), ...(p.slow ? { fixedMinMove: SLOW_FIXED_MOVE } : {}) });
-export const laneParams = p => ({ slow: !!p.slow, slowMax: p.slowMax, slowBudget: p.slowBudget, slowTop: p.slowTop, track: trackParams(p) });
+export const laneParams = p => ({ slow: !!p.slow, slowMax: p.slowMax, slowBudget: p.slowBudget, slowTop: p.slowTop, travelFit: p.slowTravelFit, travelFactor: p.slowTravel, track: trackParams(p) });
 // a candidate's strength (confirmation by evidence) and, for min contrast to confirm, its contrast
 // against its surroundings in its own frame
 export function prepareBlobs(detect, grey, p) {

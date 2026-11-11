@@ -99,6 +99,7 @@ export const TRACK_DEFAULTS = {
     minStrong: 0,          // sightings above the threshold (not weak) needed to confirm (0: any)
     minSpatial: 0,         // grey: median contrast against the surroundings needed to confirm (0: off)
     fixedMinMove: 0,       // px: screen-fixed guard only where the background moved this much (0: always)
+    travelFit: false,      // min travel along the fitted path of the recent sightings, not from where the track started
 };
 
 const CROWD_RADIUS = 40;       // px around a prediction in which blob density is measured
@@ -291,7 +292,7 @@ export function createTracker(options = {}) {
         for (const t of tracks) {
             if (t.justConfirmed) t.early = [];       // handed out with the last snapshot
             t.justConfirmed = false;
-            if (!t.confirmed && !paused && t.matched && enough(t) && strongEnough(t) && contrastEnough(t) && Math.hypot(t.x - t.sx, t.y - t.sy) >= p.minTravel
+            if (!t.confirmed && !paused && t.matched && enough(t) && strongEnough(t) && contrastEnough(t) && travelled(t) >= p.minTravel
                 && (!p.pathCheck || pathDeviation(t.pts) <= p.pathTolerance) && !(p.screenFixed && fixedOnScreen(t))) {
                 t.confirmed = true;
                 t.justConfirmed = true;
@@ -314,6 +315,22 @@ export function createTracker(options = {}) {
             tracks.push(t);
         });
         return snapshot();
+    }
+
+    // How far a track has moved against the background: from where it started, or (travelFit, the
+    // slow lane's) along the straight path fitted to its recent sightings, so a spot that flickers
+    // in place cannot pass min travel by the jitter of its sightings while a slow object, moving
+    // steadily, does
+    function travelled(t) {
+        if (!p.travelFit) return Math.hypot(t.x - t.sx, t.y - t.sy);
+        const pts = t.pts, n = pts.length;
+        if (n < 2) return 0;
+        let st = 0, stt = 0;
+        for (const q of pts) { st += q[2]; stt += q[2] * q[2]; }
+        const mt = st / n, vt = stt / n - mt * mt;
+        if (!(vt > 1e-9)) return 0;
+        const slope = axis => { let sv = 0, stv = 0; for (const q of pts) { sv += q[axis]; stv += q[2] * q[axis]; } return (stv / n - mt * (sv / n)) / vt; };
+        return Math.hypot(slope(0), slope(1)) * (pts[n - 1][2] - pts[0][2]);
     }
 
     // all recent sightings within SCREEN_FIXED px of their mean, on the screen

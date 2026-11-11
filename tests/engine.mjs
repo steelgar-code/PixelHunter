@@ -1,9 +1,10 @@
 // The Workers engine (src/workerPipeline.js, src/procWorker.js): the same candidates and objects
 // as the main thread, on a synthetic scene and on a video file; switching engines while paused;
 // stepping and going back; the debug views (Stabilised, Raw diff, Mask); a Benchmark run
-// comparing both engines.
+// comparing both engines; the slow lane (its candidates pass by pass, its tracks, no Mats left).
 import { launch, ok, openApp, loadScene, showTab } from './lib/env.mjs';
 import { sceneClip } from './lib/clips.mjs';
+import { instrumentMats } from './lib/mats.mjs';
 
 const dot = (size, contrast, fx, fy, vx, vy) => ({ size, contrast, fx, fy, vx, vy });
 const D = { width: 960, height: 540, noise: 2, frames: 60, camera: 'handheld', seed: 9, shapes: 25, targets: [dot(3, 40, 200, 150, 3 + 4, 1), dot(3, -35, 600, 380, 3 + 3.5, -1)] };
@@ -96,6 +97,44 @@ try {
     await page.waitForFunction(() => !__ph.bench.running && __ph.bench.result && __ph.bench.result.sets.length === 2, null, { timeout: 240000 });
     const [a, b] = await page.evaluate(() => __ph.bench.scores());
     ok('Benchmark: both engines find the same tracks', a.tracks === b.tracks && a.unknown === b.unknown && a.frames === b.frames, [a, b].map(x => ({ name: x.name, tracks: x.tracks, frames: x.frames, ms: x.ms })));
+
+    // --- the slow lane: the same passes and candidates in both engines, no Mats left behind ---
+    await page.evaluate(instrumentMats);
+    const slowRun = await page.evaluate(async () => {
+        const { createScene, greyToRgba } = await import('/src/synth.js');
+        const { createPipeline } = await import('/src/pipeline.js');
+        const { createWorkerPipeline } = await import('/src/workerPipeline.js');
+        const opts = { width: 640, height: 360, noise: 2, frames: 70, camera: 'hover', seed: 12, shapes: 15,
+            targets: [{ size: 3, contrast: 25, fx: 150, fy: 120, vx: 0.4, vy: 0.1 }, { size: 3, contrast: -25, fx: 450, fy: 240, vx: -0.6, vy: 0.2 }],
+            trees: [{ fx: 300, fy: 200, r: 30, parallax: 0.1, sway: 2, swayPeriod: 31 }] };
+        const run = async engine => {
+            const s = createScene(opts);
+            const params = { ...__ph.params, mode: 'everyFrame', slow: true, engine };
+            const pipe = engine === 'workers' ? createWorkerPipeline(cv, params) : createPipeline(cv, params);
+            if (pipe.ready) await pipe.ready;
+            const out = {};
+            for (let k = 0; k < s.frames; k++) {
+                const f = s.frame(k);
+                const r = (await pipe.push({ imageData: new ImageData(greyToRgba(f.grey), s.width, s.height), width: s.width, height: s.height,
+                    time: k / 25, frame: k, seq: k, gap: 0, jump: k === 0, truth: f.truth })).result;
+                if (!r) continue;
+                out[r.frame] = { state: r.slow && r.slow.state, n: r.slow && r.slow.n, c: r.slow && r.slow.list ? r.slow.list.map(c => `${c.cx.toFixed(2)},${c.cy.toFixed(2)}`).sort().join(';') : null,
+                    t: r.confirmed.filter(t => t.lane === 'slow').map(t => `${t.id}:${t.box.cx.toFixed(1)},${t.box.cy.toFixed(1)}`).join(';') };
+            }
+            pipe.dispose();
+            return out;
+        };
+        const main = await run('main'), work = await run('workers');
+        await new Promise(r => setTimeout(r, 1500));
+        return { main, work, live: window.__liveMats() };
+    });
+    const frames = Object.keys(slowRun.main).filter(k => k in slowRun.work);
+    const passes = frames.filter(k => slowRun.main[k].state === 'pass');
+    const diff = frames.filter(k => JSON.stringify(slowRun.main[k]) !== JSON.stringify(slowRun.work[k]));
+    ok('slow lane: the same passes, comparison lengths and candidates in both engines', frames.length >= 65 && passes.length >= 12
+        && passes.some(k => slowRun.main[k].c) && diff.length === 0, { frames: frames.length, passes: passes.length, differ: diff.slice(0, 3).map(k => [k, slowRun.main[k], slowRun.work[k]]) });
+    ok('… and the same slow tracks', frames.some(k => slowRun.main[k].t) && frames.every(k => slowRun.main[k].t === slowRun.work[k].t));
+    ok('… no Mats left behind by either engine', slowRun.live === 0, slowRun.live);
     ok('no page errors', errors.length === 0, errors);
 } finally {
     await browser.close();

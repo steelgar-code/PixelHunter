@@ -44,7 +44,8 @@ export const slowMaxOf = p => Math.min(SLOW_MAX, Math.max(2, Math.round(Number(p
 // frames the history holds: 2s + 1, or 2 · slowMax + 1 while the lane is on
 export const ringFrames = (s, p) => 2 * (p.slow ? Math.max(s, slowMaxOf(p)) : s) + 1;
 export const cadenceOf = n => Math.max(2, Math.ceil(n / 3));
-export const SLOW_SHIFT = 2;           // px: the background-shift check's largest shift in this lane (at least)
+export const SLOW_SHIFT = 4;           // px: the background-shift check's largest shift in this lane (at least):
+                                       // a branch swaying 2.5 px shifts up to 5 px over ±12 frames (2 → 4: tree false tracks 60 → 18 a minute)
 // the detector's settings in this lane: dp the fast lane's (pipeline.js detectParams), p all
 // settings (slowTolBase, slowShift: options to measure, not in the settings)
 // (and the border margin along the frame's own edges: detect.js edgeMargin)
@@ -120,7 +121,8 @@ export function createSlowLane(params = {}) {
 
     function trackerParams(c) {
         return { ...p.track, maxSpeed: p.slowTop ?? SLOW_TOP, holdFrames: Math.ceil((p.track.holdFrames ?? 50) / c),
-            confirmSecs: (p.track.confirmSecs ?? 0.2) * c, fixedMinMove: SLOW_FIXED_MOVE };
+            confirmSecs: (p.track.confirmSecs ?? 0.2) * c, fixedMinMove: SLOW_FIXED_MOVE, travelFit: p.travelFit ?? true,
+            minTravel: (p.track.minTravel ?? 3) * (p.travelFactor ?? 1) };
     }
 
     function reset() {
