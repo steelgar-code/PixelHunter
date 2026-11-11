@@ -2,6 +2,8 @@
 //   node run.mjs                 all suites
 //   node run.mjs playback        only the named suite(s)
 //   node run.mjs bench           the benchmark (never part of a full run)
+//   node run.mjs quick           the suites worth running after every change to the pipeline
+//                                (a few minutes; the full run takes about an hour)
 import http from 'http';
 import fs from 'fs';
 import path from 'path';
@@ -11,7 +13,10 @@ import { fileURLToPath } from 'url';
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, '..');
 const args = process.argv.slice(2);
-const only = args.filter(a => !a.startsWith('--')).map(a => a.replace(/\.mjs$/, ''));
+// the pure modules, camera motion, detection, tracking guards and the Workers engine's equality
+const QUICK = ['homography', 'tracker', 'score', 'synth', 'params', 'objects', 'framerate', 'labels', 'benchscore',
+    'startup', 'egomotion', 'detect-basic', 'confirm', 'zones', 'engine'];
+const only = args.filter(a => !a.startsWith('--')).map(a => a.replace(/\.mjs$/, '')).flatMap(a => (a === 'quick' ? QUICK : [a]));
 const suites = fs.readdirSync(here)
     .filter(f => f.endsWith('.mjs') && f !== 'run.mjs')
     // the benchmark is long: only when named (node run.mjs bench)

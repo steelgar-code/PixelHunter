@@ -35,17 +35,27 @@ export function makeCanvas(w, h) {
 
 export const pick = (defaults, p) => Object.fromEntries(Object.keys(defaults).filter(k => k in p).map(k => [k, p[k]]));
 // exclusion zones always apply to detection; to camera motion unless zonesMotion is off
-export const egoParams = p => ({ ...pick(EGO_DEFAULTS, p), zones: p.zonesMotion === false ? [] : p.zones || [] });
+// (precise / thinFit off: the fit as it was before 0.12.0, from every point that agrees with it)
+export const egoParams = p => ({ ...pick(EGO_DEFAULTS, p), zones: p.zonesMotion === false ? [] : p.zones || [],
+    ...(p.precise === false ? { fbRel: 0 } : {}), ...(p.thinFit === false ? { loose: 0 } : {}) });
 export const detectParams = p => ({ ...pick(DETECT_DEFAULTS, p), zones: p.zones || [], include: p.include || [] });
 export const trackParams = p => pick(TRACK_DEFAULTS, p);
 
 // How good a camera-motion fit is, at processing resolution: 90 % of the points it is made of are
-// within err90 px of where it puts them; coverage: share of grid cells it holds; corner: how
+// within err90 px of where it puts them (the detector's allowance follows it); misfit: how far
+// the picture is from it in places; coverage: share of grid cells it holds; corner: how
 // well those points pin it down at the frame's corners (px, 1 σ); model: 'similarity' when they
 // didn't and the simpler fit was used; used: points it is made of.
 export const fitOf = (e, geom) => (e && e.err90 !== undefined && e.err90 !== null
     ? { err50: e.err50 * geom.kx, err90: e.err90 * geom.kx, coverage: e.coverage, used: e.used ?? e.inliers,
-        corner: Number.isFinite(e.cornerStd) ? e.cornerStd * geom.kx : null, model: e.model || 'homography' } : null);
+        misfit: (e.misfit ?? e.err90) * geom.kx, corner: Number.isFinite(e.cornerStd) ? e.cornerStd * geom.kx : null, model: e.model || 'homography' } : null);
+
+// The misalignment a fit leaves, for the detector's allowance (small-frame px): the scatter of its
+// points (err90), as the allowance was tuned. fitErrFrom 'misfit' (an option to measure, not in
+// the settings): what the fit gets wrong in places, which leaves out how precisely each point was
+// followed; with it the allowance needs a higher floor (tolBase ~0.10), see the benchmark's
+// mid+misfit.
+export const fitErrOf = (e, p) => (p.fitErrFrom === 'misfit' ? e.misfit ?? e.err90 : e.err90) ?? 0.15;
 
 export const MAX_STRIDE = 12;
 export const MAX_FPS = 120;             // highest source frame rate assumed when checking frame gaps
@@ -139,7 +149,7 @@ export function createPipeline(cv, params) {
         }
         // error of the composition (processing px): the worst step's 90th-percentile error, growing
         // with the square root of the number of steps
-        const err = Math.max(...fits.map(e => (e.err90 ?? 0.15) * geom.kx)) * Math.sqrt(n);
+        const err = Math.max(...fits.map(e => fitErrOf(e, p) * geom.kx)) * Math.sqrt(n);
         return { H: normalize(composeNewestFirst(fits.map(e => e.Hfull))), Hs: normalize(composeNewestFirst(fits.map(e => e.H))), err };
     }
 

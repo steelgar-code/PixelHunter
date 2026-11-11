@@ -108,7 +108,14 @@ export const CONFIGS = {
     low: PRESETS.low.values,
     compressed: PRESETS.compressed.values,
     'mid+shift': { shiftCheck: true },
-    'highest+shift': { ...PRESETS.highest.values, shiftCheck: true },
+    // the camera-motion fit as before 0.12.0 (every point that agrees, always the full fit, LK
+    // window 21), for comparison: gives the numbers of 0.11.0
+    'mid-0.11': { precise: false, thinFit: false, lkWin: 21 },
+    'highest-0.11': { ...PRESETS.highest.values, precise: false, thinFit: false, lkWin: 21 },
+    // the detector's allowance from the fit's misfit instead of its points' scatter (with the
+    // higher floor it needs): more of the faintest objects, more raw candidates at hard edges
+    'mid+misfit': { fitErrFrom: 'misfit', tolBase: 0.10 },
+    'highest+misfit': { ...PRESETS.highest.values, fitErrFrom: 'misfit', tolBase: 0.10 },
     // the tracking guards (path check, crowd gate, motion pause) off, for comparison
     'mid-noguards': { pathCheck: false, crowdGate: false, motionPause: false },
     'adaptive7-noguards': { detectMode: 'adaptive', sigmas: 7, weakMargin: 2.5, pathCheck: false, crowdGate: false, motionPause: false },

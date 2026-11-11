@@ -75,6 +75,8 @@ export const PARAM_DEFS = [
     { key: 'lkWin', label: 'LK window', group: 'motion', type: 'number', default: 15, min: 9, max: 31, step: 2, unit: 'px' },
     { key: 'lkLevels', label: 'LK pyramid levels', group: 'motion', type: 'number', default: 3, min: 1, max: 4, step: 1 },
     { key: 'fbMax', label: 'Forward-backward max', group: 'motion', type: 'number', default: 1, min: 0.3, max: 3, step: 0.1, unit: 'px' },
+    { key: 'precise', label: 'Fit from precisely followed points only', group: 'motion', type: 'bool', default: true },
+    { key: 'thinFit', label: 'Simpler fit when points lie in a thin band', group: 'motion', type: 'bool', default: true },
     { key: 'reseedBelow', label: 'Re-seed below', group: 'motion', type: 'number', default: 100, min: 30, max: 300, step: 10, unit: 'points' },
     { key: 'ransacPx', label: 'RANSAC threshold', group: 'motion', type: 'number', default: 2, min: 0.5, max: 5, step: 0.1, unit: 'px' },
     { key: 'minInliers', label: 'Min inliers', group: 'motion', type: 'number', default: 30, min: 8, max: 200, step: 1 },
@@ -102,7 +104,7 @@ export const PRESETS = {
             ...MID,
             detectMode: 'adaptive', sigmas: 6, weakMargin: 2,
             confirmN: 4, confirmM: 6, minTravel: 2, holdFrames: 75,
-            estWidth: 480, features: 600,
+            estWidth: 480, features: 600, lkWin: 21,
         },
     },
     mid: {

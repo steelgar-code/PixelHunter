@@ -67,6 +67,7 @@ export const EGO_DEFAULTS = {
     zones: [],             // exclusion zones, { x, y, w, h } fractions of the frame
 };
 
+const MISFIT_MIN = 3;           // points a grid cell needs for its mean offset to count
 const FB_QUANTILE = 0.25;       // the "best quarter" of the inliers, or the best minInliers when that is fewer
 
 export function createEgomotion(cv, options = {}) {
@@ -127,10 +128,16 @@ export function createEgomotion(cv, options = {}) {
         pts = merged;
     }
 
-    // { err50, err90 (small px), coverage } of a fit, from its inliers
+    // { err50, err90 (small px), misfit, coverage } of a fit, from the inliers it is made of.
+    // err50 / err90: how far the points lie from where the fit puts them: mostly how precisely
+    // each was followed. misfit: how far the picture itself is from the fit, in places: the
+    // points' offsets averaged per grid cell (what a point was followed by averages out over a
+    // cell, what the fit gets wrong there does not: parallax, lens bending, rolling shutter), the
+    // 90th percentile over cells.
     function fitQuality(H, src, dst, points, idx) {
         const errs = [];
         const tracked = new Set(), covered = new Set();
+        const cells = new Map();           // cell → [Σdx, Σdy, n]
         for (let j = 0; j < idx.length; j++) {
             const cell = cellOf(src[2 * j], src[2 * j + 1]);
             tracked.add(cell);
@@ -138,11 +145,17 @@ export function createEgomotion(cv, options = {}) {
             covered.add(cell);
             const x = src[2 * j], y = src[2 * j + 1];
             const d = H[6] * x + H[7] * y + H[8];
-            errs.push(Math.hypot((H[0] * x + H[1] * y + H[2]) / d - dst[2 * j], (H[3] * x + H[4] * y + H[5]) / d - dst[2 * j + 1]));
+            const dx = (H[0] * x + H[1] * y + H[2]) / d - dst[2 * j], dy = (H[3] * x + H[4] * y + H[5]) / d - dst[2 * j + 1];
+            errs.push(Math.hypot(dx, dy));
+            const c = cells.get(cell) || [0, 0, 0];
+            c[0] += dx; c[1] += dy; c[2]++;
+            cells.set(cell, c);
         }
         errs.sort((a, b) => a - b);
-        const q = f => (errs.length ? errs[Math.min(errs.length - 1, Math.floor(errs.length * f))] : null);
-        return { err50: q(0.5), err90: q(0.9), coverage: tracked.size ? covered.size / tracked.size : 0 };
+        const q = (list, f) => (list.length ? list[Math.min(list.length - 1, Math.floor(list.length * f))] : null);
+        const means = [...cells.values()].filter(c => c[2] >= MISFIT_MIN).map(c => Math.hypot(c[0], c[1]) / c[2]).sort((a, b) => a - b);
+        return { err50: q(errs, 0.5), err90: q(errs, 0.9), misfit: means.length >= 4 ? q(means, 0.9) : q(errs, 0.9),
+            coverage: tracked.size ? covered.size / tracked.size : 0 };
     }
 
     const excluded = (x, y) => p.zones && p.zones.length > 0 && inZones(p.zones, x, y, size.w, size.h, Math.max(3, (p.lkWin - 1) / 2));
@@ -358,7 +371,7 @@ export function createEgomotion(cv, options = {}) {
         if (result.ok) {
             result.H = H;
             // a cell whose new points all went (flat sky: noise for corners) rests for a while
-            if (seeded.size) {
+            if (seeded.size && p.fbRel > 0) {
                 const held = new Set();
                 for (let j = 0; j < keep.length; j += 2) held.add(cellOf(keep[j], keep[j + 1]));
                 for (const cell of seeded) if (!held.has(cell)) cellRetry[cell] = frameNo + p.retryEmptyAfter;

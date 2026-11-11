@@ -21,7 +21,7 @@ import { scaleH, mul, normalize, composeNewestFirst } from './homography.js';
 import { mulberry32 } from './synth.js';
 import { contrastOf } from './objects.js';
 import { stackCrop, CROP } from './crops.js';
-import { makeCanvas, egoParams, detectParams, trackParams, fitOf, MAX_FPS, NEAR_MISSES, NEAR_MAX_R, MAX_STRIDE } from './pipeline.js';
+import { makeCanvas, egoParams, detectParams, trackParams, fitOf, fitErrOf, MAX_FPS, NEAR_MISSES, NEAR_MAX_R, MAX_STRIDE } from './pipeline.js';
 import { CV_URL } from './cvLoader.js';
 
 // detection workers by default: one per core but one (measured on 4 cores at 1280×720: 2 → 84,
@@ -257,7 +257,7 @@ export function createWorkerPipeline(cv, params) {
                 if (!e || !e.ok) return { reason: e ? `camera motion: ${e.reason}` : `no previous frame${restarted()}` };
                 fits.push(e);
             }
-            const err = Math.max(...fits.map(e => (e.err90 ?? 0.15) * geom.kx)) * Math.sqrt(n);
+            const err = Math.max(...fits.map(e => fitErrOf(e, p) * geom.kx)) * Math.sqrt(n);
             return { H: normalize(composeNewestFirst(fits.map(e => e.Hfull))), Hs: normalize(composeNewestFirst(fits.map(e => e.H))), err };
         };
         let detect;
