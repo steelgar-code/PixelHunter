@@ -23,6 +23,7 @@ const suites = fs.readdirSync(here)
 const types = {
     '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript', '.json': 'application/json',
     '.css': 'text/css', '.png': 'image/png', '.mp4': 'video/mp4', '.webm': 'video/webm', '.txt': 'text/plain',
+    '.m3u8': 'application/vnd.apple.mpegurl', '.ts': 'video/mp2t', '.m4s': 'video/iso.segment',
 };
 const server = http.createServer((req, res) => {
     const p = decodeURIComponent(new URL(req.url, 'http://x').pathname);

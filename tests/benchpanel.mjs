@@ -81,6 +81,25 @@ try {
     ok('the player stayed where it was', (await page.evaluate(() => __ph.shown.time)) === startTime);
     ok('the table: one row per set', (await page.locator('.bench-table tbody tr').count()) === 1 && (await page.textContent('.bench-table tbody tr')).includes('2 / 2'));
 
+    // "Current with …": the value control follows the setting
+    const control = () => page.evaluate(() => { const e = document.getElementById('benchChangeValue'); return { tag: e.tagName, type: e.type, min: e.min, max: e.max, options: e.options ? [...e.options].map(o => o.textContent) : null, value: e.value }; });
+    await page.selectOption('#benchChangeKey', 'engine');
+    let c = await control();
+    ok('"Current with": Engine offers its choices in a list, the other one first', c.tag === 'SELECT' && c.options.join() === 'Main thread,Workers' && c.value === 'workers', c);
+    await page.selectOption('#benchChangeKey', 'pathCheck');
+    c = await control();
+    ok('… an on / off setting: On / Off', c.tag === 'SELECT' && c.options.join() === 'On,Off' && c.value === 'false', c);
+    await page.selectOption('#benchChangeKey', 'detectMode');
+    c = await control();
+    ok('… a choice setting: its labels', c.tag === 'SELECT' && c.options.some(o => /Robust/.test(o)), c);
+    await page.selectOption('#benchChangeKey', 'minContrast');
+    c = await control();
+    ok('… a number: a number field in its range, at the current value', c.tag === 'INPUT' && c.type === 'number' && c.min === '1' && c.max === '30' && c.value === '4', c);
+    await page.selectOption('#benchChangeKey', 'pathCheck');
+    await page.click('#benchChangeForm button[type=submit]');
+    ok('… a set named with the value as shown', (await page.textContent('#benchSets')).includes('Current · Confirm steady paths only: off') || /Current · .*: off/.test(await page.textContent('#benchSets')), await page.textContent('#benchSets'));
+    await page.evaluate(() => { const x = [...document.querySelectorAll('#benchSets label')].find(l => /: off/.test(l.textContent)); if (x) x.querySelector('button.icon').click(); });
+
     // two sets, one of them "current with a change"
     await page.selectOption('#benchChangeKey', 'minContrast');
     await page.fill('#benchChangeValue', '30');
@@ -127,6 +146,19 @@ try {
     await page.click('#benchCancel');
     await page.waitForFunction(() => !__ph.bench.running, null, { timeout: 20000 });
     ok('Cancel stops a run (the last run stays)', (await page.textContent('#benchProgressText')).includes('cancelled') && !!(await page.evaluate(() => __ph.bench.result)));
+
+    // a browser that gives no frames from a hidden video: the run uses the player, the clip is opened again
+    await page.evaluate(() => { __ph.bench.testHiddenFails = true; });
+    await page.click('#benchRun');
+    await page.waitForFunction(() => /uses the player/.test(document.getElementById('benchProgressText').textContent) || !__ph.bench.running, null, { timeout: 20000 });
+    await page.waitForFunction(() => !__ph.bench.running && /opened again/.test(document.getElementById('benchProgressText').textContent), null, { timeout: 240000 });
+    await page.waitForFunction(() => __ph.loop && document.getElementById('loading').hidden && !document.getElementById('play').disabled, null, { timeout: 30000 });
+    [cur] = await page.evaluate(() => __ph.bench.scores());
+    ok('no frames from a hidden video: the run uses the player, same result', cur.frames >= 70 && cur.found === 2 && cur.falseTracks === 0, cur);
+    ok('… then the clip is open again, playable, labels kept', await page.evaluate(() => !!__ph.loop && __ph.labels.set && __ph.labels.set.objects.length === 2));
+    await page.evaluate(() => { __ph.bench.testHiddenFails = false; });
+    await showTab(page, 'stats');
+    ok('Stats name the engine', (await page.textContent('#stEngine')) === 'Main thread', await page.textContent('#stEngine'));
     ok('no page errors', errors.length === 0, errors);
 } finally {
     await browser.close();

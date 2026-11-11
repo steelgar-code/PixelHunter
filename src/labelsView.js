@@ -45,6 +45,9 @@ export function createLabelsView(d) {
     // with the video's size and duration. Live sources have none.
     async function openClip(source, { width, height, duration }) {
         const token = ++loadToken;
+        // the previous clip's changes not saved yet (saving waits ~1 s after a change)
+        if (set && dirty) await flush();
+        if (token !== loadToken) return;
         set = null;
         clipLabel = source ? source.label : null;
         pendingKeys.clear(); crops.clear(); labelCrops.clear();

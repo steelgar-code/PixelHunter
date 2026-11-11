@@ -25,7 +25,7 @@ import { mulberry32 } from './synth.js';
 import { contrastOf } from './objects.js';
 import { stackCrop, CROP } from './crops.js';
 
-function makeCanvas(w, h) {
+export function makeCanvas(w, h) {
     if (typeof OffscreenCanvas !== 'undefined') return new OffscreenCanvas(w, h);
     const c = document.createElement('canvas');
     c.width = w;
@@ -33,16 +33,16 @@ function makeCanvas(w, h) {
     return c;
 }
 
-const pick = (defaults, p) => Object.fromEntries(Object.keys(defaults).filter(k => k in p).map(k => [k, p[k]]));
+export const pick = (defaults, p) => Object.fromEntries(Object.keys(defaults).filter(k => k in p).map(k => [k, p[k]]));
 // exclusion zones always apply to detection; to camera motion unless zonesMotion is off
-const egoParams = p => ({ ...pick(EGO_DEFAULTS, p), zones: p.zonesMotion === false ? [] : p.zones || [] });
-const detectParams = p => ({ ...pick(DETECT_DEFAULTS, p), zones: p.zones || [], include: p.include || [] });
-const trackParams = p => pick(TRACK_DEFAULTS, p);
+export const egoParams = p => ({ ...pick(EGO_DEFAULTS, p), zones: p.zonesMotion === false ? [] : p.zones || [] });
+export const detectParams = p => ({ ...pick(DETECT_DEFAULTS, p), zones: p.zones || [], include: p.include || [] });
+export const trackParams = p => pick(TRACK_DEFAULTS, p);
 
 export const MAX_STRIDE = 12;
-const MAX_FPS = 120;             // highest source frame rate assumed when checking frame gaps
-const NEAR_MISSES = 3;           // nearMargin: around confirmed tracks missed up to this many frames
-const NEAR_MAX_R = 12;           // px: … within this of where they are expected (at most)
+export const MAX_FPS = 120;             // highest source frame rate assumed when checking frame gaps
+export const NEAR_MISSES = 3;           // nearMargin: around confirmed tracks missed up to this many frames
+export const NEAR_MAX_R = 12;           // px: … within this of where they are expected (at most)
 
 export function createPipeline(cv, params) {
     let p = { ...params };

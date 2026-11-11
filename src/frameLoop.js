@@ -1,6 +1,7 @@
 // Frame loop on top of requestVideoFrameCallback.
 //
-// Each new video frame is handed to onFrame(frame) with:
+// Each new video frame is handed to onFrame(frame) (which may return a Promise: the loop waits
+// for it before taking the next frame) with:
 //   video   the <video> element, holding exactly this frame during the call
 //   width, height, time (mediaTime, s), frame (file frame number, from time / frame duration)
 //   seq     frames delivered since the source started
@@ -74,10 +75,13 @@ export function createFrameLoop({ video, onFrame, mode = 'realtime', live = fals
     let speed = 1;              // playback speed: real-time mode plays at it, every-frame mode at most at it
     let jumpWhy = 'start';      // reason for the pending jump
     const markJump = why => { jumpPending = true; jumpWhy = why; };
-    let ownSeek = false;
+    // the loop's own seeks whose 'seeking' event hasn't come yet (a late 'seeked' of an earlier
+    // seek must not make the next own seek look like the browser's)
+    const ownSeeks = [];
     let playing = false;        // what the user asked for; the video may be paused while stepping
     let stepping = false;       // every-frame mode below MIN_RATE: driving the video by seeks
     let stepWaiter = null;
+    let stepArrived = null;     // a step's frame arrived (stops its timeouts while it is processed)
     let probing = false;
     let repairing = false;      // every-frame mode: going back for a skipped frame
     const dtSamples = [];
@@ -116,6 +120,8 @@ export function createFrameLoop({ video, onFrame, mode = 'realtime', live = fals
         // taken now: a step started from inside this call must wait for the next frame
         const waiter = stepWaiter;
         stepWaiter = null;
+        const arrived = stepArrived;
+        stepArrived = null;
         // live: frames presented since the last one delivered (counts the ones skipped too)
         let presentedStep = null;
         if (live) {
@@ -170,10 +176,11 @@ export function createFrameLoop({ video, onFrame, mode = 'realtime', live = fals
             video, width: md.width, height: md.height, time: t,
             frame: dur ? Math.round(t / dur) : null, seq: seq++, gap, jump, jumpReason,
         };
+        // a step's frame is here: its timeouts stop (processing may take longer than they allow)
+        if (arrived) arrived();
         const t0 = performance.now();
-        try {
-            onFrame(frame);
-        } finally {
+        // onFrame may return a Promise (Workers engine): the next frame is taken once it settles
+        const done = () => {
             costs.push(performance.now() - t0);
             if (costs.length > 20) costs.shift();
             deliveredAt.push(t0);
@@ -181,7 +188,16 @@ export function createFrameLoop({ video, onFrame, mode = 'realtime', live = fals
             if (mode === 'everyFrame') adaptRate(gap, jump);
             if (!video.paused || stepping) arm();
             if (waiter) waiter('ok');
+        };
+        let ret;
+        try {
+            ret = onFrame(frame);
+        } catch (e) {
+            done();
+            throw e;
         }
+        if (ret && typeof ret.then === 'function') ret.then(done, e => { done(); console.error(e); });
+        else done();
     }
 
     // every-frame mode: a playback rate the measured cost can keep up with
@@ -252,14 +268,16 @@ export function createFrameLoop({ video, onFrame, mode = 'realtime', live = fals
                 clearTimeout(timeout);
                 video.removeEventListener('seeked', onSeekedOnce);
                 stepWaiter = null;
+                stepArrived = null;
                 resolve(r);
             };
             const onSeekedOnce = () => { quiet = setTimeout(() => finish('same'), SAME_FRAME_MS); };
             const timeout = setTimeout(() => finish('timeout'), STEP_TIMEOUT_MS);
             stepWaiter = finish;
+            stepArrived = () => { clearTimeout(quiet); clearTimeout(timeout); video.removeEventListener('seeked', onSeekedOnce); };
             video.addEventListener('seeked', onSeekedOnce, { once: true });
             arm();
-            ownSeek = true;
+            ownSeeks.push(target);
             video.currentTime = target;
         });
     }
@@ -299,8 +317,13 @@ export function createFrameLoop({ video, onFrame, mode = 'realtime', live = fals
         return found;
     }
 
-    const onSeeking = () => { if (!ownSeek) markJump('the browser seeked'); };
-    const onSeeked = () => { ownSeek = false; };
+    // every seek fires one 'seeking': the loop's own come first, in order (the browser may report
+    // a slightly different time than asked for, e.g. on a variable frame rate)
+    const onSeeking = () => {
+        if (ownSeeks.length) ownSeeks.shift();
+        else markJump('the browser seeked');
+    };
+    const onSeeked = () => {};
     const onEnded = () => { playing = false; stepping = false; };
     video.addEventListener('seeking', onSeeking);
     video.addEventListener('seeked', onSeeked);

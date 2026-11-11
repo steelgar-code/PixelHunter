@@ -61,7 +61,7 @@ export function checkVideoUrl(text, video, pageProtocol = typeof location !== 'u
         return 'That is not a complete URL (it should start with https://).';
     }
     if (u.protocol === 'rtsp:' || u.protocol === 'rtmp:' || u.protocol === 'rtmps:' || u.protocol === 'srt:') {
-        return `Browsers can't play ${u.protocol.slice(0, -1).toUpperCase()} streams. Open it in OBS (Media Source) and use OBS's Virtual Camera here (Open → Camera), or put a gateway such as MediaMTX in between.`;
+        return `Browsers can't play ${u.protocol.slice(0, -1).toUpperCase()} streams. Put a gateway such as MediaMTX in between and open its WebRTC or HLS address (the Open menu suggests them), or open it in OBS (Media Source) and use OBS's Virtual Camera here (Open → Camera).`;
     }
     if (!/^https?:$/.test(u.protocol)) return 'Only http:// and https:// links can be opened.';
     if (pageProtocol === 'https:' && u.protocol === 'http:' && !LOCAL_HOST.test(u.hostname)) {
@@ -71,9 +71,198 @@ export function checkVideoUrl(text, video, pageProtocol = typeof location !== 'u
         return `${u.hostname} links open a web page with a player, not the video itself. Use a direct link to the video file (ending in .mp4, .webm, …), or download the video and open the file.`;
     }
     if (/\.m3u8$/i.test(u.pathname) && video && !video.canPlayType('application/vnd.apple.mpegurl')) {
-        return 'This is an HLS stream (.m3u8), which this browser cannot play directly. Safari can; in Chrome or Edge use a direct .mp4 / .webm link.';
+        return 'This is an HLS stream (.m3u8): open it with the type "HLS stream" (or Auto).';
     }
     return null;
+}
+
+// --- streams: HLS and WebRTC (WHEP), e.g. from a MediaMTX gateway -------------------------------
+//
+// HLS plays through hls.js (vendor/, loaded on first use; Safari can play it natively): it fetches
+// the segments itself, so the picture is readable when the server allows other sites (CORS),
+// which MediaMTX does by default. WHEP is WebRTC with a single HTTP request to set it up: the
+// lowest delay (well under a second), no CORS on the picture (it arrives as a MediaStream).
+
+export const HLS_URL = 'vendor/hls-1.7.3.light.min.js';
+let hlsLoading = null;
+function loadHls() {
+    if (typeof window !== 'undefined' && window.Hls) return Promise.resolve(window.Hls);
+    hlsLoading ??= new Promise((resolve, reject) => {
+        const s = document.createElement('script');
+        s.src = HLS_URL;
+        s.onload = () => (window.Hls ? resolve(window.Hls) : reject(new Error('hls.js did not load')));
+        s.onerror = () => { hlsLoading = null; reject(new Error(`Could not load ${HLS_URL}`)); };
+        document.head.append(s);
+    });
+    return hlsLoading;
+}
+
+// What a URL is: 'hls', 'whep', 'gateway' (RTSP / RTMP / SRT: needs one), or 'file'.
+// chosen: the type picked in the Open menu ('auto' to tell by the URL).
+export function streamKind(href, chosen = 'auto') {
+    if (chosen && chosen !== 'auto') return chosen;
+    let u;
+    try { u = new URL(String(href).trim()); } catch { return 'file'; }
+    if (/^(rtsps?|rtmps?|srt):$/.test(u.protocol)) return 'gateway';
+    if (/\.m3u8$/i.test(u.pathname)) return 'hls';
+    if (/\/whep\/?$/i.test(u.pathname)) return 'whep';
+    return 'file';
+}
+
+// The addresses MediaMTX (default ports) serves a camera's RTSP / RTMP stream at, for a browser:
+// { path, whep, hls }, or null. rtsp://cam-host:8554/garden → http://cam-host:8889/garden/whep …
+// For a camera's own RTSP address (not the gateway's), `path` is a name for gateway/mediamtx.yml.
+export function gatewayUrls(href) {
+    let u;
+    try { u = new URL(String(href).trim()); } catch { return null; }
+    if (!/^(rtsps?|rtmps?):$/.test(u.protocol)) return null;
+    const path = u.pathname.replace(/^\/+|\/+$/g, '') || 'stream';
+    const host = u.hostname.includes(':') ? `[${u.hostname}]` : u.hostname;
+    return { path, whep: `http://${host}:8889/${path}/whep`, hls: `http://${host}:8888/${path}/index.m3u8` };
+}
+
+// Checks a stream URL (http(s) only, mixed content); an error message or null.
+function checkStreamUrl(url, pageProtocol = typeof location !== 'undefined' ? location.protocol : 'http:') {
+    let u;
+    try { u = new URL(url); } catch { return 'That is not a complete URL (it should start with http:// or https://).'; }
+    if (!/^https?:$/.test(u.protocol)) return 'Only http:// and https:// stream addresses can be opened.';
+    if (pageProtocol === 'https:' && u.protocol === 'http:' && !LOCAL_HOST.test(u.hostname)) {
+        return 'This page is served over https://, and browsers block http:// streams on it (mixed content). Run PixelHunter from your own computer (python3 -m http.server in its folder, then http://localhost:8000/), or turn on HTTPS in the gateway (MediaMTX: hlsEncryption / webrtcEncryption with a certificate the browser trusts).';
+    }
+    return null;
+}
+
+const streamName = url => { try { const u = new URL(url); return decodeURIComponent(u.pathname.replace(/\/(whep|index\.m3u8)\/?$/i, '').split('/').filter(Boolean).pop() || u.hostname); } catch { return url; } };
+
+// An HLS stream (.m3u8): live (no end: play / pause only) or a recording (seekable, like a file).
+export function hlsSource(href) {
+    const url = String(href).trim();
+    const name = streamName(url);
+    let hls = null;
+    const src = {
+        kind: 'hls',
+        label: `${name} (HLS)`,
+        url,
+        isLive: false,
+        async start(video) {
+            const bad = checkStreamUrl(url);
+            if (bad) throw new Error(bad);
+            video.srcObject = null;
+            video.muted = true;
+            video.playsInline = true;
+            video.loop = false;
+            let Hls = null;
+            try { Hls = await loadHls(); } catch { Hls = null; }
+            const ready = waitForMetadata(video, { failed: `Could not play the HLS stream ${name}.` });
+            if (Hls && Hls.isSupported()) {
+                hls = new Hls({ lowLatencyMode: true, backBufferLength: 30, enableWorker: true });
+                const fatal = new Promise((_, reject) => hls.on(Hls.Events.ERROR, (_e, data) => {
+                    if (!data.fatal) return;
+                    const code = data.response && data.response.code;
+                    reject(new Error(data.type === Hls.ErrorTypes.NETWORK_ERROR
+                        ? code === 404 ? `No stream at ${url} (404): is the camera publishing to the gateway, and is the path right?`
+                            : `Could not load the HLS stream${code ? ` (HTTP ${code})` : ''}: the gateway isn't reachable at that address, or it doesn't let other sites read it (CORS).`
+                        : `The HLS stream could not be played (${data.details}).`));
+                }));
+                const live = new Promise(resolve => hls.on(Hls.Events.LEVEL_LOADED, (_e, data) => resolve(!!(data.details && data.details.live))));
+                hls.loadSource(url);
+                hls.attachMedia(video);
+                await Promise.race([ready, fatal, new Promise((_, reject) => setTimeout(() => reject(new Error(
+                    `No picture from the HLS stream ${name} within 20 s (is the camera sending?).`)), 20000))]);
+                src.isLive = await Promise.race([live, new Promise(r => setTimeout(() => r(!Number.isFinite(video.duration)), 3000))]);
+            } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+                video.crossOrigin = 'anonymous';
+                video.src = url;
+                await ready;
+                src.isLive = !Number.isFinite(video.duration);
+            } else {
+                throw new Error('This browser can play neither HLS directly nor through hls.js (no Media Source Extensions).');
+            }
+            if (src.isLive) src.label = `${name} (HLS, live)`;
+        },
+        stop(video) {
+            if (hls) hls.destroy();
+            hls = null;
+            video.pause();
+            video.removeAttribute('src');
+            video.removeAttribute('crossorigin');
+            video.load();
+        },
+    };
+    return src;
+}
+
+// Waits until ICE gathering is complete (WHEP sends one offer with all candidates), or `ms`.
+function iceGathered(pc, ms) {
+    if (pc.iceGatheringState === 'complete') return Promise.resolve();
+    return new Promise(resolve => {
+        const t = setTimeout(done, ms);
+        function done() { clearTimeout(t); pc.removeEventListener('icegatheringstatechange', check); resolve(); }
+        function check() { if (pc.iceGatheringState === 'complete') done(); }
+        pc.addEventListener('icegatheringstatechange', check);
+    });
+}
+
+// A WebRTC stream through WHEP (MediaMTX: http://host:8889/<path>/whep): live. onEnded: called
+// when the connection drops while it is open.
+export function whepSource(href, { onEnded } = {}) {
+    const url = String(href).trim();
+    const name = streamName(url);
+    let pc = null, session = null, stream = null, open = false;
+    const src = {
+        kind: 'whep',
+        label: `${name} (WebRTC)`,
+        url,
+        isLive: true,
+        async start(video) {
+            const bad = checkStreamUrl(url);
+            if (bad) throw new Error(bad);
+            if (typeof RTCPeerConnection === 'undefined') throw new Error('This browser has no WebRTC.');
+            pc = new RTCPeerConnection({ bundlePolicy: 'max-bundle' });
+            pc.addTransceiver('video', { direction: 'recvonly' });
+            const track = new Promise(resolve => { pc.ontrack = e => resolve(e.streams[0] || new MediaStream([e.track])); });
+            await pc.setLocalDescription(await pc.createOffer());
+            await iceGathered(pc, 2000);
+            let res;
+            try {
+                res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/sdp' }, body: pc.localDescription.sdp });
+            } catch {
+                throw new Error(`Could not reach ${new URL(url).host}: the gateway isn't running there, the address or port is wrong (MediaMTX: 8889), or it doesn't let other sites connect (CORS).`);
+            }
+            if (res.status === 404) throw new Error(`No stream at ${url} (404): is the camera publishing to the gateway, and is the path right?`);
+            if (res.status === 401 || res.status === 403) throw new Error('The gateway wants a user name and password for this stream (MediaMTX: authInternalUsers); allow reading without one for PixelHunter.');
+            if (!res.ok) throw new Error(`The gateway refused the WebRTC request (HTTP ${res.status}).`);
+            const loc = res.headers.get('Location');
+            session = loc ? new URL(loc, url).href : null;
+            await pc.setRemoteDescription({ type: 'answer', sdp: await res.text() });
+            stream = await Promise.race([track, new Promise((_, reject) => setTimeout(() => reject(new Error(
+                'The gateway answered, but no picture arrived: the WebRTC connection could not be made (MediaMTX: set webrtcAdditionalHosts to the gateway\'s LAN address; a firewall may block UDP 8189).')), 10000))]);
+            pc.addEventListener('connectionstatechange', () => {
+                if (open && ['failed', 'closed', 'disconnected'].includes(pc.connectionState) && onEnded) onEnded(pc.connectionState);
+            });
+            video.removeAttribute('src');
+            video.muted = true;
+            video.playsInline = true;
+            video.loop = false;
+            const ready = waitForMetadata(video, { failed: `${name} sends no picture.` });
+            video.srcObject = stream;
+            await Promise.race([ready, new Promise((_, reject) => setTimeout(() => reject(new Error(
+                'Connected, but no picture arrived: the browser may not decode this camera\'s codec over WebRTC (H.265, or H.264 High profile in some browsers): try HLS, or set the camera to H.264 Main / Baseline.')), 15000))]);
+            open = true;
+        },
+        stop(video) {
+            open = false;
+            if (session) fetch(session, { method: 'DELETE' }).catch(() => {});
+            session = null;
+            if (stream) for (const t of stream.getTracks()) t.stop();
+            stream = null;
+            if (pc) pc.close();
+            pc = null;
+            video.pause();
+            video.srcObject = null;
+        },
+    };
+    return src;
 }
 
 // Does the URL play in a <video> that doesn't ask for its pixels (no CORS)? Resolves within ms.

@@ -28,17 +28,26 @@ export function createSyntheticLoop({ scene, onFrame, mode = 'realtime', speed =
         const imageData = new ImageData(rgba, f.width, f.height);
         k = next;
         const t0 = performance.now();
-        try {
-            onFrame({ imageData, width: f.width, height: f.height, time: next / fps, frame: next, seq: seq++, gap, jump: !!jump, jumpReason: jump || null, truth: f.truth });
-        } finally {
+        const done = () => {
             costs.push(performance.now() - t0);
             if (costs.length > 20) costs.shift();
             deliveredAt.push(t0);
             while (deliveredAt.length && t0 - deliveredAt[0] > 1000) deliveredAt.shift();
+        };
+        let ret;
+        try {
+            ret = onFrame({ imageData, width: f.width, height: f.height, time: next / fps, frame: next, seq: seq++, gap, jump: !!jump, jumpReason: jump || null, truth: f.truth });
+        } catch (e) {
+            done();
+            throw e;
         }
+        // onFrame may return a Promise (Workers engine): resolved once it settles
+        if (ret && typeof ret.then === 'function') return ret.then(done, e => { done(); console.error(e); });
+        done();
+        return null;
     }
 
-    function tick() {
+    async function tick() {
         timer = null;
         if (!playing) return;
         if (k >= n - 1) { playing = false; return; }
@@ -57,9 +66,9 @@ export function createSyntheticLoop({ scene, onFrame, mode = 'realtime', speed =
             // behind (processing slower than real time): move the clock so we don't race later
             clock = { t0: now, k0: next };
         }
-        deliver(next, false);
+        await deliver(next, false);
         if (k >= n - 1) playing = false;
-        else timer = setTimeout(tick, 0);
+        else if (playing && timer === null) timer = setTimeout(tick, 0);
     }
 
     function stopTimer() {
@@ -74,10 +83,10 @@ export function createSyntheticLoop({ scene, onFrame, mode = 'realtime', speed =
         get duration() { return n / fps; },
         async start() {
             k = -1; seq = 0; dropped = 0; costs.length = 0; deliveredAt.length = 0;
-            deliver(0, 'start');
+            await deliver(0, 'start');
         },
         async play() {
-            if (k >= n - 1) deliver(0, 'replay from the start');
+            if (k >= n - 1) await deliver(0, 'replay from the start');
             playing = true;
             clock = { t0: performance.now() - 1000 / rate(), k0: k };
             stopTimer();
@@ -90,13 +99,13 @@ export function createSyntheticLoop({ scene, onFrame, mode = 'realtime', speed =
         async step() {
             this.pause();
             if (k >= n - 1) return false;
-            deliver(k + 1, false);
+            await deliver(k + 1, false);
             return true;
         },
         seek(time, why = 'seek') {
             const target = Math.min(n - 1, Math.max(0, Math.round(time * fps)));
             if (playing) clock = { t0: performance.now(), k0: target };
-            deliver(target, why);
+            return deliver(target, why);
         },
         setMode(m) {
             mode = m;

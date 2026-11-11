@@ -12,6 +12,7 @@
 import { PRESETS, PARAM_DEFS, coerce } from './params.js';
 import { PRESET_KEYS } from './userPresets.js';
 import { createPipeline } from './pipeline.js';
+import { createWorkerPipeline } from './workerPipeline.js';
 import { createFrameLoop } from './frameLoop.js';
 import { createSyntheticLoop } from './synthLoop.js';
 import { scoreRun, compactPts } from './benchScore.js';
@@ -37,7 +38,14 @@ export function createBenchView(d) {
 
     // --- settings sets -------------------------------------------------------------------------
 
-    const changeName = c => `Current · ${DEF.get(c.key).label} ${c.value}`;
+    // a setting's value as shown: the choice's label, On / Off, or the number with its unit
+    function valueText(key, value) {
+        const def = DEF.get(key);
+        if (def.type === 'choice') { const c = def.choices.find(x => String(x[0]) === String(value)); return c ? c[1] : String(value); }
+        if (def.type === 'bool') return String(value) === 'true' ? 'on' : 'off';
+        return `${value}${def.unit && !def.unit.startsWith('(') ? ` ${def.unit}` : ''}`;
+    }
+    const changeName = c => `Current · ${DEF.get(c.key).label}: ${valueText(c.key, c.value)}`;
     function allSets() {
         const out = Object.entries(PRESETS).map(([k, p]) => ({ key: `preset:${k}`, name: p.label }));
         for (const p of d.userPresets()) if (p.values) out.push({ key: `user:${p.name}`, name: `${p.name} (mine)` });
@@ -62,7 +70,7 @@ export function createBenchView(d) {
         }
         return { ...p, mode: 'everyFrame' };
     }
-    const keptParams = p => ({ ...Object.fromEntries(PRESET_KEYS.map(k => [k, p[k]])), zones: p.zones || [], include: p.include || [] });
+    const keptParams = p => ({ ...Object.fromEntries(PRESET_KEYS.map(k => [k, p[k]])), engine: p.engine, workers: p.workers, zones: p.zones || [], include: p.include || [] });
 
     // --- running -----------------------------------------------------------------------------
 
@@ -83,21 +91,34 @@ export function createBenchView(d) {
         d.pause();
         const sets = defs.map(def => {
             const params = paramsOf(def.key);
-            return { key: def.key, name: def.name, params: keptParams(params), pipe: createPipeline(cv, params), times: [], tracks: new Map(), ms: [] };
+            return { key: def.key, name: def.name, params: keptParams(params), pipe: params.engine === 'workers' ? createWorkerPipeline(cv, params) : createPipeline(cv, params), times: [], tracks: new Map(), ms: [] };
         });
-        let cancelled = false, loop = null, video = null, url = null;
+        let cancelled = false, loop = null, video = null, copy = null, borrowed = false;
         const t0 = performance.now();
         let duration = null;
         running = { cancel() { cancelled = true; if (loop) loop.pause(); } };
         progress = { at: 0, duration: null, started: t0 };
         renderControls();
 
+        // every set's pipeline takes the frame at once; Workers ones answer later (all in parallel)
         function onFrame(f) {
-            for (const s of sets) {
-                const out = s.pipe.push({ image: f.video, imageData: f.imageData, width: f.width, height: f.height, time: f.time, frame: f.frame,
-                    seq: f.seq, gap: f.gap, jump: f.jump, jumpReason: f.jumpReason });
-                const r = out.result;
-                if (!r) continue;
+            const outs = sets.map(s => s.pipe.push({ image: f.video, imageData: f.imageData, width: f.width, height: f.height, time: f.time, frame: f.frame,
+                seq: f.seq, gap: f.gap, jump: f.jump, jumpReason: f.jumpReason }));
+            if (outs.some(o => o && typeof o.then === 'function')) {
+                // results noted in order; the next frame comes as soon as every engine can take it
+                // (Workers: while this one is still being detected)
+                pendingNotes = Promise.all(outs).then(all => noteOuts(f, all));
+                const accepting = sets.map((s, i) => (outs[i] && typeof outs[i].then === 'function' ? s.pipe.accepting || outs[i] : null)).filter(Boolean);
+                return Promise.all(accepting);
+            }
+            noteOuts(f, outs);
+            return null;
+        }
+        let pendingNotes = Promise.resolve();
+        function noteOuts(f, outs) {
+            sets.forEach((s, i) => {
+                const r = outs[i] && outs[i].result;
+                if (!r) return;
                 s.times.push(r.time);
                 s.ms.push(r.timings.total);
                 const sc = r.scale || 1;
@@ -107,7 +128,7 @@ export function createBenchView(d) {
                     if (!tr) s.tracks.set(t.id, tr = { id: t.id, pts: [] });
                     tr.pts.push([r.time, (b.cx + 0.5) / sc - 0.5, (b.cy + 0.5) / sc - 0.5, b.w / sc, b.h / sc]);
                 }
-            }
+            });
             progress.at = f.time;
             const now = performance.now();
             if (!progress.shown || now - progress.shown > 250) { progress.shown = now; renderProgress(); }
@@ -124,14 +145,19 @@ export function createBenchView(d) {
                 video.preload = 'auto';
                 video.className = 'bench-video';
                 document.body.append(video);
-                if (source.kind === 'url') video.crossOrigin = 'anonymous';
-                url = source.file ? URL.createObjectURL(source.file) : null;
-                const ready = new Promise((resolve, reject) => {
-                    video.addEventListener('loadeddata', resolve, { once: true });
-                    video.addEventListener('error', () => reject(new Error('the video could not be loaded for the run')), { once: true });
-                });
-                video.src = url || source.url;
-                await ready;
+                // the same clip opened again on it (file, URL, HLS recording: as the player did)
+                copy = d.copySource(source);
+                await copy.start(video);
+                // frames from a hidden video? (some browsers don't render them): else the player
+                if (bench.testHiddenFails || !(await framesCome(video))) {
+                    copy.stop(video);
+                    copy = null;
+                    video.remove();
+                    video = d.borrowPlayer();
+                    borrowed = true;
+                    renderControls('This browser gives no frames from a hidden video: the run uses the player (the clip is opened again after it).');
+                    if (video.currentTime > 0) await new Promise(r => { video.addEventListener('seeked', r, { once: true }); video.currentTime = 0; });
+                }
                 duration = video.duration;
                 loop = createFrameLoop({ video, onFrame, mode: 'everyFrame' });
                 loop.setSpeed(2);
@@ -145,6 +171,7 @@ export function createBenchView(d) {
                     check();
                 });
             }
+            await pendingNotes;           // the last frames' results
             const fps = (loop.stats().sourceFps) || (source.scene ? source.scene.fps : 25);
             if (!cancelled) {
                 result = {
@@ -162,14 +189,32 @@ export function createBenchView(d) {
         } finally {
             if (loop) loop.destroy();
             for (const s of sets) s.pipe.dispose();
-            if (video) { video.pause(); video.removeAttribute('src'); video.load(); video.remove(); }
-            if (url) URL.revokeObjectURL(url);
-            const err = progress.error;
+            if (video && !borrowed) { if (copy) copy.stop(video); video.remove(); }
+            const err = progress.error, wasCancelled = cancelled, kept = result;
             running = null;
             progress = null;
-            renderControls(err ? `Run failed: ${err}` : cancelled ? 'Run cancelled.' : null);
+            if (borrowed) {
+                // the clip opened again (its latest saved run comes back; this one if it wasn't saved)
+                await d.returnPlayer();
+                if (kept && !result) result = kept;
+            }
+            renderControls(err ? `Run failed: ${err}` : wasCancelled ? 'Run cancelled.' : borrowed ? 'Done (the run used the player; the clip was opened again).' : null);
             render();
         }
+    }
+
+    // Does this (hidden) video hand over frames? A short seek must bring a frame callback.
+    function framesCome(video, ms = 2500) {
+        return new Promise(resolve => {
+            let handle = null;
+            const timer = setTimeout(() => { if (handle !== null) video.cancelVideoFrameCallback(handle); resolve(false); }, ms);
+            handle = video.requestVideoFrameCallback(() => {
+                clearTimeout(timer);
+                video.addEventListener('seeked', () => resolve(true), { once: true });
+                video.currentTime = 0;
+            });
+            video.currentTime = Math.min(0.1, (video.duration || 1) / 2);
+        });
     }
 
     async function saveResult() {
@@ -310,19 +355,40 @@ export function createBenchView(d) {
     // --- binding -----------------------------------------------------------------------------
 
     function bind() {
-        const keys = PRESET_KEYS.filter(k => DEF.get(k) && ['number', 'choice', 'bool'].includes(DEF.get(k).type));
+        const keys = ['engine', ...PRESET_KEYS].filter(k => DEF.get(k) && ['number', 'choice', 'bool'].includes(DEF.get(k).type));
         $('benchChangeKey').replaceChildren(...keys.map(k => new Option(DEF.get(k).label, k)));
-        const hint = () => {
+        // the value control follows the setting: a list of its choices, On / Off, or a number in
+        // its range (starting at the current value)
+        const valueControl = () => {
             const def = DEF.get($('benchChangeKey').value);
-            $('benchChangeValue').placeholder = def.type === 'choice' ? def.choices.map(c => c[0]).join(' / ') : def.type === 'bool' ? 'true / false' : `${def.min}–${def.max}`;
-            $('benchChangeValue').value = String(d.params[def.key]);
+            let input;
+            if (def.type === 'choice' || def.type === 'bool') {
+                input = document.createElement('select');
+                const opts = def.type === 'bool' ? [['true', 'On'], ['false', 'Off']] : def.choices.map(([v, label]) => [String(v), label]);
+                input.replaceChildren(...opts.map(([v, label]) => new Option(label, v)));
+                const cur = String(d.params[def.key]);
+                // the other value first: a change is what is wanted
+                input.value = opts.find(o => o[0] !== cur) ? opts.find(o => o[0] !== cur)[0] : cur;
+            } else {
+                input = document.createElement('input');
+                input.type = 'number';
+                input.min = def.min;
+                input.max = def.max;
+                input.step = def.step || 'any';
+                input.value = String(d.params[def.key]);
+                input.className = 'mono';
+                input.title = `${def.min}–${def.max}${def.unit ? ` ${def.unit}` : ''}`;
+            }
+            input.id = 'benchChangeValue';
+            input.setAttribute('aria-label', `${def.label}: value`);
+            $('benchChangeValueHost').replaceChildren(input);
         };
-        $('benchChangeKey').addEventListener('change', hint);
-        hint();
+        $('benchChangeKey').addEventListener('change', valueControl);
+        valueControl();
         $('benchChangeForm').addEventListener('submit', e => {
             e.preventDefault();
             const key = $('benchChangeKey').value, v = coerce(key, $('benchChangeValue').value.trim());
-            if (v === undefined) { renderControls(`Not a value for ${DEF.get(key).label}.`); return; }
+            if (v === undefined) { const def = DEF.get(key); renderControls(`${def.label}: a number from ${def.min} to ${def.max}.`); return; }
             const c = { key, value: String(v) };
             if (!changes.some(x => x.key === c.key && x.value === c.value)) changes.push(c);
             chosen.add(`change:${c.key}=${c.value}`);
@@ -340,7 +406,8 @@ export function createBenchView(d) {
         });
     }
 
-    return {
+    const bench = {
+        testHiddenFails: false,          // tests: behave as if hidden videos gave no frames
         bind() { bind(); render(); renderControls(); },
         run,
         render,
@@ -361,4 +428,5 @@ export function createBenchView(d) {
         get result() { return result; },
         scores: () => scoreAll().map(x => ({ name: x.set.name, key: x.set.key, ...x.score.summary, perLabel: x.score.perLabel, perTrack: x.score.perTrack })),
     };
+    return bench;
 }

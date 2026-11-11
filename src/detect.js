@@ -156,6 +156,23 @@ export function mergeClose(boxes, d) {
     return [...groups.values()].map(({ sx, sy, ...g }) => ({ ...g, cx: sx / g.area, cy: sy / g.area }));
 }
 
+// Parts of a frame (w × h) for n workers: horizontal strips on whole rows of noise tiles, or,
+// with inclusion zones, the zones' regions shared out. [{ strip: { y0, y1 } } | { regions }]
+export function stripsOf(w, h, n, include = []) {
+    const regions = regionRects(include || [], w, h, REGION_PAD);
+    if (regions) {
+        const parts = Array.from({ length: Math.min(n, regions.length) }, () => ({ regions: [] }));
+        regions.sort((a, b) => b.w * b.h - a.w * a.h).forEach((r, i) => {
+            const pt = parts.reduce((best, q) => (q.regions.reduce((a, x) => a + x.w * x.h, 0) < best.regions.reduce((a, x) => a + x.w * x.h, 0) ? q : best), parts[0]);
+            pt.regions.push(r);
+        });
+        return parts;
+    }
+    const TY = Math.max(1, Math.round(h / NOISE_TILE));
+    const k = Math.max(1, Math.min(n, TY));
+    return Array.from({ length: k }, (_, i) => ({ strip: { y0: Math.floor(Math.round(i * TY / k) * h / TY), y1: Math.floor(Math.round((i + 1) * TY / k) * h / TY) } }));
+}
+
 export function createDetector(cv, options = {}) {
     let p = { ...DETECT_DEFAULTS, ...options };
     let size = null;
@@ -169,6 +186,8 @@ export function createDetector(cv, options = {}) {
     let lastTol = null;        // adaptive mode: misalignment allowance of the last detection, px
     let tracked = [];          // objects the user keeps tracking, expected in this frame (shift check)
     let near = [];             // confirmed objects expected in this frame: { x, y, r } (nearMargin)
+    let absTiles = false;      // this detection is a strip of the frame: noise tiles on the full frame's grid
+    let lastPart = null;       // the last detection's strip: { core, region }
 
     function setup(w, h) {
         for (const k of Object.keys(m)) { m[k].delete(); delete m[k]; }
@@ -469,7 +488,7 @@ export function createDetector(cv, options = {}) {
             cv.threshold(m.diff, m.mask, p.threshold, 255, cv.THRESH_BINARY);
             regionValid(r, T, [Hp]);
             cv.bitwise_and(m.mask, m.valid, m.mask);
-            if (!full) keepViews(r, m.diff);
+            if (!full && lastCropped) keepViews(r, m.diff);
             return shiftFilter(blobs(m.mask, r.x, r.y), r, view, view, full, [m.wPrev]);
         } finally {
             if (!full) view.delete();
@@ -494,7 +513,7 @@ export function createDetector(cv, options = {}) {
             regionValid(r, T, [Hp, Hn]);
             cv.bitwise_and(m.mask, m.valid, m.mask);
             if (p.open) cv.morphologyEx(m.mask, m.mask, cv.MORPH_OPEN, k3);
-            if (!full) {
+            if (!full && lastCropped) {
                 cv.min(m.diff, m.dNext, m.tmp);
                 keepViews(r, m.tmp);
             }
@@ -514,12 +533,14 @@ export function createDetector(cv, options = {}) {
     // σ of the plain difference D (CV_32F, region-sized) per NOISE_TILE tile, from the median
     // absolute value, as a region-sized CV_32F map (bilinear between tile centres) in m.sig.
     function noiseMap(D, r) {
-        const tx = Math.max(1, Math.round(r.w / NOISE_TILE)), ty = Math.max(1, Math.round(r.h / NOISE_TILE));
+        const L = tileLayout(r);
+        const { tx, ty } = L;
         const d = D.data32F, hist = new Uint32Array(256), sig = new Float32Array(tx * ty);
         for (let j = 0; j < ty; j++) {
-            const y0 = Math.floor(j * r.h / ty), y1 = Math.floor((j + 1) * r.h / ty);
+            const [y0, y1] = L.rows(j);
             for (let i = 0; i < tx; i++) {
-                const x0 = Math.floor(i * r.w / tx), x1 = Math.floor((i + 1) * r.w / tx);
+                const [x0, x1] = L.cols(i);
+                if (y1 <= y0 || x1 <= x0) continue;
                 hist.fill(0);
                 for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) hist[Math.min(255, Math.abs(d[y * r.w + x]) | 0)]++;
                 const half = ((y1 - y0) * (x1 - x0)) / 2;
@@ -530,9 +551,7 @@ export function createDetector(cv, options = {}) {
                 sig[j * tx + i] = 1.4826 * (med + frac);
             }
         }
-        const t = cv.matFromArray(ty, tx, cv.CV_32F, Array.from(sig));
-        cv.resize(t, m.sig, new cv.Size(r.w, r.h), 0, 0, cv.INTER_LINEAR);
-        t.delete();
+        fillTiles(L, sig, m.sig, r);
         // floor: the 1×1 threshold is at least minContrast
         m.sigFloor ??= new cv.Mat();
         m.sigFloor.create(r.h, r.w, cv.CV_32F);
@@ -543,12 +562,14 @@ export function createDetector(cv, options = {}) {
     // Per NOISE_TILE tile, the RMS of S (CV_32F, region-sized) with values above 3.5× a first RMS
     // left out (targets, edges), as a region-sized map in `out`, at least `floor`.
     function tileRms(S, r, out, floor) {
-        const tx = Math.max(1, Math.round(r.w / NOISE_TILE)), ty = Math.max(1, Math.round(r.h / NOISE_TILE));
-        const d = S.data32F, sig = new Array(tx * ty);
+        const L = tileLayout(r);
+        const { tx, ty } = L;
+        const d = S.data32F, sig = new Array(tx * ty).fill(floor);
         for (let j = 0; j < ty; j++) {
-            const y0 = Math.floor(j * r.h / ty), y1 = Math.floor((j + 1) * r.h / ty);
+            const [y0, y1] = L.rows(j);
             for (let i = 0; i < tx; i++) {
-                const x0 = Math.floor(i * r.w / tx), x1 = Math.floor((i + 1) * r.w / tx);
+                const [x0, x1] = L.cols(i);
+                if (y1 <= y0 || x1 <= x0) continue;
                 let s2 = 0, n = 0;
                 for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) { const v = d[y * r.w + x]; s2 += v * v; n++; }
                 const cap = 3.5 * Math.sqrt(s2 / n), cap2 = cap * cap;
@@ -557,9 +578,61 @@ export function createDetector(cv, options = {}) {
                 sig[j * tx + i] = Math.max(floor, m ? Math.sqrt(t2 / m) : floor);
             }
         }
-        const t = cv.matFromArray(ty, tx, cv.CV_32F, sig);
-        cv.resize(t, out, new cv.Size(r.w, r.h), 0, 0, cv.INTER_LINEAR);
-        t.delete();
+        fillTiles(L, sig, out, r);
+    }
+
+    // Noise tiles of region r: { tx, ty, rows(j), cols(i) → [start, end) in region px }. On its
+    // own grid (tiles of about NOISE_TILE px over the region), or, for a strip (absTiles), on the
+    // full frame's grid: rows of tiles meeting the strip, clipped to it (a strip's padding holds
+    // the whole tile row next to its core, so values there are the full frame's).
+    function tileLayout(r) {
+        if (!absTiles) {
+            const tx = Math.max(1, Math.round(r.w / NOISE_TILE)), ty = Math.max(1, Math.round(r.h / NOISE_TILE));
+            return { tx, ty, abs: false, rows: j => [Math.floor(j * r.h / ty), Math.floor((j + 1) * r.h / ty)], cols: i => [Math.floor(i * r.w / tx), Math.floor((i + 1) * r.w / tx)] };
+        }
+        const TX = Math.max(1, Math.round(size.w / NOISE_TILE)), TY = Math.max(1, Math.round(size.h / NOISE_TILE));
+        const yb = j => Math.floor(j * size.h / TY), xb = i => Math.floor(i * size.w / TX);
+        let jA = 0;
+        while (jA < TY - 1 && yb(jA + 1) <= r.y) jA++;
+        let jB = jA;
+        while (jB < TY - 1 && yb(jB + 1) < r.y + r.h) jB++;
+        const clip = (a, b, o, n) => [Math.max(0, a - o), Math.min(n, b - o)];
+        return { tx: TX, ty: jB - jA + 1, abs: true, jA, TX, TY,
+            rows: j => clip(yb(jA + j), yb(jA + j + 1), r.y, r.h), cols: i => clip(xb(i), xb(i + 1), r.x, r.w) };
+    }
+
+    // Tile values → a region-sized CV_32F map, bilinear between tile centres (as cv.resize does
+    // for a whole grid; for a strip, by full-frame position, tiles beyond the strip clamped).
+    function fillTiles(L, vals, out, r) {
+        if (!L.abs) {
+            const t = cv.matFromArray(L.ty, L.tx, cv.CV_32F, Array.from(vals));
+            cv.resize(t, out, new cv.Size(r.w, r.h), 0, 0, cv.INTER_LINEAR);
+            t.delete();
+            return;
+        }
+        out.create(r.h, r.w, cv.CV_32F);
+        const o = out.data32F, { TX, TY, jA, ty } = L;
+        const xi0 = new Int32Array(r.w), xi1 = new Int32Array(r.w), xf = new Float32Array(r.w);
+        for (let x = 0; x < r.w; x++) {
+            let fx = (r.x + x + 0.5) * TX / size.w - 0.5, sx = Math.floor(fx);
+            fx -= sx;
+            if (sx < 0) { sx = 0; fx = 0; }
+            if (sx >= TX - 1) { sx = TX - 1; fx = 0; }
+            xi0[x] = sx; xi1[x] = Math.min(TX - 1, sx + 1); xf[x] = fx;
+        }
+        const row = j => Math.min(ty - 1, Math.max(0, j - jA)) * TX;
+        for (let y = 0; y < r.h; y++) {
+            let fy = (r.y + y + 0.5) * TY / size.h - 0.5, sy = Math.floor(fy);
+            fy -= sy;
+            if (sy < 0) { sy = 0; fy = 0; }
+            if (sy >= TY - 1) { sy = TY - 1; fy = 0; }
+            const a = row(sy), b = row(Math.min(TY - 1, sy + 1)), base = y * r.w;
+            for (let x = 0; x < r.w; x++) {
+                const top = vals[a + xi0[x]] * (1 - xf[x]) + vals[a + xi1[x]] * xf[x];
+                const bot = vals[b + xi0[x]] * (1 - xf[x]) + vals[b + xi1[x]] * xf[x];
+                o[base + x] = top * (1 - fy) + bot * fy;
+            }
+        }
     }
 
     // The adaptive detector on region r (see the top of the file).
@@ -687,7 +760,7 @@ export function createDetector(cv, options = {}) {
             // debug views: |R| × 4 as the difference
             cv.absdiff(m.R, m.zero, m.tmp2);
             m.tmp2.convertTo(m.diff, cv.CV_8U);
-            if (!full) keepViews(r, m.diff);
+            if (!full && lastCropped) keepViews(r, m.diff);
             const b = blobs(m.mask, r.x, r.y);
             // each candidate's strength: the peak Z in its box
             const z = m.Z.data32F;
@@ -710,10 +783,26 @@ export function createDetector(cv, options = {}) {
     }
 
     // Runs one detection over the full frame, or over each inclusion region.
+    // args.part (workers, see stripsOf): { strip: { y0, y1 } } runs on rows y0…y1 of the frame
+    // plus a tile row of context either side and keeps what lies in y0…y1; { regions: […] }
+    // runs on those inclusion regions only. No debug views then.
     function run(mode, args) {
         const t0 = performance.now();
-        const regions = regionRects(p.include || [], size.w, size.h, REGION_PAD);
-        lastCropped = regions !== null;
+        const part = args.part || null;
+        let regions = regionRects(p.include || [], size.w, size.h, REGION_PAD);
+        absTiles = false;
+        let core = null;
+        if (part && part.regions) regions = part.regions;
+        else if (part && part.strip) {
+            const pad = Math.ceil(size.h / Math.max(1, Math.round(size.h / NOISE_TILE))) + REGION_PAD;
+            const y0 = Math.max(0, part.strip.y0 - pad), y1 = Math.min(size.h, part.strip.y1 + pad);
+            regions = [{ x: 0, y: y0, w: size.w, h: y1 - y0 }];
+            absTiles = true;
+            core = part.strip;
+        }
+        // debug views of inclusion regions go into full-frame Mats (for a part: only if asked)
+        lastCropped = regions !== null && (!part || (!!part.regions && !!args.views));
+        lastPart = part && part.strip ? { core: part.strip, region: regions[0] } : null;
         let brightness;
         if (mode === 'robust' || mode === 'adaptive') {
             const { small, Hnext } = args;
@@ -746,6 +835,14 @@ export function createDetector(cv, options = {}) {
             out.components += b.components;
             out.noisy ||= b.noisy;
         }
+        absTiles = false;
+        if (core) {
+            // what lies in the strip's own rows (centres); the rest is its neighbours'
+            const inCore = c => c.cy >= core.y0 - 0.5 && c.cy < core.y1 - 0.5;
+            out.candidates = out.candidates.filter(inCore);
+            out.weak = out.weak.filter(inCore);
+            out.rejected = out.rejected.filter(inCore);
+        }
         if (out.candidates.length > p.maxCandidates) { out.candidates.length = p.maxCandidates; out.noisy = true; }
         const t1 = performance.now();
         return { ...out, shiftRejected: out.rejected.filter(c => c.why === 'background shift').length,
@@ -763,16 +860,16 @@ export function createDetector(cv, options = {}) {
         // tracked: where the objects the user keeps tracking should be in frame t, [{ x, y }]
         // (processing px): kept by the background-shift check.
         // near: where confirmed objects are expected, [{ x, y, r }] (processing px), for nearMargin.
-        detect({ prev, cur, next, Hprev, Hnext, small, fitErr, tracked: tr = [], near: nr = [] }) {
+        detect({ prev, cur, next, Hprev, Hnext, small, fitErr, tracked: tr = [], near: nr = [], part = null, views = false }) {
             if (!size || size.w !== cur.cols || size.h !== cur.rows) setup(cur.cols, cur.rows);
             tracked = tr || [];
             near = nr || [];
             if (!prev || !Hprev) return { ok: false, reason: 'no camera motion for t−1 → t', candidates: [] };
             lastMode = p.detectMode;
-            if (p.detectMode === 'basic') return { ok: true, reason: null, mode: 'basic', ...run('basic', { prev, cur, Hprev }) };
+            if (p.detectMode === 'basic') return { ok: true, reason: null, mode: 'basic', ...run('basic', { prev, cur, Hprev, part, views }) };
             if (!next || !Hnext) return { ok: false, reason: 'no camera motion for t → t+1', candidates: [] };
             const mode = p.detectMode === 'adaptive' ? 'adaptive' : 'robust';
-            return { ok: true, reason: null, mode, ...run(mode, { prev, cur, next, Hprev, Hnext, small, fitErr }) };
+            return { ok: true, reason: null, mode, ...run(mode, { prev, cur, next, Hprev, Hnext, small, fitErr, part, views }) };
         },
         // Debug views of the last detection: 'diff' (×4 so faint differences show; robust mode:
         // the smaller of the two differences, i.e. what survives the AND) or 'mask'.
@@ -801,6 +898,19 @@ export function createDetector(cv, options = {}) {
                 return m.view;
             }
             return null;
+        },
+        // The debug views of the last detection on a part (Workers engine): { y0, rows, w, mask,
+        // diff } (grey arrays): a strip's own rows, or the whole frame for inclusion regions.
+        partViews() {
+            if (!size) return null;
+            const mk = this.viewMat('mask'), df = this.viewMat('diff');
+            if (!mk || !df) return null;
+            if (lastPart) {
+                const { core, region } = lastPart, w = region.w;
+                const a = (core.y0 - region.y) * w, b = (core.y1 - region.y) * w;
+                return { y0: core.y0, rows: core.y1 - core.y0, w, mask: mk.data.slice(a, b), diff: df.data.slice(a, b) };
+            }
+            return { y0: 0, rows: size.h, w: size.w, mask: mk.data.slice(), diff: df.data.slice() };
         },
         setParams(next) { p = { ...p, ...next }; },
         get params() { return p; },
