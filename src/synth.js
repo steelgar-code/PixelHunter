@@ -126,6 +126,14 @@ export const CAMERAS = {
     gimbal: rotating(554, k => ({ pan: 0.5 * Math.sin(k * 0.0175) + 0.004 * Math.sin(k * 0.21), tilt: 0.012 * Math.sin(k * 0.13), roll: 0.006 * Math.sin(k * 0.09) })),
     // the same through a long lens (10° across 640 px): 0.1° a frame, perspective nearly constant
     tele: rotating(3658, k => ({ pan: 0.0017 * k + 0.0006 * Math.sin(k * 0.21), tilt: 0.0018 * Math.sin(k * 0.13), roll: 0.006 * Math.sin(k * 0.09) })),
+    // ground views (batch 2): a camera on a tripod (fixed, a vibration of ±0.3 px), …
+    tripod: k => ({ cx: 0.2 * Math.sin(k * 1.3) + 0.1 * Math.sin(k * 2.9 + 1), cy: 0.2 * Math.sin(k * 1.7 + 2) + 0.1 * Math.sin(k * 3.1), rot: 0, scale: 1, px: 0, py: 0 }),
+    // … panning slowly (1 px a frame, a little vibration), …
+    slowpan: k => ({ cx: k + 0.2 * Math.sin(k * 1.3), cy: 0.2 * Math.sin(k * 1.7 + 2), rot: 0, scale: 1, px: 0, py: 0 }),
+    // … and a drone holding its position: a slow drift of a few px back and forth (up to ~0.3 px
+    // a frame) and a little turn (±0.2°, up to 0.03° a frame)
+    hover: k => ({ cx: 3 * Math.sin(k * 0.05) + 1.5 * Math.sin(k * 0.13 + 1), cy: 2 * Math.sin(k * 0.04 + 2) + 0.8 * Math.sin(k * 0.11),
+        rot: 0.004 * Math.sin(k * 0.03), scale: 1, px: 0, py: 0 }),
 };
 
 export const DEFAULT_SCENE = {
@@ -153,9 +161,10 @@ export const DEFAULT_SCENE = {
     // per 100 px up), haze (amplitude of faint large-scale clouds) }: above the horizon the
     // world is smooth sky instead of texture, the flat kind of area video compression flattens
     sky: null,
-    // { size, contrast, vx, vy, ax?, ay?, from?, to?, stops? } plus a start position: x, y in
-    // world coordinates or fx, fy in frame `from`'s coordinates. Velocities in world px per
-    // frame. stops: [[k0, k1], …] frames during which the target stands still (stop and go).
+    // { size, w?, h?, contrast, vx, vy, ax?, ay?, from?, to?, stops? } plus a start position: x, y
+    // in world coordinates or fx, fy in frame `from`'s coordinates. w × h: a rectangle (default
+    // size × size). Velocities in world px per frame, i.e. against the ground. stops: [[k0, k1],
+    // …] frames during which the target stands still (stop and go).
     targets: [],
 };
 
@@ -253,8 +262,8 @@ export function createScene(options = {}) {
                     [cx, cy] = observed(...project(pose(kk), q[0], q[1]));
                 }
             }
-            const half = t.size / 2;
-            const box = { id, cx, cy, x: cx - half, y: cy - half, w: t.size, h: t.size };
+            const w = t.w ?? t.size, h = t.h ?? t.size;
+            const box = { id, cx, cy, x: cx - w / 2, y: cy - h / 2, w, h };
             const hidden = s.osd.some(o => box.x + box.w > o.x && box.x < o.x + o.w && box.y + box.h > o.y && box.y < o.y + o.h);
             if (box.x >= 0 && box.y >= 0 && box.x + box.w <= W - 1 && box.y + box.h <= H - 1 && !hidden) inView.push(box);
         });

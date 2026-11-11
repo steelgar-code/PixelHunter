@@ -1,6 +1,6 @@
 // synth.js (Node only): determinism, ground truth and target rendering.
 import { ok } from './lib/env.mjs';
-import { createScene, mulberry32 } from '../src/synth.js';
+import { createScene, mulberry32, CAMERAS } from '../src/synth.js';
 import { mul, inv, normalize, project, maxCornerDiff } from '../src/homography.js';
 
 const a = createScene({ width: 160, height: 90, frames: 10, camera: 'handheld', seed: 7 });
@@ -67,4 +67,23 @@ for (const camera of ['pan', 'drone', 'handheld']) {
     const n = createScene({ ...base, noise: 5 }).frame(3).grey, z = s0.frame(3).grey;
     const sd = Math.sqrt(n.reduce((acc, v, i) => acc + (v - z[i]) ** 2, 0) / n.length);
     ok('noise has the requested σ', Math.abs(sd - 5) < 0.6, sd);
+}
+
+// ground views (batch 2): rectangular targets and the tripod / slow pan / hover cameras
+{
+    const s = createScene({ width: 160, height: 90, frames: 5, camera: 'static', noise: 0, targets: [{ size: 3, w: 3, h: 8, contrast: 40, fx: 60, fy: 40, vx: 0.4, vy: 0 }] });
+    const box = s.truth(2).targets[0];
+    ok('a rectangular target (w × h) has that box', box.w === 3 && box.h === 8 && Math.abs(box.cx - 60.8) < 1e-6, box);
+    const g = s.frame(2).grey, bg = createScene({ width: 160, height: 90, frames: 5, camera: 'static', noise: 0 }).frame(2).grey;
+    let sum = 0;
+    for (let i = 0; i < g.length; i++) sum += g[i] - bg[i];
+    ok('… and is drawn with that area', Math.abs(sum - 40 * 24) < 24, sum);
+    const shift = (cam, k) => { const c = CAMERAS[cam](k), c0 = CAMERAS[cam](0); return Math.hypot(c.cx - c0.cx, c.cy - c0.cy); };
+    let worst = 0;
+    for (let k = 0; k < 300; k++) worst = Math.max(worst, Math.abs(CAMERAS.tripod(k).cx), Math.abs(CAMERAS.tripod(k).cy));
+    ok('tripod: a vibration of at most ±0.3 px', worst <= 0.3 + 1e-9 && worst > 0.2, worst);
+    ok('slow pan: 1 px a frame', Math.abs(shift('slowpan', 100) - 100) < 0.5);
+    let hv = 0, step = 0;
+    for (let k = 0; k < 300; k++) { hv = Math.max(hv, shift('hover', k)); step = Math.max(step, Math.hypot(CAMERAS.hover(k + 1).cx - CAMERAS.hover(k).cx, CAMERAS.hover(k + 1).cy - CAMERAS.hover(k).cy)); }
+    ok('hover: drifts a few px back and forth, slowly', hv > 2 && hv < 12 && step < 0.5, { hv, step });
 }

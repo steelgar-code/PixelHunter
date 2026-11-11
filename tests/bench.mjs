@@ -4,6 +4,10 @@
 //   node run.mjs bench [--configs=mid,highest,mid+shift] [--scenes=A,B,…] [--seeds=2] [--jobs=3]
 //                      [--save=baseline]
 //
+// A config name may end in @rt2 or @rt3 ("as in real time"): only every 2nd (3rd) frame is pushed,
+// with `gap` set, as the frame loop does when it drops frames (not stride 2, which still steps the
+// tracker every frame). The ground scenarios (g-…) are meant to be read with and without it.
+//
 // Prints a table per scenario and config, and the change against tests/bench-baseline.json when
 // it has the same scenario and config. --save=baseline writes that file. Times per frame are
 // only comparable between runs with the same --jobs (parallel pages share the CPU).
@@ -22,6 +26,16 @@
 //   fit90    median over frames of the camera-motion fit's 90th-percentile point error
 //            (processing px), and the lowest coverage seen (share of grid cells with inliers)
 //   ms       median pipeline time per frame (grab + camera motion + detection + tracking)
+//   tpt      tracks per target: confirmed track ids that were on a target in most of their
+//            frames, per target seen (1 = one track per object; leading and trailing edges of a
+//            large object give 2). A track is "on" the nearest target within the match radius,
+//            not one-to-one, so a second track on the same object is not a false track.
+//
+// Ground scenarios (g-…, ground: true; batch 2): target velocities are their own, against the
+// ground (own()); a target larger than 3 px matches within half its size + 3 px (3 px otherwise,
+// as everywhere else); false tracks are tracks on no target in most of their frames (the
+// non-exclusive rule of tpt); frames in a target's stops do not count for recall ("recall while
+// moving"). The older scenarios keep their rules, so their numbers stay comparable.
 import fs from 'fs';
 import path from 'path';
 import { spawnSync } from 'child_process';
@@ -38,7 +52,13 @@ const arg = (name, def) => {
 };
 
 const dot = (size, contrast, fx, fy, vx, vy, extra = {}) => ({ size, contrast, fx, fy, vx, vy, ...extra });
+// A target by its own velocity against the ground (px a frame), for the ground scenarios. (The
+// older scenarios write the camera's drift plus a little, which is slow on the screen and 6–10 px
+// a frame against the ground.) extra: { w, h } for a rectangle, stops, from / to.
+const own = (size, contrast, fx, fy, vx, vy, extra = {}) => ({ size, contrast, fx, fy, vx, vy, ...extra });
 const base = { width: 640, height: 360, noise: 2 };
+// slow objects need a longer clip: the slow lane's first pass comes after 2 × 12 frames
+const ground = { ...base, frames: 300 };
 // goal: 'recall' (confirmed recall ≥ 0.8) or 'quiet' (< 1 false track per minute)
 export const SCENARIOS = {
     A: { what: '2×2 px, contrast 10, static camera', goal: 'recall',
@@ -94,6 +114,32 @@ export const SCENARIOS = {
         scene: seed => ({ ...base, frames: 250, camera: 'tele', seed, sky: { fy: 300 }, shapes: 30, targets: [] }) },
     K: { what: '1 px, contrast 25, slow (0.8 px/frame)', goal: 'recall',
         scene: seed => ({ ...base, frames: 150, camera: 'pan', seed, targets: [dot(1, 25, 200, 120, 6 + 0.8, 2.5), dot(1, -25, 380, 260, 6 - 0.6, 2.5 + 0.5)] }) },
+
+    // --- ground views (batch 2): speeds are the objects' own, against the ground ---
+    'g-fix-0.2': { what: 'fixed camera (tripod), 3×3 px contrast 20 at 0.2 px a frame', goal: 'recall', ground: true,
+        scene: seed => ({ ...ground, camera: 'tripod', seed, targets: [own(3, 20, 200, 120, 0.2, 0.06), own(3, -20, 440, 240, -0.2, -0.06)] }) },
+    'g-fix-0.5': { what: 'fixed camera (tripod), 3×3 px contrast 20 at 0.5 px a frame', goal: 'recall', ground: true,
+        scene: seed => ({ ...ground, camera: 'tripod', seed, targets: [own(3, 20, 160, 120, 0.5, 0.15), own(3, -20, 480, 240, -0.5, -0.15)] }) },
+    'g-hover-0.5': { what: 'hovering drone, 3×3 px contrast 20 at 0.5 px a frame', ground: true,
+        scene: seed => ({ ...ground, camera: 'hover', seed, targets: [own(3, 20, 160, 120, 0.5, 0.15), own(3, -20, 480, 240, -0.5, -0.15)] }) },
+    'g-hover-1': { what: 'hovering drone, 3×3 px contrast 20 at 1 px a frame', ground: true,
+        scene: seed => ({ ...ground, camera: 'hover', seed, targets: [own(3, 20, 100, 100, 1, 0.3), own(3, -20, 540, 260, -1, -0.3)] }) },
+    'g-hand-1': { what: 'handheld (drift 3 px a frame), 3×3 px contrast 20 at 1 px a frame', ground: true,
+        scene: seed => ({ ...base, frames: 150, camera: 'handheld', seed, targets: [own(3, 20, 560, 120, 1, 0.3), own(3, -20, 600, 240, -1, -0.3)] }) },
+    'g-trees': { what: 'no target, fixed camera (tripod), wind in trees', goal: 'quiet', ground: true,
+        scene: seed => ({ ...ground, camera: 'tripod', seed, targets: [], trees: trees640 }) },
+    'g-hover-trees': { what: 'no target, hovering drone over trees (parallax, wind)', goal: 'quiet', ground: true,
+        scene: seed => ({ ...ground, camera: 'hover', seed, targets: [], trees: trees640 }) },
+    'g-people': { what: 'fixed camera, a "person" 3×8 px contrast −25 at 0.4 and a "vehicle" 8×4 px contrast 30 at 1.5 px a frame', goal: 'recall', ground: true,
+        scene: seed => ({ ...ground, camera: 'tripod', seed, targets: [own(3, -25, 150, 250, 0.4, -0.1, { w: 3, h: 8 }), own(8, 30, 80, 110, 1.5, 0.2, { w: 8, h: 4 })] }) },
+    'g-stopgo': { what: 'fixed camera, 3×3 px contrast 25 at 2 px a frame, stops for 2 s (frames 100–150) and goes on', goal: 'recall', ground: true,
+        scene: seed => ({ ...ground, camera: 'tripod', seed, targets: [own(3, 25, 60, 120, 2, 0.5, { stops: [[100, 150]] })] }) },
+    'g-large': { what: 'fixed camera, 12×12 px contrast 25 and 20×20 px contrast −25 at 2 px a frame', goal: 'recall', ground: true,
+        scene: seed => ({ ...base, frames: 150, camera: 'tripod', seed, targets: [own(12, 25, 120, 110, 2, 0.5), own(20, -25, 160, 260, 2, -0.3)] }) },
+    // (at 2 px a frame a plain object this large hardly shows between neighbouring frames: its
+    // inside does not change; at 5 px its leading and trailing edges do, as two tracks)
+    'g-large-5': { what: 'fixed camera, 12×12 px contrast 25 and 20×20 px contrast −25 at 5 px a frame', goal: 'recall', ground: true,
+        scene: seed => ({ ...base, frames: 100, camera: 'tripod', seed, targets: [own(12, 25, 60, 110, 5, 0.5), own(20, -25, 80, 260, 5, -0.3)] }) },
 };
 const trees640 = [
     { fx: 100, fy: 80, r: 30, parallax: 0.12, sway: 1.5, swayPeriod: 37 },
@@ -165,11 +211,14 @@ const jobs = Math.max(1, Number(arg('jobs', 3)));
 const save = arg('save', null);
 // --extra='{"key":value}': added to every config (for trying a setting across the board)
 const extra = JSON.parse(arg('extra', '{}'));
-for (const c of configs) if (!CONFIGS[c]) throw new Error(`unknown config ${c} (${Object.keys(CONFIGS).join(', ')})`);
+// 'mid@rt2': config mid, every 2nd frame pushed (as in real time when frames are dropped)
+const configOf = c => c.split('@')[0];
+const everyOf = c => { const m = /@rt(\d+)$/.exec(c); return m ? Number(m[1]) : 1; };
+for (const c of configs) if (!CONFIGS[configOf(c)] || (c.includes('@') && !/@rt\d+$/.test(c))) throw new Error(`unknown config ${c} (${Object.keys(CONFIGS).join(', ')}; @rt2 / @rt3 after a name: every 2nd / 3rd frame)`);
 for (const s of scenes) if (!SCENARIOS[s]) throw new Error(`unknown scenario ${s}`);
 
 // Runs in the page: one scene (synthetic, or raw grey frames from a URL) through a pipeline.
-async function runInPage({ scene, raw, params }) {
+async function runInPage({ scene, raw, params, every = 1, ground = false, stops = [] }) {
     const { createScene, greyToRgba } = await import('/src/synth.js');
     const { createPipeline } = await import('/src/pipeline.js');
     const { matchFrame } = await import('/src/score.js');
@@ -188,34 +237,58 @@ async function runInPage({ scene, raw, params }) {
     const firstSeen = {}, firstConf = {}, tracks = {}, ms = [], fit90 = [];
     let minCover = 1;
     let rgba = null;
+    // ground scenarios: a target larger than 3 px matches within half its size + 3 px
+    const radius = t => (ground && Math.max(t.w, t.h) > 3 ? Math.max(t.w, t.h) / 2 + 3 : 3);
+    const R = ground ? 13 : 3;          // matchFrame's outer radius; each pair is checked against radius(t) below
+    const match = (dets, truth) => {
+        const m = matchFrame(dets, truth, R);
+        if (!ground) return m;
+        const byId = Object.fromEntries(truth.map(t => [t.id, t]));
+        const kept = m.matches.filter(x => x.dist <= radius(byId[x.target]));
+        return { tp: kept.length, fp: dets.length - kept.length, matches: kept };
+    };
+    // the nearest target within its radius, not one-to-one (tracks per target)
+    const nearest = (b, truth) => {
+        let best = null;
+        for (const t of truth) { const d = Math.hypot(b.cx - t.cx, b.cy - t.cy); if (d <= radius(t) && (!best || d < best.d)) best = { id: t.id, d }; }
+        return best && best.id;
+    };
+    const stopped = (id, k) => (stops[id] || []).some(([a, b]) => k >= a && k <= b);
+    const seenTargets = new Set();
     for (let k = 0; k < frames; k++) {
+        // as in real time: frames not pushed are dropped ones (the next one carries the gap)
+        if (k % every) continue;
         const f = frameAt(k);
         rgba = greyToRgba(f.grey, rgba || undefined);
-        const r = pipe.push({ imageData: new ImageData(rgba, W, H), width: W, height: H, time: k / fps, frame: k, seq: k, gap: 0,
+        const r = pipe.push({ imageData: new ImageData(rgba, W, H), width: W, height: H, time: k / fps, frame: k, seq: k / every, gap: k ? every - 1 : 0,
             jump: k === 0, jumpReason: k === 0 ? 'start' : null, truth: f.truth }).result;
         if (!r) continue;
         ms.push(r.timings.total);
         shown++;
         if (r.fit) { fit90.push(r.fit.err90); minCover = Math.min(minCover, r.fit.coverage); }
-        if (!r.detect.ok && k > 2 * (params.stride || 1) + 1) skipped++;
+        if (!r.detect.ok && k > 2 * (params.stride || 1) * every + 1) skipped++;
         const sc = r.scale;
-        const truth = r.truth.targets.map(t => ({ ...t, cx: (t.cx + 0.5) * sc - 0.5, cy: (t.cy + 0.5) * sc - 0.5 }));
-        for (const t of truth) firstSeen[t.id] ??= r.frame;
+        const all = r.truth.targets.map(t => ({ ...t, cx: (t.cx + 0.5) * sc - 0.5, cy: (t.cy + 0.5) * sc - 0.5, w: t.w * sc, h: t.h * sc }));
+        for (const t of all) { firstSeen[t.id] ??= r.frame; seenTargets.add(t.id); }
+        // recall while moving: a target standing still does not count
+        const truth = all.filter(t => !stopped(t.id, r.frame));
         tf += truth.length;
         if (r.detect.ok) {
-            const mr = matchFrame(r.candidates, truth);
+            const mr = match(r.candidates, truth);
             tp += mr.tp;
             rawFp += mr.fp;
             detected++;
         }
-        const m = matchFrame(r.confirmed.map(t => t.box), truth);
+        const m = match(r.confirmed.map(t => t.box), truth);
         ctp += m.tp;
         fpConf += m.fp;
         const matched = new Set(m.matches.map(x => x.detection));
         r.confirmed.forEach((t, i) => {
-            const e = tracks[t.id] ??= { n: 0, hit: 0 };
+            const e = tracks[t.id] ??= { n: 0, hit: 0, on: {} };
             e.n++;
             if (matched.has(i)) e.hit++;
+            const id = nearest(t.box, all);
+            if (id !== null) e.on[id] = (e.on[id] || 0) + 1;
         });
         for (const x of m.matches) firstConf[x.target] ??= r.frame;
     }
@@ -223,8 +296,12 @@ async function runInPage({ scene, raw, params }) {
     ms.sort((a, b) => a - b);
     fit90.sort((a, b) => a - b);
     const lat = Object.keys(firstSeen).map(id => (id in firstConf ? firstConf[id] - firstSeen[id] : null));
+    const onTarget = e => Object.values(e.on).some(n => n >= e.n / 2);
+    const list = Object.values(tracks);
     return { frames, fps, tf, tp, ctp, fpConf, skip: shown ? skipped / shown : 0, rawFp: detected ? rawFp / detected : 0,
-        fit90: fit90.length ? fit90[fit90.length >> 1] : null, minCover, falseTracks: Object.values(tracks).filter(e => e.hit < e.n / 2).length,
+        fit90: fit90.length ? fit90[fit90.length >> 1] : null, minCover,
+        falseTracks: ground ? list.filter(e => !onTarget(e)).length : list.filter(e => e.hit < e.n / 2).length,
+        targetTracks: list.filter(onTarget).length, targets: seenTargets.size, processed: shown,
         lat, ms: ms.length ? ms[ms.length >> 1] : null };
 }
 
@@ -255,8 +332,9 @@ await Promise.all(pages.map(async ({ page }) => {
         const w = work[next++];
         const sc = SCENARIOS[w.s];
         const scene = sc.scene(w.seed);
-        const params = { ...CONFIGS[w.c], ...extra };
-        const spec = sc.h264 ? { raw: await rawClip(scene, sc.h264, sc.gop), params } : { scene, params };
+        const params = { ...CONFIGS[configOf(w.c)], ...extra };
+        const opts = { every: everyOf(w.c), ground: !!sc.ground, stops: Object.fromEntries(scene.targets.map((t, i) => [i, t.stops || []])) };
+        const spec = sc.h264 ? { raw: await rawClip(scene, sc.h264, sc.gop), params, ...opts } : { scene, params, ...opts };
         if (spec.raw) spec.raw.url = new URL(spec.raw.url, page.url()).href;
         const r = await page.evaluate(runInPage, spec);
         (results[`${w.s}|${w.c}`] ??= []).push(r);
@@ -284,6 +362,8 @@ for (const [key, runs] of Object.entries(results)) {
         rawFp: sum(r => r.rawFp) / runs.length,
         fit90: runs.map(r => r.fit90).sort((a, b) => a - b)[runs.length >> 1],
         minCover: Math.min(...runs.map(r => r.minCover)),
+        tracksPerTarget: sum(r => r.targets) ? sum(r => r.targetTracks) / sum(r => r.targets) : null,
+        processed: sum(r => r.processed) / sum(r => r.frames),
     };
 }
 const baseline = fs.existsSync(BASELINE) ? JSON.parse(fs.readFileSync(BASELINE, 'utf8')) : null;
@@ -306,6 +386,7 @@ for (const s of scenes) {
             r.conf === null ? '' : `conf ${pct(r.conf)}${delta(r.conf, b && b.conf)}`,
             r.lat === undefined ? '' : `lat ${r.lat === null ? '–' : r.lat}${r.missedTargets ? ` (${r.missedTargets} never)` : ''}`,
             `FT/min ${num(r.ftPerMin)}${b ? delta(r.ftPerMin, b.ftPerMin, 1) : ''}`,
+            sc.ground && r.tracksPerTarget !== null ? `tpt ${num(r.tracksPerTarget, 2)}` : '',
             `FP/min ${num(r.fpPerMin, 0)}`,
             `rawFP ${num(r.rawFp, 2)}`,
             r.skip >= 0.005 ? `skip ${pct(r.skip)}` : '',
