@@ -100,6 +100,7 @@ export const TRACK_DEFAULTS = {
     minSpatial: 0,         // grey: median contrast against the surroundings needed to confirm (0: off)
     fixedMinMove: 0,       // px: screen-fixed guard only where the background moved this much (0: always)
     travelFit: false,      // min travel along the fitted path of the recent sightings, not from where the track started
+    maxTrackSpeed: 0,      // px/frame: tracks seen twice or more moving faster than this are dropped (0: off; the slow lane's)
 };
 
 const CROWD_RADIUS = 40;       // px around a prediction in which blob density is measured
@@ -289,6 +290,8 @@ export function createTracker(options = {}) {
         const building = t => (timeMode() ? t.misses === 0 || now - t.lastTime <= p.confirmSecs / 2 + 1e-6 : t.misses <= gap);
         tracks = tracks.filter(t => pinned.has(t.id) || (t.confirmed ? t.misses <= Math.max(holdAfter(), p.holdFrames)
             : building(t) || (t.reacquired && t.misses <= p.holdFrames)));
+        // (the slow lane: faster objects are the fast lane's)
+        if (p.maxTrackSpeed > 0) tracks = tracks.filter(t => pinned.has(t.id) || t.hits < 2 || Math.hypot(t.vx, t.vy) <= p.maxTrackSpeed);
         for (const t of tracks) {
             if (t.justConfirmed) t.early = [];       // handed out with the last snapshot
             t.justConfirmed = false;

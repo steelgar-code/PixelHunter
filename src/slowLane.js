@@ -17,7 +17,8 @@
 //                   background-shift check is always on here (depth and sway grow with n).
 //   Tracking        a tracker of its own (ids from SLOW_ID_BASE), stepped once per pass with the
 //                   frames since its last pass as dt and carried by the fits in between. New
-//                   tracks only up to SLOW_TOP px a frame (faster ones are the fast lane's); hold
+//                   tracks only up to SLOW_TOP px a frame (faster ones are the fast lane's: the
+//                   gate for a second sighting, and tracks faster than SLOW_TOP dropped); hold
 //                   time and the time window of "N within T s" scaled to passes; the other
 //                   confirmation settings are the user's. Between passes its tracks are carried
 //                   to the displayed frame with the fits plus their own velocity, shown where
@@ -34,7 +35,9 @@ import { createTracker } from './tracker.js';
 import { project, mul, normalize, composeNewestFirst, IDENTITY } from './homography.js';
 
 export const SLOW_MAX = 12;            // frames: the longest comparison the ring can hold
-export const SLOW_TOP = 2;             // px a frame: fastest new track the lane starts
+export const SLOW_TOP = 2;             // px a frame: fastest track the lane starts and keeps …
+const SLOW_TOP_SLACK = 0;              // … plus this (0.5 let the sky targets of W, 3 px a frame, in at the
+                                       // gimbal's turnarounds, shown off target: 5 false tracks a minute; 0: none)
 export const SLOW_TOL_BASE = 0.10;     // detector's tolBase in this lane
 export const SLOW_ID_BASE = 1000000;   // the lane's track ids start here
 export const SLOW_FIXED_MOVE = 3;      // px the background must move for the screen-fixed guard
@@ -45,7 +48,7 @@ export const SLOW_FIXED_MOVE = 3;      // px the background must move for the sc
 // whole (a 3×8 person, an 8×4 vehicle: under SPARSE_BOX anyway)
 export const SLOW_SPARSE = 0.45;
 const SPARSE_BOX = 48;
-const SAME_PLACE = 4;                  // px: a slow track this close to a fast one (or within its gate) …
+const SAME_PLACE = 6;                  // px: a slow track this close to a fast one (or within its gate) …
 const SAME_SPEED = 1;                  // … with a velocity this close (px a frame, or half the fast one's speed) is the same object
 
 export const slowMaxOf = p => Math.min(SLOW_MAX, Math.max(2, Math.round(Number(p.slowMax) || SLOW_MAX)));
@@ -130,6 +133,7 @@ export function createSlowLane(params = {}) {
     function trackerParams(c) {
         return { ...p.track, maxSpeed: p.slowTop ?? SLOW_TOP, holdFrames: Math.ceil((p.track.holdFrames ?? 50) / c),
             confirmSecs: (p.track.confirmSecs ?? 0.2) * c, fixedMinMove: SLOW_FIXED_MOVE, travelFit: p.travelFit ?? true,
+            maxTrackSpeed: (p.slowTop ?? SLOW_TOP) + (p.topSlack ?? SLOW_TOP_SLACK),
             minTravel: (p.track.minTravel ?? 3) * (p.travelFactor ?? 1), pathTolerance: (p.track.pathTolerance ?? 1.5) * (p.pathFactor ?? 1) };
     }
 
