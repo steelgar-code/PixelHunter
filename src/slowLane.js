@@ -22,6 +22,7 @@
 //                   confirmation settings are the user's. Between passes its tracks are carried
 //                   to the displayed frame with the fits plus their own velocity, shown where
 //                   expected, and count as seen if the last pass saw them.
+//   Candidates      large ragged ones (box ≥ 48 px², under 45 % filled) are dropped: moved edges.
 //   One track       a slow track at the same place on the displayed frame as a confirmed fast
 //                   track, with a similar velocity, is hidden while that lasts (the fast one stays).
 //
@@ -37,7 +38,12 @@ export const SLOW_TOP = 2;             // px a frame: fastest new track the lane
 export const SLOW_TOL_BASE = 0.10;     // detector's tolBase in this lane
 export const SLOW_ID_BASE = 1000000;   // the lane's track ids start here
 export const SLOW_FIXED_MOVE = 3;      // px the background must move for the screen-fixed guard
-export const SLOW_SPARSE = 0;          // a candidate whose box is at least SPARSE_BOX px² and less than this share filled is dropped (0: off)
+// a candidate whose box is at least SPARSE_BOX px² and less than this share filled is a moved edge
+// (a branch's rim at the end of its sway), not an object: dropped. Measured on the tree scenes,
+// four seeds, false tracks a minute (tripod · hovering): off 25 · 25, 0.3: 3.8 · 3.8, 0.45: 2.5 · 0;
+// recall of the slow scenes unchanged. Objects this lane sees have moved off themselves and show
+// whole (a 3×8 person, an 8×4 vehicle: under SPARSE_BOX anyway)
+export const SLOW_SPARSE = 0.45;
 const SPARSE_BOX = 48;
 const SAME_PLACE = 4;                  // px: a slow track this close to a fast one (or within its gate) …
 const SAME_SPEED = 1;                  // … with a velocity this close (px a frame, or half the fast one's speed) is the same object
