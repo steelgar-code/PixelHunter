@@ -51,6 +51,9 @@ export const SLOW_FIXED_MOVE = 3;      // px the background must move for the sc
 // whole (a 3×8 person, an 8×4 vehicle: under SPARSE_BOX anyway)
 export const SLOW_SPARSE = 0.45;
 const SPARSE_BOX = 48;
+// Limit: a thin object across the box's diagonal (2 px wide, 14 long, at 45°: 15×15 box, ~28 px
+// set, 12 %) is dropped too; a compact or L-shaped one (a person with its shadow) is kept.
+export const ragged = (b, sparse = SLOW_SPARSE) => sparse > 0 && b.w * b.h >= SPARSE_BOX && b.area < sparse * b.w * b.h;
 const SAME_PLACE = 6;                  // px: a slow track this close to a fast one (or within its gate) …
 const SAME_SPEED = 1;                  // … with a velocity this close (px a frame, or half the fast one's speed) is the same object
 
@@ -198,13 +201,13 @@ export function createSlowLane(params = {}) {
             // a moved edge, not an object: large and ragged (the lane sees objects whole: they have
             // moved off themselves over n frames)
             const sparse = p.sparse ?? SLOW_SPARSE;
-            if (blobs && sparse > 0) blobs = blobs.filter(b => b.w * b.h < SPARSE_BOX || b.area >= sparse * b.w * b.h);
+            if (blobs && sparse > 0) blobs = blobs.filter(b => !ragged(b, sparse));
             snap = detect.ok ? tracker.step(blobs, plan.H, plan.dt, meta) : tracker.step([], null, plan.dt, meta);
             fresh = true;
             lastU = idx - plan.n;
             lastPass = idx;
             lastN = plan.n;
-            stats = { state: 'pass', n: plan.n, cadence: c, candidates: detect.ok ? detect.candidates.length : null, reason: detect.ok ? null : detect.reason };
+            stats = { state: 'pass', n: plan.n, cadence: c, frame: meta.frame, candidates: detect.ok ? detect.candidates.length : null, reason: detect.ok ? null : detect.reason };
         },
 
         // The lane's tracks on the displayed frame (s frames before the newest): carried there,

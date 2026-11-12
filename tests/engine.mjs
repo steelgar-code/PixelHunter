@@ -104,11 +104,11 @@ try {
         const { createScene, greyToRgba } = await import('/src/synth.js');
         const { createPipeline } = await import('/src/pipeline.js');
         const { createWorkerPipeline } = await import('/src/workerPipeline.js');
-        const opts = { width: 640, height: 360, noise: 2, frames: 70, camera: 'hover', seed: 12, shapes: 15,
+        const base = { width: 640, height: 360, noise: 2, frames: 70, seed: 12, shapes: 15,
             targets: [{ size: 3, contrast: 25, fx: 150, fy: 120, vx: 0.4, vy: 0.1 }, { size: 3, contrast: -25, fx: 450, fy: 240, vx: -0.6, vy: 0.2 }],
             trees: [{ fx: 300, fy: 200, r: 30, parallax: 0.1, sway: 2, swayPeriod: 31 }] };
-        const run = async engine => {
-            const s = createScene(opts);
+        const run = async (engine, camera) => {
+            const s = createScene({ ...base, camera });
             const params = { ...__ph.params, mode: 'everyFrame', slow: true, engine };
             const pipe = engine === 'workers' ? createWorkerPipeline(cv, params) : createPipeline(cv, params);
             if (pipe.ready) await pipe.ready;
@@ -119,21 +119,28 @@ try {
                     time: k / 25, frame: k, seq: k, gap: 0, jump: k === 0, truth: f.truth })).result;
                 if (!r) continue;
                 out[r.frame] = { state: r.slow && r.slow.state, n: r.slow && r.slow.n, c: r.slow && r.slow.list ? r.slow.list.map(c => `${c.cx.toFixed(2)},${c.cy.toFixed(2)}`).sort().join(';') : null,
-                    t: r.confirmed.filter(t => t.lane === 'slow').map(t => `${t.id}:${t.box.cx.toFixed(1)},${t.box.cy.toFixed(1)}`).join(';') };
+                    t: r.confirmed.filter(t => t.lane === 'slow').map(t => `${t.id}:${t.box.cx.toFixed(1)},${t.box.cy.toFixed(1)}${t.early ? `+${t.early.length}` : ''}`).join(';') };
             }
             pipe.dispose();
             return out;
         };
-        const main = await run('main'), work = await run('workers');
+        const out = {};
+        for (const camera of ['tripod', 'hover']) {
+            const main = await run('main', camera), work = await run('workers', camera);
+            for (const [k, v] of Object.entries(main)) out[`${camera}:${k}`] = v;
+            for (const [k, v] of Object.entries(work)) (out.w ??= {})[`${camera}:${k}`] = v;
+        }
         await new Promise(r => setTimeout(r, 1500));
-        return { main, work, live: window.__liveMats() };
+        const work = out.w; delete out.w;
+        return { main: out, work, live: window.__liveMats() };
     });
     const frames = Object.keys(slowRun.main).filter(k => k in slowRun.work);
     const passes = frames.filter(k => slowRun.main[k].state === 'pass');
     const diff = frames.filter(k => JSON.stringify(slowRun.main[k]) !== JSON.stringify(slowRun.work[k]));
-    ok('slow lane: the same passes, comparison lengths and candidates in both engines', frames.length >= 65 && passes.length >= 12
+    ok('slow lane (a tripod and a hovering camera): the same passes, comparison lengths and candidates in both engines', frames.length >= 130 && passes.length >= 24
         && passes.some(k => slowRun.main[k].c) && diff.length === 0, { frames: frames.length, passes: passes.length, differ: diff.slice(0, 3).map(k => [k, slowRun.main[k], slowRun.work[k]]) });
-    ok('… and the same slow tracks', frames.some(k => slowRun.main[k].t) && frames.every(k => slowRun.main[k].t === slowRun.work[k].t));
+    ok('… and the same slow tracks, frame by frame, on both cameras', ['tripod', 'hover'].every(c => frames.some(k => k.startsWith(c) && slowRun.main[k].t))
+        && frames.every(k => slowRun.main[k].t === slowRun.work[k].t), frames.filter(k => slowRun.main[k].t !== slowRun.work[k].t).slice(0, 3));
     ok('… no Mats left behind by either engine', slowRun.live === 0, slowRun.live);
     ok('no page errors', errors.length === 0, errors);
 } finally {

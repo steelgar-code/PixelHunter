@@ -26,6 +26,9 @@
 //   fit90    median over frames of the camera-motion fit's 90th-percentile point error
 //            (processing px), and the lowest coverage seen (share of grid cells with inliers)
 //   ms       median pipeline time per frame (grab + camera motion + detection + tracking)
+//   lane     with the slow lane on: its own raw recall and raw false candidates per pass, against
+//            the truth of the frame it looked at (u, older than the frame shown); raw / rawFP
+//            above are the fast lane's only, confirmed numbers both lanes'
 //   tpt      tracks per target: confirmed track ids that were on a target in most of their
 //            frames, per target seen (1 = one track per object; leading and trailing edges of a
 //            large object give 2). A track is "on" the nearest target within the match radius,
@@ -228,15 +231,17 @@ async function runInPage({ scene, raw, params, every = 1, ground = false, stops 
     const { createScene, greyToRgba } = await import('/src/synth.js');
     const { createPipeline } = await import('/src/pipeline.js');
     const { matchFrame } = await import('/src/score.js');
-    let frames, W, H, frameAt, fps = 25;
+    let frames, W, H, frameAt, truthAt, fps = 25;
     if (raw) {
         const buf = new Uint8Array(await (await fetch(raw.url)).arrayBuffer());
         W = raw.width; H = raw.height; frames = Math.min(raw.truth.length, Math.floor(buf.length / (W * H)));
         frameAt = k => ({ grey: buf.subarray(k * W * H, (k + 1) * W * H), truth: raw.truth[k] });
+        truthAt = k => raw.truth[k];
     } else {
         const s = createScene(scene);
         W = s.width; H = s.height; frames = s.frames; fps = s.fps;
         frameAt = k => s.frame(k);
+        truthAt = k => s.truth(k);
     }
     const pipe = createPipeline(cv, { ...window.__ph.params, mode: 'everyFrame', ...params });
     let tf = 0, tp = 0, ctp = 0, fpConf = 0, shown = 0, skipped = 0, rawFp = 0, detected = 0;
@@ -261,6 +266,7 @@ async function runInPage({ scene, raw, params, every = 1, ground = false, stops 
     };
     const stopped = (id, k) => (stops[id] || []).some(([a, b]) => k >= a && k <= b);
     const seenTargets = new Set();
+    let laneTf = 0, laneTp = 0, laneFp = 0, passes = 0;
     for (let k = 0; k < frames; k++) {
         // as in real time: frames not pushed are dropped ones (the next one carries the gap)
         if (k % every) continue;
@@ -285,6 +291,14 @@ async function runInPage({ scene, raw, params, every = 1, ground = false, stops 
             rawFp += mr.fp;
             detected++;
         }
+        // the slow lane's own candidates, on the frame it looked at
+        if (r.slow && r.slow.state === 'pass' && r.slow.list) {
+            passes++;
+            const tu = truthAt(r.slow.frame).targets.map(t => ({ ...t, cx: (t.cx + 0.5) * sc - 0.5, cy: (t.cy + 0.5) * sc - 0.5, w: t.w * sc, h: t.h * sc }))
+                .filter(t => !stopped(t.id, r.slow.frame));
+            const ml = match(r.slow.list, tu);
+            laneTf += tu.length; laneTp += ml.tp; laneFp += ml.fp;
+        }
         const m = match(r.confirmed.map(t => t.box), truth);
         ctp += m.tp;
         fpConf += m.fp;
@@ -307,7 +321,7 @@ async function runInPage({ scene, raw, params, every = 1, ground = false, stops 
     return { frames, fps, tf, tp, ctp, fpConf, skip: shown ? skipped / shown : 0, rawFp: detected ? rawFp / detected : 0,
         fit90: fit90.length ? fit90[fit90.length >> 1] : null, minCover,
         falseTracks: ground ? list.filter(e => !onTarget(e)).length : list.filter(e => e.hit < e.n / 2).length,
-        targetTracks: list.filter(onTarget).length, targets: seenTargets.size, processed: shown,
+        targetTracks: list.filter(onTarget).length, targets: seenTargets.size, processed: shown, laneTf, laneTp, laneFp, passes,
         lat, ms: ms.length ? ms[ms.length >> 1] : null };
 }
 
@@ -370,6 +384,8 @@ for (const [key, runs] of Object.entries(results)) {
         minCover: Math.min(...runs.map(r => r.minCover)),
         tracksPerTarget: sum(r => r.targets) ? sum(r => r.targetTracks) / sum(r => r.targets) : null,
         processed: sum(r => r.processed) / sum(r => r.frames),
+        laneRaw: sum(r => r.passes || 0) ? (sum(r => r.laneTf) ? sum(r => r.laneTp) / sum(r => r.laneTf) : null) : undefined,
+        laneRawFp: sum(r => r.passes || 0) ? sum(r => r.laneFp) / sum(r => r.passes) : undefined,
     };
 }
 const baseline = fs.existsSync(BASELINE) ? JSON.parse(fs.readFileSync(BASELINE, 'utf8')) : null;
@@ -393,6 +409,7 @@ for (const s of scenes) {
             r.lat === undefined ? '' : `lat ${r.lat === null ? '–' : r.lat}${r.missedTargets ? ` (${r.missedTargets} never)` : ''}`,
             `FT/min ${num(r.ftPerMin)}${b ? delta(r.ftPerMin, b.ftPerMin, 1) : ''}`,
             sc.ground && r.tracksPerTarget !== null ? `tpt ${num(r.tracksPerTarget, 2)}` : '',
+            r.laneRawFp !== undefined ? `lane raw ${r.laneRaw === null ? '–' : pct(r.laneRaw).trim()} FP ${num(r.laneRawFp, 2)}` : '',
             `FP/min ${num(r.fpPerMin, 0)}`,
             `rawFP ${num(r.rawFp, 2)}`,
             r.skip >= 0.005 ? `skip ${pct(r.skip)}` : '',

@@ -4,7 +4,7 @@
 // ring size, no Mats left behind, and the Stats row. (Both engines alike: engine.mjs.)
 import { launch, ok, openApp, loadScene, showTab } from './lib/env.mjs';
 import { instrumentMats } from './lib/mats.mjs';
-import { chooseN, cadenceOf, ringFrames, slowMaxOf } from '../src/slowLane.js';
+import { chooseN, cadenceOf, ringFrames, slowMaxOf, ragged } from '../src/slowLane.js';
 import { createTracker } from '../src/tracker.js';
 
 // --- pure parts ---
@@ -23,6 +23,10 @@ import { createTracker } from '../src/tracker.js';
     ok('not yet 2n + 1 frames: a shorter one', chooseN({ at: ring(25, 0), count: 13, s: 1, max: 12, budget: 6, ...geom, lastBack: null }).n === 6);
     ok('a fit missing in the span: only spans without it', chooseN({ at: ring(25, 0, 9), count: 25, s: 1, max: 12, budget: 6, ...geom, lastBack: null }).n === 4);
     ok('u never goes back: n below the last pass\'s u', chooseN({ at: ring(25, 0), count: 25, s: 1, max: 12, budget: 6, ...geom, lastBack: 10 }).n === 9);
+    // what the ragged-candidate rule removes (a moved branch rim) and, as its stated limit, a thin diagonal object
+    ok('ragged rule: a tree rim (17×29 px, 91 set) dropped; a 12×12 or 20×20 object, a 3×8 person, an L of person and shadow (6×10, 36 set) kept',
+        ragged({ w: 17, h: 29, area: 91 }) && !ragged({ w: 12, h: 12, area: 144 }) && !ragged({ w: 20, h: 20, area: 380 }) && !ragged({ w: 3, h: 8, area: 24 }) && !ragged({ w: 6, h: 10, area: 36 }));
+    ok('… its limit: a thin object across its box (2 × 14 px at 45°: 15×15, 28 set) is dropped too (said in the help text)', ragged({ w: 15, h: 15, area: 28 }));
     ok('stride not below slowMax: no pass', !chooseN({ at: ring(25, 0), count: 25, s: 4, max: 4, budget: 6, ...geom, lastBack: null }).n);
 }
 
