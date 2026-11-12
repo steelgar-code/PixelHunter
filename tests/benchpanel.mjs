@@ -85,7 +85,8 @@ try {
     const control = () => page.evaluate(() => { const e = document.getElementById('benchChangeValue'); return { tag: e.tagName, type: e.type, min: e.min, max: e.max, options: e.options ? [...e.options].map(o => o.textContent) : null, value: e.value }; });
     await page.selectOption('#benchChangeKey', 'engine');
     let c = await control();
-    ok('"Current with": Engine offers its choices in a list, the other one first', c.tag === 'SELECT' && c.options.join() === 'Main thread,Workers' && c.value === 'workers', c);
+    // (0.13.0 added the choice Auto: three choices, the first one other than the current Main thread is preselected)
+    ok('"Current with": Engine offers its choices in a list, another one than the current first', c.tag === 'SELECT' && c.options.join() === 'Auto,Main thread,Workers' && c.value !== 'main', c);
     await page.selectOption('#benchChangeKey', 'pathCheck');
     c = await control();
     ok('… an on / off setting: On / Off', c.tag === 'SELECT' && c.options.join() === 'On,Off' && c.value === 'false', c);
