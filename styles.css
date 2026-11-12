@@ -194,6 +194,10 @@ button[aria-pressed=true] { background: color-mix(in srgb, var(--danger) 25%, va
 .stage.busy { cursor: progress; }
 
 /* readout on the video */
+.lag-note { position: absolute; top: 30px; left: 6px; z-index: 3; max-width: min(560px, 70%); padding: 4px 6px 4px 8px; border-radius: var(--radius);
+    font-size: 12px; line-height: 1.35; background: rgb(60 40 0 / 0.85); color: #ffe9b8; display: flex; gap: 6px; align-items: flex-start; }
+.lag-note[hidden] { display: none; }
+.lag-note button { background: none; border: 0; color: inherit; font-size: 15px; line-height: 1; cursor: pointer; padding: 0 2px; }
 .hud { position: absolute; top: 6px; left: 6px; z-index: 2; padding: 2px 8px; border-radius: var(--radius); font-size: 11px;
     background: rgb(0 0 0 / 0.55); color: #d8dde2; pointer-events: none; white-space: pre; }
 

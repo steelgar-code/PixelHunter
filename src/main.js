@@ -9,7 +9,7 @@ import { PARAM_DEFS, PRESETS, matchingPreset, resolveParams, parseHash, loadSave
 import { HELP, SECTION_HELP } from './help.js';
 import { loadPresets, savePresets, presetFrom, upsert, remove, find, changesOf, describe, toFile, fromFile } from './userPresets.js';
 import { createPipeline } from './pipeline.js';
-import { createWorkerPipeline } from './workerPipeline.js';
+import { createWorkerPipeline, engineOf } from './workerPipeline.js';
 import { createScore } from './score.js';
 import { createExportLog, download } from './exportLog.js';
 import { createObjects } from './objects.js';
@@ -488,7 +488,26 @@ function scoredTargets(r) {
 }
 
 // The pipeline of the chosen engine: pipeline.js (main thread) or workerPipeline.js (Workers).
-const makePipeline = (cv, p) => (p.engine === 'workers' ? createWorkerPipeline(cv, p) : createPipeline(cv, p));
+// Auto: Workers where there are four cores or more (engineOf), the main thread when the workers
+// could not start (no banner then: nothing was chosen that failed).
+let autoFailed = false;
+const engineNow = p => (p.engine === 'auto' && autoFailed ? 'main' : engineOf(p.engine));
+const makePipeline = (cv, p) => (engineNow(p) === 'workers' ? createWorkerPipeline(cv, p) : createPipeline(cv, p));
+
+// Auto: workers that cannot start give way to the main thread, without a banner.
+function autoFallback(started) {
+    if (!started.ready) return;
+    Promise.resolve(started.ready).catch(() => {
+        if (params.engine !== 'auto') return;
+        autoFailed = true;
+        if (pipeline !== started) return;
+        pipeline = createPipeline(cvState.cv, params);
+        ph.pipeline = pipeline;
+        started.dispose();
+        lastOut = null;
+        if (loop && !loop.playing && ph.shown && Number.isFinite(ph.shown.time) && !(source && source.isLive)) goToTime(ph.shown.time, 'engine changed');
+    });
+}
 
 // Engine changed: a new pipeline; the frame shown is processed again from a few frames back.
 function switchEngine() {
@@ -499,7 +518,8 @@ function switchEngine() {
     if (old) old.dispose();
     lastOut = null;
     if (pipeline.ready) setLoading('engine', 'Starting the workers (each loads OpenCV.js)…');
-    Promise.resolve(pipeline.ready).catch(e => showBanner(`Workers could not start: ${e.message}. Engine: Main thread works everywhere.`))
+    autoFallback(pipeline);
+    Promise.resolve(pipeline.ready).catch(e => { if (params.engine !== 'auto') showBanner(`Workers could not start: ${e.message}. Engine: Main thread works everywhere.`); })
         .finally(() => {
             setLoading('engine', null);
             if (loop && !loop.playing && ph.shown && Number.isFinite(ph.shown.time) && !(source && source.isLive)) goToTime(ph.shown.time, 'engine changed');
@@ -509,6 +529,7 @@ function switchEngine() {
 // A frame from the loop. With the Workers engine the result comes later: returns a Promise the
 // loop waits for.
 function onFrame(f) {
+    lag.delivered++;
     const p = pipeline;
     const out = p.push({ image: f.video, imageData: f.imageData, width: f.width, height: f.height, time: f.time,
         frame: f.frame, seq: f.seq, gap: f.gap, jump: f.jump, jumpReason: f.jumpReason, truth: f.truth });
@@ -1095,6 +1116,7 @@ async function openSourceNow(next) {
     }
     source = next;
     $('banner').hidden = true;
+    lagReset(false);
     lastOut = null;
     skipped.count = 0;
     skipped.reasons = {};
@@ -1377,6 +1399,7 @@ function bindTransport() {
     renderCameras();
     $('exportJson').addEventListener('click', exportJson);
     $('clearLog').addEventListener('click', () => { log.clear(); clearObjects(); updateStats(); });
+    $('lagClose').addEventListener('click', () => { lag.dismissed = true; showLagNote(false); });
     $('clearObjects').addEventListener('click', () => { log.clear(); clearObjects(); updateStats(); });
     stage.addEventListener('dragover', e => { e.preventDefault(); stage.classList.add('dragover'); });
     stage.addEventListener('dragleave', () => stage.classList.remove('dragover'));
@@ -1407,6 +1430,41 @@ function exportJson() {
     download(`${fileBase()}.detections.json`, log.toJSON(meta, view.summary()));
 }
 
+// --- a note when real time drops frames -----------------------------------------------------
+// In real time, when fewer than LAG_SHARE of the frames have been processed over the last
+// LAG_SECS: what it costs (the frames compared lie further apart, as with a larger stride) and
+// what helps. Counted from the frames the loop skipped, so a live source that simply delivers
+// fewer frames than its nominal rate does not raise it. Dismissed: not again for this source.
+const LAG_SHARE = 0.8, LAG_SECS = 3;
+const lag = { samples: [], delivered: 0, dismissed: false, share: null, shown: false };
+function lagReset(keepDismissed = true) {
+    lag.samples = [];
+    if (!keepDismissed) lag.dismissed = false;
+    showLagNote(false);
+}
+function showLagNote(on) {
+    lag.shown = on;
+    $('lagNote').hidden = !on;
+    if (!on) return;
+    const workers = pipeline && pipeline.engine === 'workers';
+    $('lagText').textContent = `Only ${Math.round(lag.share * 100)} % of the frames are processed in real time. The frames compared then lie further apart: `
+        + 'faint fast objects fade, and trees and anything with depth give more false alarms. What helps: '
+        + `${workers ? '' : 'Engine: Workers (Settings), '}a smaller Processing width, an inclusion zone around the area that matters, or Every frame for a recording.`;
+}
+function updateLag(s) {
+    if (!loop || !loop.playing || params.mode !== 'realtime' || s.stepping) { lagReset(); return; }
+    const now = performance.now();
+    lag.samples.push({ t: now, d: lag.delivered, x: s.dropped });
+    const a0 = lag.samples[0], b = lag.samples[lag.samples.length - 1];
+    if (b.x < a0.x || b.d < a0.d) { lag.samples = [b]; return; }          // counters started over (seek)
+    while (lag.samples.length > 2 && now - lag.samples[1].t >= LAG_SECS * 1000) lag.samples.shift();
+    const a = lag.samples[0];
+    if (now - a.t < LAG_SECS * 1000 - 300) return;                       // not a few seconds yet
+    const done = b.d - a.d, skippedN = b.x - a.x;
+    lag.share = done + skippedN > 0 ? done / (done + skippedN) : 1;
+    if (!lag.dismissed) showLagNote(lag.share < LAG_SHARE);
+}
+
 // --- stats --------------------------------------------------------------------------------
 
 // The slow lane's row: its comparison, how often it runs and what its last pass found, or why it rests.
@@ -1421,11 +1479,13 @@ function slowText(sl) {
 function updateStats() {
     view.render();
     $('clearObjects').disabled = !objs.list().length && !log.count;
-    $('stEngine').textContent = !pipeline ? '–' : pipeline.engine === 'workers'
+    $('stEngine').textContent = !pipeline ? '–' : (params.engine === 'auto' ? 'Auto: ' : '') + (pipeline.engine === 'workers'
         ? `Workers · ${pipeline.workers} detection + 1 camera motion${pipeline.state === 'ready' ? '' : ` (${pipeline.state === 'starting' ? 'starting…' : pipeline.state})`}`
-        : 'Main thread';
+        : 'Main thread');
     if (!loop) { $('hud').hidden = true; return; }
     const s = loop.stats();
+    updateLag(s);
+    ph.lag = { share: lag.share, shown: lag.shown, dismissed: lag.dismissed };
     const fps = v => (v === null ? '–' : v.toFixed(1));
     $('stSource').textContent = s.sourceFps === null ? '–' : `${fps(s.sourceFps)} fps`;
     $('stFps').textContent = `${s.processedFps} fps`;
@@ -1507,6 +1567,7 @@ async function start() {
         Object.assign(cvState, { ready: true, cv, ms });
         pipeline = makePipeline(cv, params);
         ph.pipeline = pipeline;
+        autoFallback(pipeline);
         new ResizeObserver(() => render()).observe(stage);
         status.textContent = `OpenCV.js ${CV_VERSION} ready`;
         status.className = 'pill ok';

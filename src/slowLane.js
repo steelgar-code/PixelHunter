@@ -37,6 +37,8 @@ export const SLOW_TOP = 2;             // px a frame: fastest new track the lane
 export const SLOW_TOL_BASE = 0.10;     // detector's tolBase in this lane
 export const SLOW_ID_BASE = 1000000;   // the lane's track ids start here
 export const SLOW_FIXED_MOVE = 3;      // px the background must move for the screen-fixed guard
+export const SLOW_SPARSE = 0;          // a candidate whose box is at least SPARSE_BOX px² and less than this share filled is dropped (0: off)
+const SPARSE_BOX = 48;
 const SAME_PLACE = 4;                  // px: a slow track this close to a fast one (or within its gate) …
 const SAME_SPEED = 1;                  // … with a velocity this close (px a frame, or half the fast one's speed) is the same object
 
@@ -122,7 +124,7 @@ export function createSlowLane(params = {}) {
     function trackerParams(c) {
         return { ...p.track, maxSpeed: p.slowTop ?? SLOW_TOP, holdFrames: Math.ceil((p.track.holdFrames ?? 50) / c),
             confirmSecs: (p.track.confirmSecs ?? 0.2) * c, fixedMinMove: SLOW_FIXED_MOVE, travelFit: p.travelFit ?? true,
-            minTravel: (p.track.minTravel ?? 3) * (p.travelFactor ?? 1) };
+            minTravel: (p.track.minTravel ?? 3) * (p.travelFactor ?? 1), pathTolerance: (p.track.pathTolerance ?? 1.5) * (p.pathFactor ?? 1) };
     }
 
     function reset() {
@@ -175,6 +177,10 @@ export function createSlowLane(params = {}) {
         step(plan, detect, blobs, idx, meta) {
             const c = cadenceOf(plan.n);
             tracker.setParams(trackerParams(c));
+            // a moved edge, not an object: large and ragged (the lane sees objects whole: they have
+            // moved off themselves over n frames)
+            const sparse = p.sparse ?? SLOW_SPARSE;
+            if (blobs && sparse > 0) blobs = blobs.filter(b => b.w * b.h < SPARSE_BOX || b.area >= sparse * b.w * b.h);
             snap = detect.ok ? tracker.step(blobs, plan.H, plan.dt, meta) : tracker.step([], null, plan.dt, meta);
             fresh = true;
             lastU = idx - plan.n;

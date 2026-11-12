@@ -12,7 +12,7 @@
 import { PRESETS, PARAM_DEFS, coerce } from './params.js';
 import { PRESET_KEYS } from './userPresets.js';
 import { createPipeline } from './pipeline.js';
-import { createWorkerPipeline } from './workerPipeline.js';
+import { createWorkerPipeline, engineOf } from './workerPipeline.js';
 import { createFrameLoop } from './frameLoop.js';
 import { createSyntheticLoop } from './synthLoop.js';
 import { scoreRun, compactPts } from './benchScore.js';
@@ -91,7 +91,7 @@ export function createBenchView(d) {
         d.pause();
         const sets = defs.map(def => {
             const params = paramsOf(def.key);
-            return { key: def.key, name: def.name, params: keptParams(params), pipe: params.engine === 'workers' ? createWorkerPipeline(cv, params) : createPipeline(cv, params), times: [], tracks: new Map(), ms: [] };
+            return { key: def.key, name: def.name, params: keptParams(params), pipe: engineOf(params.engine) === 'workers' ? createWorkerPipeline(cv, params) : createPipeline(cv, params), times: [], tracks: new Map(), ms: [] };
         });
         let cancelled = false, loop = null, video = null, copy = null, borrowed = false;
         const t0 = performance.now();

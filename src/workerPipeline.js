@@ -28,6 +28,25 @@ import { makeCanvas, egoParams, detectParams, trackParams, fitOf, fitErrOf, MAX_
 import { createSlowLane, ringFrames, slowDetectParams } from './slowLane.js';
 import { CV_URL } from './cvLoader.js';
 
+// Engine 'auto': Workers where there are at least four cores and the browser runs module workers
+// (Firefox before 114 did not), else the main thread. (main.js falls back to the main thread
+// without a banner when the workers fail to start.)
+let moduleWorkersOk = null;
+export function moduleWorkers() {
+    if (moduleWorkersOk !== null) return moduleWorkersOk;
+    moduleWorkersOk = false;
+    if (typeof Worker === 'undefined' || typeof URL === 'undefined' || typeof Blob === 'undefined') return false;
+    try {
+        const url = URL.createObjectURL(new Blob([''], { type: 'text/javascript' }));
+        const w = new Worker(url, { get type() { moduleWorkersOk = true; return 'module'; } });
+        w.terminate();
+        URL.revokeObjectURL(url);
+    } catch { moduleWorkersOk = false; }
+    return moduleWorkersOk;
+}
+export const engineOf = choice => (choice === 'workers' ? 'workers' : choice === 'auto'
+    && ((typeof navigator !== 'undefined' && navigator.hardwareConcurrency) || 0) >= 4 && moduleWorkers() ? 'workers' : 'main');
+
 // detection workers by default: one per core but one (measured on 4 cores at 1280×720: 2 → 84,
 // 3 → 68, 4 → 82 ms per frame; the page and the camera-motion worker are mostly waiting)
 export const autoWorkers = () => Math.max(1, Math.min(7, ((typeof navigator !== 'undefined' && navigator.hardwareConcurrency) || 4) - 1));

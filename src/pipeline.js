@@ -45,10 +45,13 @@ export const pick = (defaults, p) => Object.fromEntries(Object.keys(defaults).fi
 // (precise / thinFit off: the fit as it was before 0.12.0, from every point that agrees with it)
 export const egoParams = p => ({ ...pick(EGO_DEFAULTS, p), zones: p.zonesMotion === false ? [] : p.zones || [],
     ...(p.precise === false ? { fbRel: 0 } : {}), ...(p.thinFit === false ? { loose: 0 } : {}) });
-export const detectParams = p => ({ ...pick(DETECT_DEFAULTS, p), zones: p.zones || [], include: p.include || [] });
+// (with the slow lane on, the border margin also along the frame's own edges in the fast lane: the
+// screen-fixed guard, which then asks whether the background moved, no longer hides what is left
+// there on a camera that hardly moves; detect.js edgeMargin)
+export const detectParams = p => ({ ...pick(DETECT_DEFAULTS, p), zones: p.zones || [], include: p.include || [], ...(p.slow ? { edgeMargin: true } : {}) });
 // (with the slow lane on, the screen-fixed guard asks whether the background moved: slowLane.js)
 export const trackParams = p => ({ ...pick(TRACK_DEFAULTS, p), ...(p.slow ? { fixedMinMove: SLOW_FIXED_MOVE } : {}) });
-export const laneParams = p => ({ slow: !!p.slow, slowMax: p.slowMax, slowBudget: p.slowBudget, slowTop: p.slowTop, travelFit: p.slowTravelFit, travelFactor: p.slowTravel, track: trackParams(p) });
+export const laneParams = p => ({ slow: !!p.slow, slowMax: p.slowMax, slowBudget: p.slowBudget, slowTop: p.slowTop, travelFit: p.slowTravelFit, travelFactor: p.slowTravel, sparse: p.slowSparse, pathFactor: p.slowPath, track: trackParams(p) });
 // a candidate's strength (confirmation by evidence) and, for min contrast to confirm, its contrast
 // against its surroundings in its own frame
 export function prepareBlobs(detect, grey, p) {
