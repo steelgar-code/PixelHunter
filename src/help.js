@@ -22,6 +22,7 @@ export const HELP = {
     minArea: 'Smallest spot kept, in px. 1 keeps single pixels. Use 4–9 when targets are bigger and you want to ignore specks of noise.',
     maxArea: 'Largest spot kept, in px. 400 ≈ 20×20 px. Example: a nearby bird filling 40×30 px is thrown away at 400: raise to 2000+.',
     borderMargin: 'Ignores a strip this wide at the frame edge, where the lined-up frames don\'t fully overlap. Raise it if false detections line up along the edges.',
+    edgeMargin: 'Keeps the Border margin also along the edges of the frame itself, not only along the outline of the lined-up neighbouring frames. On a camera that hardly moves (a tripod, a hovering drone) the neighbours are shifted by a fraction of a pixel, which mixes black from beyond their edge into the frame\'s outermost rows and columns; without this, nearly every false candidate on a still camera lies there. Costs: nothing found within Border margin px of the frame\'s edge.',
     brightness: 'Cancels automatic exposure changes, e.g. the camera brightening as it turns away from the sun. Leave on.',
     blur: 'Smooths the picture first: less noise and compression blockiness, but 1–2 px objects get erased. Only for bigger targets.',
     open: 'Deletes every spot only 1–2 px wide. Same trade-off as the blur, stronger.',

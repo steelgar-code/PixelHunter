@@ -100,7 +100,9 @@ export const TRACK_DEFAULTS = {
     minSpatial: 0,         // grey: median contrast against the surroundings needed to confirm (0: off)
     fixedMinMove: 0,       // px: screen-fixed guard only where the background moved this much (0: always)
     travelFit: false,      // min travel along the fitted path of the recent sightings, not from where the track started
+    keepMoving: false,     // a confirmed track whose last PATH_POINTS sightings travel under half the min travel stops being shown (the slow lane's)
     maxTrackSpeed: 0,      // px/frame: tracks seen twice or more moving faster than this are dropped (0: off; the slow lane's)
+    speedPerSize: 0,       // with maxTrackSpeed: an object may be this × its box length a frame fast, if more (the slow lane's: 0.5)
 };
 
 const CROWD_RADIUS = 40;       // px around a prediction in which blob density is measured
@@ -111,6 +113,7 @@ const WEAK_MIN_AREA = 0.12;    // a weak blob continues a track only at ≥ this
 const EVIDENCE_CAP = 3;        // evidence: one sighting counts at most this much
 const EARLY_KEPT = 300;        // sightings kept per track until it confirms (for back-filling)
 const SCREEN_FIXED = 1.5;      // px: sightings this close together on the screen are a screen-fixed spot
+const SIZE_SPEED_FROM = 8;     // px: speedPerSize applies to boxes this long or longer
 const SIGHTS_KEPT = 60;        // sightings kept per track for time mode, minStrong and minSpatial
 
 const popcount = x => { let n = 0; while (x) { n += x & 1; x >>>= 1; } return n; };
@@ -199,7 +202,7 @@ export function createTracker(options = {}) {
             if (held) { t.vx = 0; t.vy = 0; t.x = t.lx; t.y = t.ly; }
             t.px = t.x + t.vx * dt;
             t.py = t.y + t.vy * dt;
-            const motion = t.hits === 1 ? p.maxSpeed * dt : p.gateSpeed * Math.hypot(t.vx, t.vy) * dt;
+            const motion = t.hits === 1 ? Math.max(p.maxSpeed, sizeSpeed(t)) * dt : p.gateSpeed * Math.hypot(t.vx, t.vy) * dt;
             // waiting tracks (held, or picked up again and not yet re-confirmed): the search
             // radius stops growing, so a long wait doesn't make it catch every blob around
             const grow = held || t.reacquired ? Math.min(p.gateGrow * t.misses, p.maxSpeed) : p.gateGrow * t.misses;
@@ -291,7 +294,7 @@ export function createTracker(options = {}) {
         tracks = tracks.filter(t => pinned.has(t.id) || (t.confirmed ? t.misses <= Math.max(holdAfter(), p.holdFrames)
             : building(t) || (t.reacquired && t.misses <= p.holdFrames)));
         // (the slow lane: faster objects are the fast lane's)
-        if (p.maxTrackSpeed > 0) tracks = tracks.filter(t => pinned.has(t.id) || t.hits < 2 || Math.hypot(t.vx, t.vy) <= p.maxTrackSpeed);
+        if (p.maxTrackSpeed > 0) tracks = tracks.filter(t => pinned.has(t.id) || t.hits < 2 || Math.hypot(t.vx, t.vy) <= Math.max(p.maxTrackSpeed, sizeSpeed(t)));
         for (const t of tracks) {
             if (t.justConfirmed) t.early = [];       // handed out with the last snapshot
             t.justConfirmed = false;
@@ -303,6 +306,9 @@ export function createTracker(options = {}) {
             // a confirmed track whose recent path turns out unsteady (sway, chained noise) stops
             // being shown until it is steady again
             else if (t.confirmed && p.pathCheck && t.matched && t.pts.length >= 5 && pathDeviation(t.pts) > 2 * p.pathTolerance && !held_(t)) t.confirmed = false;
+            // (keepMoving, with travelFit) a confirmed track that no longer gets anywhere: a spot
+            // swaying in place, which over less than half its period looked like a slow object
+            else if (t.confirmed && p.keepMoving && t.matched && t.pts.length >= PATH_POINTS && travelled(t) < p.minTravel / 2 && !held_(t)) t.confirmed = false;
             t.trail.push([t.x, t.y]);
             if (t.trail.length > p.trail) t.trail.shift();
         }
@@ -335,6 +341,13 @@ export function createTracker(options = {}) {
         const slope = axis => { let sv = 0, stv = 0; for (const q of pts) { sv += q[axis]; stv += q[2] * q[axis]; } return (stv / n - mt * (sv / n)) / vt; };
         return Math.hypot(slope(0), slope(1)) * (pts[n - 1][2] - pts[0][2]);
     }
+
+    // (speedPerSize) how fast an object of this size may be: the three-frame comparison shows an
+    // object of length L whole only once it has moved L between the frames compared, so the fast
+    // lane (1 frame apart) misses large objects slower than about L / 2 a frame
+    // (boxes under SIZE_SPEED_FROM px: the gap is small, 2 to L / 2 px a frame, and a 3 px object's
+    // box in the slow lane is often 5–6 px, which let W's sky targets, 3 px a frame, in again)
+    const sizeSpeed = t => { const L = t.box ? Math.max(t.box.w, t.box.h) : 0; return p.speedPerSize > 0 && L >= SIZE_SPEED_FROM ? p.speedPerSize * L : 0; };
 
     // all recent sightings within SCREEN_FIXED px of their mean, on the screen
     function fixedOnScreen(t) {

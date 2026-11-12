@@ -27,15 +27,18 @@
 //   One track       a slow track at the same place on the displayed frame as a confirmed fast
 //                   track, with a similar velocity, is hidden while that lasts (the fast one stays).
 //
-// The screen-fixed guard (tracker.js fixedMinMove) only applies, in both lanes while this one is
-// on, when the background itself moved ≥ SLOW_FIXED_MOVE px on the screen during the sightings:
-// on a fixed camera a slow object stays within the guard's 1.5 px for 8 sightings.
+// The screen-fixed guard of the lane's tracker (tracker.js fixedMinMove) only applies when the
+// background itself moved ≥ SLOW_FIXED_MOVE px on the screen during the sightings: on a fixed
+// camera a slow object stays within the guard's 1.5 px for 8 sightings. (The fast lane's guard is
+// unchanged: an object the fast lane sees moves ≥ 2 px a frame and never stays within 1.5 px.)
 
 import { createTracker } from './tracker.js';
 import { project, mul, normalize, composeNewestFirst, IDENTITY } from './homography.js';
 
 export const SLOW_MAX = 12;            // frames: the longest comparison the ring can hold
 export const SLOW_TOP = 2;             // px a frame: fastest track the lane starts and keeps …
+export const SLOW_PER_SIZE = 0.5;      // … or half the object's box length a frame, if more (larger objects
+                                       // moving less than about half their length a frame are in neither lane otherwise)
 const SLOW_TOP_SLACK = 0;              // … plus this (0.5 let the sky targets of W, 3 px a frame, in at the
                                        // gimbal's turnarounds, shown off target: 5 false tracks a minute; 0: none)
 export const SLOW_TOL_BASE = 0.10;     // detector's tolBase in this lane
@@ -120,6 +123,9 @@ function carryShown(t, H, k) {
         predicted: [x + mx, y + my], lane: 'slow' };
 }
 
+// source frames from slot `to` (older) to slot `from` (newer)
+const framesIn = (frames, from, to) => { let d = 0; for (let b = from; b < to; b++) d += frames(b); return d; };
+
 export function createSlowLane(params = {}) {
     let p = { ...params };
     const tracker = createTracker({ firstId: SLOW_ID_BASE });
@@ -133,7 +139,7 @@ export function createSlowLane(params = {}) {
     function trackerParams(c) {
         return { ...p.track, maxSpeed: p.slowTop ?? SLOW_TOP, holdFrames: Math.ceil((p.track.holdFrames ?? 50) / c),
             confirmSecs: (p.track.confirmSecs ?? 0.2) * c, fixedMinMove: SLOW_FIXED_MOVE, travelFit: p.travelFit ?? true,
-            maxTrackSpeed: (p.slowTop ?? SLOW_TOP) + (p.topSlack ?? SLOW_TOP_SLACK),
+            maxTrackSpeed: (p.slowTop ?? SLOW_TOP) + (p.topSlack ?? SLOW_TOP_SLACK), keepMoving: p.keepMoving ?? true, speedPerSize: p.speedPerSize ?? SLOW_PER_SIZE,
             minTravel: (p.track.minTravel ?? 3) * (p.travelFactor ?? 1), pathTolerance: (p.track.pathTolerance ?? 1.5) * (p.pathFactor ?? 1) };
     }
 
@@ -157,7 +163,9 @@ export function createSlowLane(params = {}) {
         // Hs, fitErr, H (last u → u) , dt, tracked, near } } or { rest: reason }.
         // idx: index of the newest frame since the reset; count: frames in the history;
         // geom: { w, h, kx }; opts: { tracked, near } as the fast lane computes them.
-        plan({ at, idx, count, s, geom, wantTracked = false, nearMargin = 0, nearOf = null }) {
+        // frames(b): source frames between the slots b + 1 and b (more than 1 where real time
+        // dropped frames: velocities, dt and the lane's speed limit are per source frame).
+        plan({ at, idx, count, s, geom, wantTracked = false, nearMargin = 0, nearOf = null, frames = () => 1 }) {
             if (!p.slow) { stats = { state: 'off' }; return { rest: 'off' }; }
             if (lastPass !== null && idx - lastPass < cadenceOf(lastN)) {
                 stats = { ...stats, state: 'between', candidates: stats.candidates };
@@ -174,7 +182,7 @@ export function createSlowLane(params = {}) {
             let H = null, dt = 1;
             if (lastBack !== null) {
                 const c = laneChain(at, n, lastBack - n, geom.kx);
-                if (c.H) { H = c.H; dt = lastBack - n; } else { tracker.reset(); snap = []; }
+                if (c.H) { H = c.H; dt = framesIn(frames, n, lastBack); } else { tracker.reset(); snap = []; }
             }
             if (!H) H = IDENTITY.slice();
             const tracked = wantTracked ? tracker.predict(H, dt, { onlyPinned: true }).map(t => ({ x: t.x, y: t.y })) : [];
@@ -201,16 +209,17 @@ export function createSlowLane(params = {}) {
 
         // The lane's tracks on the displayed frame (s frames before the newest): carried there,
         // without those a confirmed fast track already follows. fast: the fast lane's tracks.
-        shown({ at, idx, count, s, geom, fast }) {
+        shown({ at, idx, count, s, geom, fast, frames = () => 1 }) {
             if (!p.slow || lastU === null || !snap.length) return [];
             const lastBack = idx - lastU, k = lastBack - s;
             if (lastBack > count - 1) { reset(); return []; }
+            const kf = k > 0 ? framesIn(frames, s, lastBack) : 0;
             const c = k > 0 ? laneChain(at, s, k, geom.kx) : { H: IDENTITY.slice() };
             if (!c.H) return [];
             const fastConf = fast.filter(f => f.state === 'confirmed');
             const out = [];
             for (const t of snap) {
-                const q = carryShown(t, c.H, Math.max(0, k));
+                const q = carryShown(t, c.H, kf);
                 const same = fastConf.some(f => Math.hypot(f.x - q.x, f.y - q.y) <= Math.max(SAME_PLACE, f.gate || 0)
                     && Math.hypot(f.vx - q.vx, f.vy - q.vy) <= Math.max(SAME_SPEED, 0.5 * Math.hypot(f.vx, f.vy)));
                 if (same) continue;

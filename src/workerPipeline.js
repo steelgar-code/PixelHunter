@@ -24,7 +24,7 @@ import { scaleH, mul, normalize, composeNewestFirst } from './homography.js';
 import { mulberry32 } from './synth.js';
 import { stackCrop, CROP } from './crops.js';
 import { makeCanvas, egoParams, detectParams, trackParams, fitOf, fitErrOf, MAX_FPS, NEAR_MISSES, MAX_STRIDE,
-    laneParams, prepareBlobs, joinLanes, slowSummary, nearList } from './pipeline.js';
+    laneParams, prepareBlobs, joinLanes, slowSummary, nearList, framesOf } from './pipeline.js';
 import { createSlowLane, ringFrames, slowDetectParams } from './slowLane.js';
 import { CV_URL } from './cvLoader.js';
 
@@ -292,7 +292,7 @@ export function createWorkerPipeline(cv, params) {
         // the slow lane's pass, when one is due: its detection is sent along with the fast lane's
         let slowPlan = null, slowP = null;
         if (p.slow) {
-            slowPlan = lane.plan({ at, idx: ctx.idx, count: ctx.count, s, geom, wantTracked: true, nearMargin: p.nearMargin, nearOf: nearList });
+            slowPlan = lane.plan({ at, idx: ctx.idx, count: ctx.count, s, geom, wantTracked: true, nearMargin: p.nearMargin, nearOf: nearList, frames: framesOf(at) });
             if (slowPlan.pass) {
                 const P = slowPlan.pass;
                 slowP = detectParts({ prev: at(2 * P.n).meta.seq, cur: at(P.n).meta.seq, next: ctx.slot.meta.seq, Hprev: P.Hprev, Hnext: P.Hnext,
@@ -338,7 +338,7 @@ export function createWorkerPipeline(cv, params) {
                 d = await slowP;
                 lane.step(P, d, d.ok ? prepareBlobs(d, u.grey, p) : null, ctx.idx, { time: u.meta.time, frame: u.meta.frame });
             }
-            slow = lane.shown({ at, idx: ctx.idx, count: ctx.count, s, geom, fast: tracks || [] });
+            slow = lane.shown({ at, idx: ctx.idx, count: ctx.count, s, geom, fast: tracks || [], frames: framesOf(at) });
             slowInfo = slowSummary(lane, d, performance.now() - t3);
         }
         const t4 = performance.now();

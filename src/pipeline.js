@@ -30,7 +30,7 @@ import { scaleH, mul, normalize, composeNewestFirst } from './homography.js';
 import { mulberry32 } from './synth.js';
 import { contrastOf } from './objects.js';
 import { stackCrop, CROP } from './crops.js';
-import { createSlowLane, ringFrames, slowDetectParams, SLOW_FIXED_MOVE } from './slowLane.js';
+import { createSlowLane, ringFrames, slowDetectParams } from './slowLane.js';
 
 export function makeCanvas(w, h) {
     if (typeof OffscreenCanvas !== 'undefined') return new OffscreenCanvas(w, h);
@@ -45,13 +45,9 @@ export const pick = (defaults, p) => Object.fromEntries(Object.keys(defaults).fi
 // (precise / thinFit off: the fit as it was before 0.12.0, from every point that agrees with it)
 export const egoParams = p => ({ ...pick(EGO_DEFAULTS, p), zones: p.zonesMotion === false ? [] : p.zones || [],
     ...(p.precise === false ? { fbRel: 0 } : {}), ...(p.thinFit === false ? { loose: 0 } : {}) });
-// (with the slow lane on, the border margin also along the frame's own edges in the fast lane: the
-// screen-fixed guard, which then asks whether the background moved, no longer hides what is left
-// there on a camera that hardly moves; detect.js edgeMargin)
-export const detectParams = p => ({ ...pick(DETECT_DEFAULTS, p), zones: p.zones || [], include: p.include || [], ...(p.slow ? { edgeMargin: true } : {}) });
-// (with the slow lane on, the screen-fixed guard asks whether the background moved: slowLane.js)
-export const trackParams = p => ({ ...pick(TRACK_DEFAULTS, p), ...(p.slow ? { fixedMinMove: SLOW_FIXED_MOVE } : {}) });
-export const laneParams = p => ({ slow: !!p.slow, slowMax: p.slowMax, slowBudget: p.slowBudget, slowTop: p.slowTop, travelFit: p.slowTravelFit, travelFactor: p.slowTravel, sparse: p.slowSparse, pathFactor: p.slowPath, topSlack: p.slowTopSlack, track: trackParams(p) });
+export const detectParams = p => ({ ...pick(DETECT_DEFAULTS, p), zones: p.zones || [], include: p.include || [] });
+export const trackParams = p => pick(TRACK_DEFAULTS, p);
+export const laneParams = p => ({ slow: !!p.slow, slowMax: p.slowMax, slowBudget: p.slowBudget, slowTop: p.slowTop, travelFit: p.slowTravelFit, travelFactor: p.slowTravel, sparse: p.slowSparse, pathFactor: p.slowPath, topSlack: p.slowTopSlack, keepMoving: p.slowKeepMoving, speedPerSize: p.slowPerSize, track: trackParams(p) });
 // a candidate's strength (confirmation by evidence) and, for min contrast to confirm, its contrast
 // against its surroundings in its own frame
 export function prepareBlobs(detect, grey, p) {
@@ -87,6 +83,14 @@ export const fitErrOf = (e, p) => (p.fitErrFrom === 'misfit' ? e.misfit ?? e.err
 
 export const MAX_STRIDE = 12;
 // where confirmed objects are expected, as the detector's nearMargin takes them
+// source frames between the slots b + 1 and b of a history (at): 1 + the frames dropped in
+// between, never more than the time between them allows at MAX_FPS (as the fast lane's dt)
+export const framesOf = at => b => {
+    const m = at(b).meta, q = at(b + 1).meta;
+    let d = ((m && m.gap) || 0) + 1;
+    if (q && Number.isFinite(q.time) && Number.isFinite(m.time) && m.time > q.time) d = Math.min(d, Math.max(1, Math.round((m.time - q.time) * MAX_FPS)));
+    return d;
+};
 export const nearList = list => list.map(t => ({ x: t.x, y: t.y, r: Math.min(NEAR_MAX_R, Math.max(4, t.gate)) }));
 export const MAX_FPS = 120;             // highest source frame rate assumed when checking frame gaps
 export const NEAR_MISSES = 3;           // nearMargin: around confirmed tracks missed up to this many frames
@@ -270,7 +274,7 @@ export function createPipeline(cv, params) {
         let slow = [], slowInfo = null;
         if (p.slow) {
             let d = null;
-            const pl = lane.plan({ at, idx, count, s, geom, wantTracked: true, nearMargin: p.nearMargin, nearOf: nearList });
+            const pl = lane.plan({ at, idx, count, s, geom, wantTracked: true, nearMargin: p.nearMargin, nearOf: nearList, frames: framesOf(at) });
             if (pl.pass) {
                 const P = pl.pass, u = at(P.n), older = at(2 * P.n);
                 slowDet ??= createDetector(cv, slowDetectParams(detectParams(p), p));
@@ -278,7 +282,7 @@ export function createPipeline(cv, params) {
                     tracked: P.tracked, near: P.near, small: { prev: older.small, cur: u.small, next: slot.small, Hprev: P.Hs.Hprev, Hnext: P.Hs.Hnext } });
                 lane.step(P, d, d.ok ? prepareBlobs(d, u.grey, p) : null, idx, { time: u.meta.time, frame: u.meta.frame });
             }
-            slow = lane.shown({ at, idx, count, s, geom, fast: tracks || [] });
+            slow = lane.shown({ at, idx, count, s, geom, fast: tracks || [], frames: framesOf(at) });
             slowInfo = slowSummary(lane, d, performance.now() - t3);
         }
         const t4 = performance.now();
