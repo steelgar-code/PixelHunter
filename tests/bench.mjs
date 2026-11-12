@@ -159,8 +159,11 @@ export const CONFIGS = {
     'mid+shift': { shiftCheck: true },
     // the slow lane (batch 2)
     'mid+slow': { slow: true },
-    // the border margin along the frame's own edges in the fast lane too (the slow lane has it)
+    // the border margin along the frame's own edges (default since 0.13.0): mid-0.12 is Mid without
+    // it, as 0.12.0 (on a tripod nearly all of 0.12.0's candidates were in the outermost 1–2 px)
     'mid+edge': { edgeMargin: true },
+    'mid-0.12': { edgeMargin: false },
+    'highest-0.12': { ...PRESETS.highest.values, edgeMargin: false },
     'mid+slow+edge': { slow: true, edgeMargin: true },
     'highest+slow': { ...PRESETS.highest.values, slow: true },
     // the camera-motion fit as before 0.12.0 (every point that agrees, always the full fit, LK

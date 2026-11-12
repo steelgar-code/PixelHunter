@@ -41,7 +41,7 @@ export const PARAM_DEFS = [
     { key: 'minArea', label: 'Min blob area', group: 'detect', type: 'number', default: 1, min: 1, max: 50, step: 1, unit: 'px' },
     { key: 'maxArea', label: 'Max blob area', group: 'detect', type: 'number', default: 400, min: 10, max: 5000, step: 10, unit: 'px' },
     { key: 'borderMargin', label: 'Border margin', group: 'detect', type: 'number', default: 3, min: 0, max: 20, step: 1, unit: 'px' },
-    { key: 'edgeMargin', label: 'Border margin at the frame\'s own edges too', group: 'detect', type: 'bool', default: false },
+    { key: 'edgeMargin', label: 'Border margin at the frame\'s own edges too', group: 'detect', type: 'bool', default: true },
     { key: 'brightness', label: 'Match brightness', group: 'detect', type: 'bool', default: true , when: { detectMode: ['robust', 'adaptive'] } },
     { key: 'blur', label: '3×3 blur', group: 'detect', type: 'bool', default: false , when: { detectMode: 'robust' } },
     { key: 'open', label: '3×3 opening (drops 1–2 px blobs)', group: 'detect', type: 'bool', default: false , when: { detectMode: ['robust', 'adaptive'] } },

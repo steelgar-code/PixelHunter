@@ -121,7 +121,7 @@ export const DETECT_DEFAULTS = {
     shiftCheck: false,     // drop candidates explained by a small local shift of the background
     shiftMax: 2,           // px: largest local shift tried
     nearMargin: 0,         // adaptive: σ lower still where a confirmed object is expected (0: off)
-    edgeMargin: false,     // borderMargin also along the frame's own edges (an option of the pipeline: the slow lane's)
+    edgeMargin: true,      // borderMargin also along the frame's own edges (false: as until 0.12.0)
     shiftRingGap: 3,       // px between a candidate's box and the ring the shift check aligns (was 1)
     zones: [],             // exclusion zones, { x, y, w, h } fractions of the frame
     include: [],           // inclusion zones: when set, only these areas are processed
