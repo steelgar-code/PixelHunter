@@ -34,6 +34,14 @@
 //            large object give 2). A track is "on" the nearest target within the match radius,
 //            not one-to-one, so a second track on the same object is not a false track.
 //
+// Far scenarios (far-…, matrix: true; batch 3): nine small faint slow targets (sizes 1, 2, 3 px ×
+// contrasts 8, 12, 20) at one speed, counted per target: for every config a grid (rows = size,
+// columns = contrast) of "confirmed recall within 3 px / within 6 px (latency in frames)", over
+// all seeds, counted from each target's first frame in view; the latency is the median over the
+// seeds that found it ("–": never). Saved under `perTarget` in the summary. The 6 px figure tells
+// "found, but shown a few px off" (compression does that) from "not found". Their empty twins
+// (far-quiet…, goal 'quiet') are read with --seeds=6.
+//
 // Ground scenarios (g-…, ground: true; batch 2): target velocities are their own, against the
 // ground (own()); a target larger than 3 px matches within half its size + 3 px (3 px otherwise,
 // as everywhere else); false tracks are tracks on no target in most of their frames (the
@@ -144,6 +152,36 @@ export const SCENARIOS = {
     'g-large-5': { what: 'fixed camera, 12×12 px contrast 25 and 20×20 px contrast −25 at 5 px a frame', goal: 'recall', ground: true,
         scene: seed => ({ ...base, frames: 100, camera: 'tripod', seed, targets: [own(12, 25, 60, 110, 5, 0.5), own(20, -25, 80, 260, 5, -0.3)] }) },
 };
+
+// --- far, small, slow objects on the ground (batch 3) ---
+// nine targets at one speed v (px a frame, against the ground): rows by size, columns by contrast,
+// sign alternating (as in tools/far.mjs)
+const FAR_SIZES = [1, 2, 3], FAR_CONTRASTS = [8, 12, 20];
+const farTargets = v => FAR_SIZES.flatMap((size, r) => FAR_CONTRASTS.map((c, q) =>
+    own(size, ((r + q) % 2 ? -1 : 1) * c, 110 + 200 * q, 70 + 110 * r, v, 0.3 * v * (r % 2 ? -1 : 1))));
+const farScene = (v, frames, camera) => seed => ({ ...base, frames, camera, seed, targets: farTargets(v) });
+const farQuiet = (frames, camera) => seed => ({ ...base, frames, camera, seed, targets: [] });
+const far = (what, v, frames, camera, extra = {}) => ({ what: `${what}: nine targets (1–3 px × contrast 8–20) at ${v} px a frame`, goal: 'recall', ground: true, matrix: true, speed: v, ...extra, scene: farScene(v, frames, camera) });
+Object.assign(SCENARIOS, {
+    'far-0.03': far('tripod', 0.03, 500, 'tripod'),
+    'far-0.05': far('tripod', 0.05, 500, 'tripod'),
+    'far-0.1': far('tripod', 0.1, 400, 'tripod'),
+    'far-0.2': far('tripod', 0.2, 300, 'tripod'),
+    'far-0.5': far('tripod', 0.5, 220, 'tripod'),
+    'far-hover-0.1': far('hovering camera', 0.1, 400, 'hover'),
+    'far-hover-0.2': far('hovering camera', 0.2, 300, 'hover'),
+    'far-0.2-crf23': far('tripod, H.264 CRF 23, keyframe every 30', 0.2, 300, 'tripod', { h264: 23, gop: 30 }),
+    'far-0.2-crf28': far('tripod, H.264 CRF 28, keyframe every 30', 0.2, 300, 'tripod', { h264: 28, gop: 30 }),
+    'far-0.5-crf23': far('tripod, H.264 CRF 23, keyframe every 30', 0.5, 220, 'tripod', { h264: 23, gop: 30 }),
+    'far-0.5-crf28': far('tripod, H.264 CRF 28, keyframe every 30', 0.5, 220, 'tripod', { h264: 28, gop: 30 }),
+    'far-0.2-crf23-g60': far('tripod, H.264 CRF 23, keyframe every 60', 0.2, 300, 'tripod', { h264: 23, gop: 60 }),
+    // empty twins (read with --seeds=6)
+    'far-quiet': { what: 'no target, tripod, 500 frames (twin of far-…)', goal: 'quiet', ground: true, scene: farQuiet(500, 'tripod') },
+    'far-quiet-hover': { what: 'no target, hovering camera, 500 frames', goal: 'quiet', ground: true, scene: farQuiet(500, 'hover') },
+    'far-quiet-crf23': { what: 'no target, tripod, H.264 CRF 23, keyframe every 30', goal: 'quiet', ground: true, h264: 23, gop: 30, scene: farQuiet(500, 'tripod') },
+    'far-quiet-crf28': { what: 'no target, tripod, H.264 CRF 28, keyframe every 30', goal: 'quiet', ground: true, h264: 28, gop: 30, scene: farQuiet(500, 'tripod') },
+    'far-quiet-crf23-g60': { what: 'no target, tripod, H.264 CRF 23, keyframe every 60', goal: 'quiet', ground: true, h264: 23, gop: 60, scene: farQuiet(500, 'tripod') },
+});
 const trees640 = [
     { fx: 100, fy: 80, r: 30, parallax: 0.12, sway: 1.5, swayPeriod: 37 },
     { fx: 280, fy: 250, r: 40, parallax: 0.18, sway: 2.5, swayPeriod: 29 },
@@ -233,7 +271,7 @@ for (const c of configs) if (!CONFIGS[configOf(c)] || (c.includes('@') && !/@rt\
 for (const s of scenes) if (!SCENARIOS[s]) throw new Error(`unknown scenario ${s}`);
 
 // Runs in the page: one scene (synthetic, or raw grey frames from a URL) through a pipeline.
-async function runInPage({ scene, raw, params, every = 1, ground = false, stops = [] }) {
+async function runInPage({ scene, raw, params, every = 1, ground = false, stops = [], matrix = false }) {
     const { createScene, greyToRgba } = await import('/src/synth.js');
     const { createPipeline } = await import('/src/pipeline.js');
     const { matchFrame } = await import('/src/score.js');
@@ -272,6 +310,7 @@ async function runInPage({ scene, raw, params, every = 1, ground = false, stops 
     };
     const stopped = (id, k) => (stops[id] || []).some(([a, b]) => k >= a && k <= b);
     const seenTargets = new Set();
+    const per = {};     // matrix scenarios: per target { n, hit3, hit6, first, firstConf }
     let laneTf = 0, laneTp = 0, laneFp = 0, passes = 0;
     for (let k = 0; k < frames; k++) {
         // as in real time: frames not pushed are dropped ones (the next one carries the gap)
@@ -317,6 +356,16 @@ async function runInPage({ scene, raw, params, every = 1, ground = false, stops 
             if (id !== null) e.on[id] = (e.on[id] || 0) + 1;
         });
         for (const x of m.matches) firstConf[x.target] ??= r.frame;
+        if (matrix) {
+            const hit3 = new Set(m.matches.map(x => x.target));
+            for (const t of truth) {
+                const e = per[t.id] ??= { n: 0, hit3: 0, hit6: 0, first: r.frame, firstConf: null };
+                e.n++;
+                const near3 = hit3.has(t.id);
+                if (near3) { e.hit3++; e.firstConf ??= r.frame; }
+                if (near3 || r.confirmed.some(c => Math.hypot(c.box.cx - t.cx, c.box.cy - t.cy) <= 6)) e.hit6++;
+            }
+        }
     }
     pipe.dispose();
     ms.sort((a, b) => a - b);
@@ -328,7 +377,7 @@ async function runInPage({ scene, raw, params, every = 1, ground = false, stops 
         fit90: fit90.length ? fit90[fit90.length >> 1] : null, minCover,
         falseTracks: ground ? list.filter(e => !onTarget(e)).length : list.filter(e => e.hit < e.n / 2).length,
         targetTracks: list.filter(onTarget).length, targets: seenTargets.size, processed: shown, laneTf, laneTp, laneFp, passes,
-        lat, ms: ms.length ? ms[ms.length >> 1] : null };
+        lat, per, ms: ms.length ? ms[ms.length >> 1] : null };
 }
 
 // H.264 version of a scene, decoded to raw grey frames the page can fetch.
@@ -359,7 +408,7 @@ await Promise.all(pages.map(async ({ page }) => {
         const sc = SCENARIOS[w.s];
         const scene = sc.scene(w.seed);
         const params = { ...CONFIGS[configOf(w.c)], ...extra };
-        const opts = { every: everyOf(w.c), ground: !!sc.ground, stops: Object.fromEntries(scene.targets.map((t, i) => [i, t.stops || []])) };
+        const opts = { every: everyOf(w.c), ground: !!sc.ground, matrix: !!sc.matrix, stops: Object.fromEntries(scene.targets.map((t, i) => [i, t.stops || []])) };
         const spec = sc.h264 ? { raw: await rawClip(scene, sc.h264, sc.gop), params, ...opts } : { scene, params, ...opts };
         if (spec.raw) spec.raw.url = new URL(spec.raw.url, page.url()).href;
         const r = await page.evaluate(runInPage, spec);
@@ -393,6 +442,19 @@ for (const [key, runs] of Object.entries(results)) {
         laneRaw: sum(r => r.passes || 0) ? (sum(r => r.laneTf) ? sum(r => r.laneTp) / sum(r => r.laneTf) : null) : undefined,
         laneRawFp: sum(r => r.passes || 0) ? sum(r => r.laneFp) / sum(r => r.passes) : undefined,
     };
+    const sc = SCENARIOS[key.split('|')[0]];
+    if (sc.matrix) {
+        // per target over all seeds (the layout is the same in every seed)
+        const targets = sc.scene(seeds[0]).targets;
+        summary[key].perTarget = targets.map((t, i) => {
+            const es = runs.map(r => r.per[i]).filter(Boolean);
+            const lats = es.filter(e => e.firstConf !== null).map(e => e.firstConf - e.first).sort((a, b) => a - b);
+            const n = es.reduce((a, e) => a + e.n, 0);
+            return { size: t.size, contrast: t.contrast, n, hit3: es.reduce((a, e) => a + e.hit3, 0), hit6: es.reduce((a, e) => a + e.hit6, 0),
+                recall3: n ? es.reduce((a, e) => a + e.hit3, 0) / n : null, recall6: n ? es.reduce((a, e) => a + e.hit6, 0) / n : null,
+                lat: lats.length ? lats[lats.length >> 1] : null, found: lats.length, seeds: es.length };
+        });
+    }
 }
 const baseline = fs.existsSync(BASELINE) ? JSON.parse(fs.readFileSync(BASELINE, 'utf8')) : null;
 const pct = v => (v === null || v === undefined ? '   –' : `${Math.round(v * 100)}%`.padStart(4));
@@ -423,6 +485,12 @@ for (const s of scenes) {
             `${num(r.ms, 0)} ms`,
         ].filter(Boolean);
         console.log(`  ${c.padEnd(14)} ${parts.join('  ')}${met === null ? '' : met ? '   ✓' : '   ✗'}`);
+        if (r.perTarget) {
+            // rows = size, columns = contrast: recall within 3 px / within 6 px (latency in frames)
+            const cell = e => `${e.n ? Math.round(e.recall3 * 100) : '–'} / ${e.n ? Math.round(e.recall6 * 100) : '–'} (${e.lat === null ? '–' : e.lat})`.padEnd(17);
+            console.log(`  ${''.padEnd(14)} contrast   ${FAR_CONTRASTS.map(x => `${x}`.padEnd(17)).join('')}  (recall 3 px / 6 px (latency in frames); sign alternates)`);
+            FAR_SIZES.forEach((size, row) => console.log(`  ${''.padEnd(14)} ${`${size} px:`.padEnd(10)} ${r.perTarget.slice(3 * row, 3 * row + 3).map(cell).join('')}`));
+        }
     }
 }
 const out = { created: new Date().toISOString(), seeds, jobs, configs, summary };
