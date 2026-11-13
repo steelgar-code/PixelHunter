@@ -84,9 +84,11 @@ try {
 
     const off = await page.evaluate(([o]) => runSlow(o, { slow: false }, 60), [tripod]);
     ok('lane off: slow objects not found (as before), ring of 3 frames, no slow stats', off.recall === 0 && off.ring === 3 && Object.keys(off.states).length === 0, { recall: off.recall, ring: off.ring });
-    const off2 = await page.evaluate(([o]) => runSlow(o, {}, 60), [tripod]);
-    ok('… the same results as without the setting at all', off2.sig === off.sig);
     const on = await page.evaluate(([o]) => runSlow(o, { slow: true }, 60), [tripod]);
+    // (on by default since 0.14.0; the presets leave it alone)
+    const dflt = await page.evaluate(([o]) => runSlow(o, {}, 60), [tripod]);
+    ok('the default is the lane on: the same results as with the setting on', dflt.sig === on.sig && dflt.ring === 25);
+    ok('… and no preset sets it', await page.evaluate(async () => { const { PRESETS } = await import('/src/params.js'); return Object.values(PRESETS).every(p => !('slow' in p.values) && !('slowMax' in p.values) && !('slowBudget' in p.values)); }));
     ok('lane on, tripod: slow objects (0.3, 0.4 px a frame) confirmed from frame 60 on', on.recall >= 0.8, { recall: on.recall, passes: on.passes, ns: on.ns });
     // (while the history fills, shorter comparisons every 2 frames: n = 2 … 10, then 12 every 4)
     ok('… with the longest comparison, a pass every 4 frames once the history is full', on.ns.includes(12) && on.passes >= 24 && on.passes <= 34, { passes: on.passes, ns: on.ns });

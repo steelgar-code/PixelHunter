@@ -158,12 +158,15 @@ export const CONFIGS = {
     compressed: PRESETS.compressed.values,
     'mid+shift': { shiftCheck: true },
     // the slow lane (batch 2)
+    // (on by default since 0.14.0: mid+slow equals mid; mid-slow is Mid without the lane, as Mid was until 0.13.0)
     'mid+slow': { slow: true },
+    'mid-slow': { slow: false },
+    'highest-slow': { ...PRESETS.highest.values, slow: false },
     // the border margin along the frame's own edges (default since 0.13.0): mid-0.12 is Mid without
     // it, as 0.12.0 (on a tripod nearly all of 0.12.0's candidates were in the outermost 1–2 px)
-    'mid+edge': { edgeMargin: true },
-    'mid-0.12': { edgeMargin: false },
-    'highest-0.12': { ...PRESETS.highest.values, edgeMargin: false },
+    'mid+edge': { edgeMargin: true, slow: false },
+    'mid-0.12': { edgeMargin: false, slow: false },
+    'highest-0.12': { ...PRESETS.highest.values, edgeMargin: false, slow: false },
     'mid+slow+edge': { slow: true, edgeMargin: true },
     'highest+slow': { ...PRESETS.highest.values, slow: true },
     // the camera-motion fit as before 0.12.0 (every point that agrees, always the full fit, LK

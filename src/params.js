@@ -48,9 +48,9 @@ export const PARAM_DEFS = [
     { key: 'shiftCheck', label: 'Drop background-shift edges (trees, branches)', group: 'detect', type: 'bool', default: false, preset: false },
     { key: 'shiftMax', label: 'Max background shift', group: 'detect', type: 'number', default: 2, min: 1, max: 5, step: 1, unit: 'px', preset: false , when: { shiftCheck: true } },
     // the slow lane (slowLane.js)
-    { key: 'slow', label: 'Also look for slow objects', group: 'detect', type: 'bool', default: false },
-    { key: 'slowMax', label: 'Longest comparison', group: 'detect', type: 'number', default: 12, min: 2, max: 12, step: 1, unit: 'frames', when: { slow: true } },
-    { key: 'slowBudget', label: 'Camera movement allowed', group: 'detect', type: 'number', default: 6, min: 1, max: 20, step: 0.5, unit: 'px', when: { slow: true } },
+    { key: 'slow', label: 'Also look for slow objects', group: 'detect', type: 'bool', default: true, preset: false },
+    { key: 'slowMax', label: 'Longest comparison', group: 'detect', type: 'number', default: 12, min: 2, max: 12, step: 1, unit: 'frames', preset: false, when: { slow: true } },
+    { key: 'slowBudget', label: 'Camera movement allowed', group: 'detect', type: 'number', default: 6, min: 1, max: 20, step: 0.5, unit: 'px', preset: false, when: { slow: true } },
     { key: 'zonesMotion', label: 'Also ignore zones for camera motion', group: 'zones', type: 'bool', default: true },
 
     // temporal confirmation (tracker.js)
@@ -98,13 +98,13 @@ const DEFS = new Map(PARAM_DEFS.map(d => [d.key, d]));
 
 // Sensitivity presets: starting points for detection, confirmation and camera motion, to tune
 // from by hand. They set those groups only (not playback, view or zones), and leave options
-// marked preset: false alone (the background-shift check). Mid is the defaults.
+// marked preset: false alone (the background-shift check, the slow lane). Mid is the defaults.
 // Areas are in processing-resolution px.
 const MID = Object.fromEntries(PARAM_DEFS.filter(d => ['detect', 'track', 'motion'].includes(d.group) && d.preset !== false).map(d => [d.key, d.default]));
 export const PRESETS = {
     highest: {
         label: 'Highest',
-        hint: 'fainter 1–3 px objects (contrast ~10–15): adaptive at 6σ, stricter confirmation (4 of 6), finer camera motion; slower to run. Slow movers: raise Frame stride',
+        hint: 'fainter 1–3 px objects (contrast ~10–15): adaptive at 6σ, stricter confirmation (4 of 6), finer camera motion; slower to run. Slow movers: "Also look for slow objects" (on unless you turned it off); on a moving camera raise Frame stride',
         values: {
             ...MID,
             detectMode: 'adaptive', sigmas: 6, weakMargin: 2,
@@ -114,7 +114,7 @@ export const PRESETS = {
     },
     mid: {
         label: 'Mid',
-        hint: 'the defaults: adaptive detector at 7σ, objects 2–20 px down to contrast ~15, ≥ 2 px/frame',
+        hint: 'the defaults: adaptive detector at 7σ, objects 2–20 px down to contrast ~15, ≥ 2 px/frame (slower ones, down to about 0.2 px/frame, with "Also look for slow objects" while the camera hardly moves)',
         values: { ...MID },
     },
     low: {
