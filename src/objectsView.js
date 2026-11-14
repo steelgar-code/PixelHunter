@@ -4,7 +4,7 @@
 // per object on the timeline, and the history drawer under the player. The data comes from
 // objects.js; this module only draws it and turns clicks into calls back to main.js.
 
-import { historyCsv, objectsCsv } from './objects.js';
+import { historyCsv, objectsCsv, LANE_NAMES } from './objects.js';
 
 const PIN = '#ff9f43', LIVE = '#ff4fd8';
 const THUMB = 64;                  // px, stored thumbnail size
@@ -70,6 +70,23 @@ export function createObjectsView(d) {
         ctx.drawImage(src, Math.round(box.cx - side / 2), Math.round(box.cy - side / 2), side, side, 0, 0, THUMB, THUMB);
     }
 
+    // A slow-lane or long-comparison object: its picture from that lane's own frames, seconds apart
+    // (crops.js: red the earlier frame, green the frame it was seen in, blue the later one), so the
+    // movement shows; in neighbouring frames such an object does not move.
+    let laneTmp = null;
+    function captureLane(oid, crop) {
+        let c = thumbs.get(oid);
+        if (!c) { c = document.createElement('canvas'); c.width = c.height = THUMB; thumbs.set(oid, c); }
+        if (!laneTmp || laneTmp.width !== crop.side) { laneTmp = document.createElement('canvas'); laneTmp.width = laneTmp.height = crop.side; }
+        laneTmp.getContext('2d').putImageData(new ImageData(new Uint8ClampedArray(crop.rgba), crop.side, crop.side), 0, 0);
+        const ctx = c.getContext('2d');
+        ctx.imageSmoothingEnabled = false;
+        // the middle half: about ±8 px around the object, magnified
+        const q = crop.side / 4;
+        ctx.drawImage(laneTmp, q, q, crop.side / 2, crop.side / 2, 0, 0, THUMB, THUMB);
+        c.dataset.lane = '1';
+    }
+
     function drawThumb(canvas, oid) {
         const ctx = canvas.getContext('2d');
         ctx.imageSmoothingEnabled = false;
@@ -87,10 +104,12 @@ export function createObjectsView(d) {
         const fresh = r.time > maxTime + 1e-6;
         if (fresh) maxTime = r.time;
         const byOid = new Map();
-        for (const t of r.tracks) if (t.matched && t.box) { const oid = objs.objectOfTrack(t.id); if (oid !== null) byOid.set(oid, t.box); }
+        for (const t of r.tracks) if (t.matched && t.box) { const oid = objs.objectOfTrack(t.id); if (oid !== null) byOid.set(oid, t); }
         for (const oid of new Set([...improved, ...created])) {
-            const box = byOid.get(oid);
-            if (box && slot && slot.view) capture(oid, slot.view.canvas, box);
+            const t = byOid.get(oid);
+            const crop = t && t.lane && d.laneCrop ? d.laneCrop(t.id) : null;
+            if (crop) captureLane(oid, crop);
+            else if (t && slot && slot.view) capture(oid, slot.view.canvas, t.box);
         }
         if (fresh && created.length) {
             const shown = created.filter(oid => !objs.isHidden(oid));
@@ -163,7 +182,7 @@ export function createObjectsView(d) {
             head.append(chip);
             const size = document.createElement('span');
             size.className = 'osize mono';
-            size.textContent = `${sizeText(o)} · ${o.speed.toFixed(1)} px/f`;
+            size.textContent = `${sizeText(o)} · ${o.speed.toFixed(o.speed < 0.95 ? 2 : 1)} px/f${o.lane && o.lane !== 'fast' ? ` · ${LANE_NAMES[o.lane]}` : ''}`;
             const data = document.createElement('span');
             data.className = 'odata mono';
             data.textContent = `${d.fmtTime(o.first.time)}–${d.fmtTime(o.last.time)} · ${o.frames} frames`;
@@ -343,6 +362,7 @@ export function createObjectsView(d) {
             ['Size', `${o.w.toFixed(1)}×${o.h.toFixed(1)} px`],
             ['Contrast', `${Math.round(o.contrast) > 0 ? '+' : ''}${Math.round(o.contrast) || 0} grey`],
             ['Speed', `${o.speed.toFixed(2)} px/frame`],
+            ['Found by', LANE_NAMES[o.lane || 'fast']],
             ...(last && last.score !== undefined ? [['Strength', `${last.score}σ`]] : []),
             ['First seen', `${d.fmtTime(o.first.time)} #${o.first.frame ?? '–'}`],
             ...(o.confirmedAt && o.confirmedAt.frame !== o.first.frame ? [['Confirmed', `${d.fmtTime(o.confirmedAt.time)} #${o.confirmedAt.frame}`]] : []),
@@ -465,6 +485,11 @@ export function createObjectsView(d) {
         const data = document.createElement('span');
         data.className = 'cdata mono';
         data.textContent = `${sizeText(o)} · ${d.fmtTime(o.confirmedAt ? o.confirmedAt.time : o.first.time)}`;
+        if (o.lane && o.lane !== 'fast') {
+            // the picture is from the lane's own frames: say how to read it
+            data.textContent += ` · ${LANE_NAMES[o.lane]}`;
+            card.title = 'Inspect it. Picture: red where it was earlier, blue where it was later';
+        }
         const btns = document.createElement('div');
         btns.className = 'cbtns';
         const keep = document.createElement('button');
@@ -681,7 +706,7 @@ export function createObjectsView(d) {
         // the objects with labels, for the detections export
         summary() {
             return objs.list().map(o => ({ id: o.id, label: o.label, ...(o.labelId ? { labelId: o.labelId } : {}), first: o.first, confirmed: o.confirmedAt || null, last: o.last, frames: o.frames,
-                w: +o.w.toFixed(1), h: +o.h.toFixed(1), contrast: +o.contrast.toFixed(1), speed: +o.speed.toFixed(2) }));
+                w: +o.w.toFixed(1), h: +o.h.toFixed(1), contrast: +o.contrast.toFixed(1), speed: +o.speed.toFixed(2), ...(o.lane && o.lane !== 'fast' ? { lane: o.lane } : {}) }));
         },
     };
 }

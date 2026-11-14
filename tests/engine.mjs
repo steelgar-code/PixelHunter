@@ -1,7 +1,8 @@
 // The Workers engine (src/workerPipeline.js, src/procWorker.js): the same candidates and objects
 // as the main thread, on a synthetic scene and on a video file; switching engines while paused;
 // stepping and going back; the debug views (Stabilised, Raw diff, Mask); a Benchmark run
-// comparing both engines; the slow lane (its candidates pass by pass, its tracks, no Mats left).
+// comparing both engines; the slow lane (its candidates pass by pass, its tracks, no Mats left); the
+// long comparison (the same).
 import { launch, ok, openApp, loadScene, showTab } from './lib/env.mjs';
 import { sceneClip } from './lib/clips.mjs';
 import { instrumentMats } from './lib/mats.mjs';
@@ -142,6 +143,49 @@ try {
     ok('… and the same slow tracks, frame by frame, on both cameras', ['tripod', 'hover'].every(c => frames.some(k => k.startsWith(c) && slowRun.main[k].t))
         && frames.every(k => slowRun.main[k].t === slowRun.work[k].t), frames.filter(k => slowRun.main[k].t !== slowRun.work[k].t).slice(0, 3));
     ok('… no Mats left behind by either engine', slowRun.live === 0, slowRun.live);
+
+    // --- the long comparison: the same blocks, passes, candidates and tracks in both engines ---
+    await page.evaluate(instrumentMats);
+    const longRun = await page.evaluate(async () => {
+        const { createScene, greyToRgba } = await import('/src/synth.js');
+        const { createPipeline } = await import('/src/pipeline.js');
+        const { createWorkerPipeline } = await import('/src/workerPipeline.js');
+        const base = { width: 480, height: 270, noise: 2, frames: 170, seed: 14, shapes: 10,
+            targets: [{ size: 3, contrast: 25, fx: 120, fy: 90, vx: 0.12, vy: 0.03 }, { size: 2, contrast: -20, fx: 330, fy: 180, vx: -0.1, vy: 0.04 }] };
+        const run = async (engine, camera) => {
+            const s = createScene({ ...base, camera });
+            const params = { ...__ph.params, mode: 'everyFrame', slow: true, long: true, engine };
+            const pipe = engine === 'workers' ? createWorkerPipeline(cv, params) : createPipeline(cv, params);
+            if (pipe.ready) await pipe.ready;
+            const out = {};
+            for (let k = 0; k < s.frames; k++) {
+                const f = s.frame(k);
+                const r = (await pipe.push({ imageData: new ImageData(greyToRgba(f.grey), s.width, s.height), width: s.width, height: s.height,
+                    time: k / 25, frame: k, seq: k, gap: 0, jump: k === 0, truth: f.truth })).result;
+                if (!r) continue;
+                const L = r.long || {};
+                out[r.frame] = { state: L.state, m: L.m, B: L.B, c: L.list ? L.list.map(c => `${c.cx.toFixed(2)},${c.cy.toFixed(2)}`).sort().join(';') : null,
+                    t: r.tracks.filter(t => t.lane === 'long').map(t => `${t.id}:${t.state}:${t.box.cx.toFixed(1)},${t.box.cy.toFixed(1)}${t.early ? `+${t.early.length}` : ''}`).join(';') };
+            }
+            pipe.dispose();
+            return out;
+        };
+        const main = {}, work = {};
+        for (const camera of ['tripod', 'hover']) {
+            for (const [k, v] of Object.entries(await run('main', camera))) main[`${camera}:${k}`] = v;
+            for (const [k, v] of Object.entries(await run('workers', camera))) work[`${camera}:${k}`] = v;
+        }
+        await new Promise(r => setTimeout(r, 1500));
+        return { main, work, live: window.__liveMats() };
+    });
+    const lframes = Object.keys(longRun.main).filter(k => k in longRun.work);
+    const lpasses = lframes.filter(k => longRun.main[k].state === 'pass');
+    const ldiff = lframes.filter(k => JSON.stringify(longRun.main[k]) !== JSON.stringify(longRun.work[k]));
+    ok('long comparison (a tripod and a hovering camera): the same passes, lengths and candidates in both engines', lframes.length >= 330 && lpasses.length >= 12
+        && lpasses.some(k => longRun.main[k].c) && ldiff.length === 0, { frames: lframes.length, passes: lpasses.length, differ: ldiff.slice(0, 3).map(k => [k, longRun.main[k], longRun.work[k]]) });
+    ok('… and the same long tracks, frame by frame (some confirmed on each camera)', ['tripod', 'hover'].every(c => lframes.some(k => k.startsWith(c) && /:confirmed:/.test(longRun.main[k].t))),
+        lframes.filter(k => longRun.main[k].t).slice(-2).map(k => [k, longRun.main[k].t]));
+    ok('… no Mats left behind by either engine', longRun.live === 0, longRun.live);
     ok('no page errors', errors.length === 0, errors);
 } finally {
     await browser.close();

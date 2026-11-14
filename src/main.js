@@ -957,6 +957,8 @@ const view = createObjectsView({
     fileBase,
     exportMeta: () => ({ app: 'PixelHunter', version: APP_VERSION, source: source ? source.label : null, params: exportedParams() }),
     onLabel: oid => labels.onLabel(oid),
+    // a slow-lane or long-comparison track's picture from that lane's own frames ({ rgba, side } or null)
+    laneCrop: id => (pipeline && pipeline.laneCrop ? pipeline.laneCrop(id) : null),
 });
 ph.objectsView = view;
 
@@ -1476,6 +1478,18 @@ function slowText(sl) {
     return `±${sl.n} frames, every ${sl.cadence} · ${found}${sl.shown ? ` · ${sl.shown} track${sl.shown === 1 ? '' : 's'}` : ''}`;
 }
 
+// The long comparison's row: blocks compared and how far apart, how often, what its last pass found,
+// and how slow an object it can still find at that length (one that moves half its length over the
+// time compared: 3 px objects), or why it rests.
+function longText(l) {
+    if (!l || l.state === 'off') return '–';
+    if (l.state === 'resting') return `resting: ${l.reason}`;
+    if (l.state === 'waiting') return l.B ? `${l.reason || 'waiting for blocks'} (blocks of ${l.B} frames)` : 'waiting for frames';
+    const found = l.candidates === null || l.candidates === undefined ? (l.reason ? `no detection: ${l.reason}` : '–') : `${l.candidates} candidate${l.candidates === 1 ? '' : 's'}`;
+    const slowest = l.frames ? ` · slowest found ≈ ${(1.5 / l.frames).toFixed(2)} px a frame (3 px objects)` : '';
+    return `±${l.m} blocks of ${l.B} frames (±${l.secs.toFixed(1)} s), every ${l.cadenceFrames} frames · ${found}${l.shown ? ` · ${l.shown} track${l.shown === 1 ? '' : 's'}` : ''}${slowest}`;
+}
+
 function updateStats() {
     view.render();
     $('clearObjects').disabled = !objs.list().length && !log.count;
@@ -1512,6 +1526,8 @@ function updateStats() {
     $('stTracks').textContent = r ? `${r.confirmed.length} confirmed · ${nState('tentative')} tentative${nState('held') ? ` · ${nState('held')} held` : ''}` : '–';
     $('stSlow').hidden = $('rowSlowDt').hidden = !params.slow;
     $('stSlow').textContent = slowText(r && r.slow);
+    $('stLong').hidden = $('rowLongDt').hidden = !params.long;
+    $('stLong').textContent = longText(r && r.long);
     const sc = score && score.summary(), cs = confScore && confScore.summary();
     $('rowScore').hidden = !sc;
     const hit = v => (v === null ? '–' : `${Math.round(v * 100)} %`);

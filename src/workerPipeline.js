@@ -14,6 +14,8 @@
 // is detected, frame n+1 is taken in and its camera motion fitted. `accepting` says when the
 // next frame may be pushed. Debug views: Stabilised on the main thread; Raw diff / Mask: while
 // one is shown, the workers send their parts with each frame.
+// The long comparison (longLane.js) likewise: its blocks are built on the page and sent to the
+// detection workers when they close (one more frame-sized message to each worker every B frames).
 // The slow lane (slowLane.js) runs as in pipeline.js: its plan, tracker and display on the main
 // thread, its detection as the same `detect` message to the workers (lane: 'slow'), sent along
 // with the fast lane's.
@@ -24,8 +26,9 @@ import { scaleH, mul, normalize, composeNewestFirst } from './homography.js';
 import { mulberry32 } from './synth.js';
 import { stackCrop, CROP } from './crops.js';
 import { makeCanvas, egoParams, detectParams, trackParams, fitOf, fitErrOf, MAX_FPS, NEAR_MISSES, MAX_STRIDE,
-    laneParams, prepareBlobs, joinLanes, slowSummary, nearList, framesOf } from './pipeline.js';
-import { createSlowLane, ringFrames, slowDetectParams } from './slowLane.js';
+    laneParams, prepareBlobs, joinLanes, slowSummary, nearList, framesOf, longParams, createBlockStore, plain } from './pipeline.js';
+import { createSlowLane, ringFrames, slowDetectParams, SLOW_ID_BASE } from './slowLane.js';
+import { createLongLane, longDetectParams, LONG_ID_BASE } from './longLane.js';
 import { CV_URL } from './cvLoader.js';
 
 // Engine 'auto': Workers where there are at least four cores and the browser runs module workers
@@ -86,6 +89,10 @@ export function createWorkerPipeline(cv, params) {
     let p = { ...params };
     const tracker = createTracker(trackParams(p));
     const lane = createSlowLane(laneParams(p));
+    // the long comparison: its blocks are built here on the page (one warp a frame, in stage B, in
+    // order) and sent to the detection workers as they close, like frames
+    const long = createLongLane(longParams(p));
+    let blocks = null;
     const nDet = Number(p.workers) > 0 ? Math.min(8, Math.round(Number(p.workers))) : autoWorkers();
     const egoW = spawn('ego', egoParams(p));
     const detW = Array.from({ length: nDet }, () => spawn('detect', detectParams(p)));
@@ -104,6 +111,7 @@ export function createWorkerPipeline(cv, params) {
     let detectId = 0;
     let disposed = false;
 
+    const laneCropOf = id => (id >= LONG_ID_BASE ? long.crop(id) : id >= SLOW_ID_BASE ? lane.crop(id) : null);
     const stride = () => Math.min(MAX_STRIDE, Math.max(1, Math.round(Number(p.stride) || 1)));
     const at = back => slots[(head - back + slots.length * 2) % slots.length];
     const toAll = msg => { egoW.post(msg); for (const w of detW) w.post(msg); };
@@ -141,6 +149,7 @@ export function createWorkerPipeline(cv, params) {
         idx = -1;
         tracker.reset();
         lane.reset();
+        long.reset();
         toAll({ type: 'reset' });
     }
 
@@ -271,8 +280,24 @@ export function createWorkerPipeline(cv, params) {
         const { s } = ctx;
         const L = slots.length;
         const at = back => slots[(ctx.head - back + L * 2) % L];
-        if (ctx.jump) { tracker.reset(); lane.reset(); }
+        if (ctx.jump) { tracker.reset(); lane.reset(); long.reset(); }
         const tB = performance.now();
+        // the long comparison's block frames: the newest frame into the block being built; a block
+        // that closes goes to every detection worker
+        let longOps = 0;
+        if (p.long) {
+            blocks ??= createBlockStore(cv);
+            blocks.ensure(geom);
+            const closed = blocks.apply(long.addFrame({ e: ctx.count >= 2 ? ctx.slot.egoIn : null, meta: ctx.slot.meta, frames: ctx.count >= 2 ? framesOf(at)(0) : 1, geom }), ctx.slot.grey, geom);
+            for (const c of closed) {
+                const b = blocks.at(c.slot);
+                for (const w of detW) {
+                    const g = b.grey.data.slice(), sm = b.small.data.slice();
+                    w.post({ type: 'block', id: c.seq, grey: g, small: sm, w: geom.w, h: geom.h, sw: geom.sw, sh: geom.sh }, [g.buffer, sm.buffer]);
+                }
+            }
+            longOps = performance.now() - tB;
+        }
         if (ctx.count < s + 1) return { slot: at(ctx.count - 1), result: null };
         const cur = at(s);
         const egoPrev = ctx.count >= s + 2 ? cur.egoIn : null;
@@ -297,6 +322,16 @@ export function createWorkerPipeline(cv, params) {
                 const P = slowPlan.pass;
                 slowP = detectParts({ prev: at(2 * P.n).meta.seq, cur: at(P.n).meta.seq, next: ctx.slot.meta.seq, Hprev: P.Hprev, Hnext: P.Hnext,
                     Hs: P.Hs, fitErr: P.fitErr, tracked: P.tracked, near: P.near, params: slowDetectParams(detectParams(p), p) }, 'slow')
+                    .catch(e => ({ ok: false, reason: `detection worker: ${e.message}`, candidates: [] }));
+            }
+        }
+        let longPlan = null, longP = null;
+        if (p.long) {
+            longPlan = long.plan({ geom, wantTracked: true, nearMargin: p.nearMargin, nearOf: nearList });
+            if (longPlan.pass) {
+                const P = longPlan.pass;
+                longP = detectParts({ prev: P.seqs.prev, cur: P.seqs.cur, next: P.seqs.next, blocks: true, Hprev: P.Hprev, Hnext: P.Hnext,
+                    Hs: P.Hs, fitErr: P.fitErr, tracked: P.tracked, near: P.near, params: longDetectParams(detectParams(p), p) }, 'long')
                     .catch(e => ({ ok: false, reason: `detection worker: ${e.message}`, candidates: [] }));
             }
         }
@@ -337,12 +372,26 @@ export function createWorkerPipeline(cv, params) {
                 const P = slowPlan.pass, u = at(P.n);
                 d = await slowP;
                 lane.step(P, d, d.ok ? prepareBlobs(d, u.grey, p) : null, ctx.idx, { time: u.meta.time, frame: u.meta.frame });
+                lane.keepCrops({ prev: plain(at(2 * P.n).grey), cur: plain(u.grey), next: plain(ctx.slot.grey), Hb: P.Hprev, Hf: P.Hnext });
             }
             slow = lane.shown({ at, idx: ctx.idx, count: ctx.count, s, geom, fast: tracks || [], frames: framesOf(at) });
             slowInfo = slowSummary(lane, d, performance.now() - t3);
         }
+        let longT = [], longInfo = null;
+        if (p.long) {
+            const t5 = performance.now();
+            let d = null;
+            if (longP) {
+                const P = longPlan.pass;
+                d = await longP;
+                long.step(P, d, d.ok ? prepareBlobs(d, blocks.at(P.slots.cur).grey, p) : null);
+                long.keepCrops({ prev: plain(blocks.at(P.slots.prev).grey), cur: plain(blocks.at(P.slots.cur).grey), next: plain(blocks.at(P.slots.next).grey), Hb: P.Hprev, Hf: P.Hnext });
+            }
+            longT = long.shown({ s, others: [...(tracks || []), ...slow] });
+            longInfo = slowSummary(long, d, performance.now() - t5 + longOps);
+        }
         const t4 = performance.now();
-        const joined = joinLanes(tracks, slow);
+        const joined = joinLanes(tracks, longT.length ? [...slow, ...longT] : slow);
         const hasViews = viewsOf === 'next';
         if (hasViews) viewsOf = null;
         const result = {
@@ -358,10 +407,11 @@ export function createWorkerPipeline(cv, params) {
             confirmed: joined.confirmed,
             held: joined.held,
             ...(slowInfo ? { slow: slowInfo } : {}),
+            ...(longInfo ? { long: longInfo } : {}),
             // grab: taking the frame and sending it; ego: waiting for camera motion; detect:
             // detection and tracking; total: the frame's own work (with the stages overlapping,
             // frames are taken faster than this)
-            timings: { grab: ctx.t1 - ctx.t0 + ctx.grabMs, ego: ctx.t2 - ctx.t1, detect: t3 - tB, ...(slowInfo ? { slow: t4 - t3 } : {}), total: ctx.t2 - ctx.t0 + ctx.grabMs + (t4 - tB) },
+            timings: { grab: ctx.t1 - ctx.t0 + ctx.grabMs, ego: ctx.t2 - ctx.t1, detect: t3 - tB - longOps, ...(slowInfo ? { slow: slowInfo.ms } : {}), ...(longInfo ? { long: longInfo.ms } : {}), total: ctx.t2 - ctx.t0 + ctx.grabMs + (t4 - tB) },
             engine: 'workers',
         };
         if (hasViews) viewsOf = result;
@@ -438,22 +488,26 @@ export function createWorkerPipeline(cv, params) {
             p = { ...p, ...next };
             tracker.setParams(trackParams(p));
             lane.setParams(laneParams(p));
+            long.setParams(longParams(p));
             egoW.post({ type: 'params', params: egoParams(p) });
             for (const w of detW) w.post({ type: 'params', params: detectParams(p) });
             if (cause && geom) { const g = geom; chainA = chainA.then(() => chainB).then(() => setup(g.srcW, g.srcH, cause)); }
         },
-        crop(cx, cy, side = CROP) {
+        crop(cx, cy, side = CROP, track = null) {
+            if (track && track.lane) { const c = laneCropOf(track.id); if (c && c.side === side) return c.rgba; }
             if (!stack) return null;
             const g = m => (m ? { cols: m.cols, rows: m.rows, data: m.data } : null);
             return stackCrop({ cur: g(stack.cur), prev: g(stack.prev), next: g(stack.next), Hb: stack.Hb, Hf: stack.Hf }, cx, cy, side);
         },
-        setPinned(ids) { tracker.setPinned(ids); lane.setPinned(ids); },
-        reset(cause = 'reset') { resetCause = cause; count = 0; idx = -1; stack = null; tracker.reset(); lane.reset(); egoW.post({ type: 'reset' }); },
+        laneCrop: id => laneCropOf(id),
+        setPinned(ids) { tracker.setPinned(ids); lane.setPinned(ids); long.setPinned(ids); },
+        reset(cause = 'reset') { resetCause = cause; count = 0; idx = -1; stack = null; tracker.reset(); lane.reset(); long.reset(); egoW.post({ type: 'reset' }); },
         dispose() {
             disposed = true;
             Promise.all([chainA, chainB]).then(() => {
                 freeAll();
                 for (const m of Object.values(scratch)) m.delete();
+                if (blocks) blocks.dispose();
             });
             egoW.terminate();
             for (const w of detW) w.terminate();

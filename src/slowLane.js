@@ -34,6 +34,7 @@
 
 import { createTracker } from './tracker.js';
 import { project, mul, normalize, composeNewestFirst, IDENTITY } from './homography.js';
+import { stackCrop, CROP } from './crops.js';
 
 export const SLOW_MAX = 12;            // frames: the longest comparison the ring can hold
 export const SLOW_TOP = 2;             // px a frame: fastest track the lane starts and keeps …
@@ -139,6 +140,18 @@ export function carryTrack(t, H, k, fitCarry = 0, lane = 'slow') {
 export const sameObject = (f, q) => Math.hypot(f.x - q.x, f.y - q.y) <= Math.max(SAME_PLACE, f.gate || 0)
     && Math.hypot(f.vx - q.vx, f.vy - q.vy) <= Math.max(SAME_SPEED, 0.5 * Math.hypot(f.vx, f.vy));
 
+// Crops of a lane's tracks from its own frames (crops.js stackCrop: red the earlier frame, green
+// frame u, blue the later one, lined up on u), so a picture of a slow object shows its movement:
+// neighbouring frames would show it standing still. Kept per track id from the last pass.
+export const LANE_CROP = CROP;         // px around the object (as the labels' crops)
+const CROPS_KEPT = 40;
+export function laneCrops(snap, stack) {
+    const out = new Map();
+    for (const t of snap.slice(-CROPS_KEPT)) if (t.box && t.matched) out.set(t.id, { rgba: stackCrop(stack, t.box.cx, t.box.cy, LANE_CROP), side: LANE_CROP });
+    return out;
+}
+export const LANE_TRAIL = 40;          // positions of a lane track's path kept for drawing (a pass every few frames)
+
 // source frames from slot `to` (older) to slot `from` (newer)
 const framesIn = (frames, from, to) => { let d = 0; for (let b = from; b < to; b++) d += frames(b); return d; };
 
@@ -151,9 +164,10 @@ export function createSlowLane(params = {}) {
     let snap = [];             // the tracker's tracks after the last pass (frame u)
     let fresh = false;         // the last pass's tracks not shown yet (hand `early` out once)
     let stats = { state: 'off' };
+    let crops = new Map();     // track id → { rgba, side }: the last pass's crops (laneCrops)
 
     function trackerParams(c) {
-        return { ...p.track, maxSpeed: p.slowTop ?? SLOW_TOP, holdFrames: Math.ceil((p.track.holdFrames ?? 50) / c),
+        return { ...p.track, trail: LANE_TRAIL, maxSpeed: p.slowTop ?? SLOW_TOP, holdFrames: Math.ceil((p.track.holdFrames ?? 50) / c),
             confirmSecs: (p.track.confirmSecs ?? 0.2) * c, fixedMinMove: SLOW_FIXED_MOVE, travelFit: p.travelFit ?? true,
             lineFit: true, maxTrackSpeed: (p.slowTop ?? SLOW_TOP) + (p.topSlack ?? SLOW_TOP_SLACK), keepMoving: p.keepMoving ?? true, speedPerSize: p.speedPerSize ?? SLOW_PER_SIZE,
             minTravel: (p.track.minTravel ?? 3) * (p.travelFactor ?? 1), pathTolerance: (p.track.pathTolerance ?? 1.5) * (p.pathFactor ?? 1) };
@@ -164,6 +178,7 @@ export function createSlowLane(params = {}) {
         lastU = lastPass = lastN = null;
         snap = [];
         fresh = false;
+        crops = new Map();
         stats = { state: p.slow ? 'waiting' : 'off', reason: 'waiting for frames' };
     }
 
@@ -174,6 +189,10 @@ export function createSlowLane(params = {}) {
         setParams(next) { p = { ...p, ...next }; },
         setPinned(ids) { tracker.setPinned(ids); },
         reset,
+        // after step: crops of its tracks from the pass's frames ({ prev, cur, next } grey
+        // { cols, rows, data }, Hb: u − n → u, Hf: u → u + n); crop(id): the last one of a track
+        keepCrops(stack) { crops = laneCrops(snap, stack); },
+        crop(id) { return crops.get(id) || null; },
 
         // Whether to make a pass now, and with what: { pass: { n, back: u's slot, Hprev, Hnext,
         // Hs, fitErr, H (last u → u) , dt, tracked, near } } or { rest: reason }.

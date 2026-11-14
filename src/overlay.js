@@ -101,9 +101,11 @@ export function drawTruth(ctx, tf, targets) {
     ctx.setLineDash([]);
 }
 
-// Confirmed tracks: a bold box (at least 16 px on screen), the track id and its recent path.
+// Confirmed tracks: a bold box (at least 16 px on screen, and always a few px clear of the object, so
+// the line never covers a 1–3 px object however far the view is zoomed), the track id and its recent
+// path (a slow-lane or long-comparison track keeps a longer one: tracker trail).
 export function drawTracks(ctx, tf, tracks, { colour = '#ff4fd8' } = {}) {
-    const min = 16 * tf.dpr;
+    const min = 16 * tf.dpr, gap = 3 * tf.dpr;
     ctx.lineWidth = 2 * tf.dpr;
     ctx.strokeStyle = ctx.fillStyle = colour;
     ctx.font = `600 ${11 * tf.dpr}px system-ui, sans-serif`;
@@ -117,7 +119,7 @@ export function drawTracks(ctx, tf, tracks, { colour = '#ff4fd8' } = {}) {
             ctx.globalAlpha = 1;
         }
         const b = t.box;
-        let x0 = tf.x(b.x - 0.5), y0 = tf.y(b.y - 0.5), x1 = tf.x(b.x + b.w - 0.5), y1 = tf.y(b.y + b.h - 0.5);
+        let x0 = tf.x(b.x - 0.5) - gap, y0 = tf.y(b.y - 0.5) - gap, x1 = tf.x(b.x + b.w - 0.5) + gap, y1 = tf.y(b.y + b.h - 0.5) + gap;
         if (x1 - x0 < min) { const c = (x0 + x1) / 2; x0 = c - min / 2; x1 = c + min / 2; }
         if (y1 - y0 < min) { const c = (y0 + y1) / 2; y0 = c - min / 2; y1 = c + min / 2; }
         ctx.strokeRect(x0, y0, x1 - x0, y1 - y0);

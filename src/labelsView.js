@@ -206,9 +206,9 @@ export function createLabelsView(d) {
             if (pipe) {
                 const c = crops.get(o.id) || { best: null, along: [] };
                 crops.set(o.id, c);
-                if (o.best && o.best.frame === r.frame && (!c.best || o.best.q > c.best.q)) c.best = { q: o.best.q, rgba: pipe.crop(t.box.cx, t.box.cy), t: r.time };
+                if (o.best && o.best.frame === r.frame && (!c.best || o.best.q > c.best.q)) c.best = { q: o.best.q, rgba: pipe.crop(t.box.cx, t.box.cy, undefined, t), t: r.time };
                 const lastT = c.along.length ? c.along[c.along.length - 1].t : -Infinity;
-                if (c.along.length < CROPS_MAX - 1 && r.time - lastT >= CROP_EVERY) c.along.push({ rgba: pipe.crop(t.box.cx, t.box.cy), t: r.time });
+                if (c.along.length < CROPS_MAX - 1 && r.time - lastT >= CROP_EVERY) c.along.push({ rgba: pipe.crop(t.box.cx, t.box.cy, undefined, t), t: r.time });
                 if (o.labelId) attachCrops(o.id, o.labelId);
             }
             // an object not labelled yet on the path of a saved label: it is that label

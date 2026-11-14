@@ -30,7 +30,8 @@ import { scaleH, mul, normalize, composeNewestFirst } from './homography.js';
 import { mulberry32 } from './synth.js';
 import { contrastOf } from './objects.js';
 import { stackCrop, CROP } from './crops.js';
-import { createSlowLane, ringFrames, slowDetectParams } from './slowLane.js';
+import { createSlowLane, ringFrames, slowDetectParams, SLOW_ID_BASE } from './slowLane.js';
+import { createLongLane, longDetectParams, LONG_RING, LONG_ID_BASE } from './longLane.js';
 
 export function makeCanvas(w, h) {
     if (typeof OffscreenCanvas !== 'undefined') return new OffscreenCanvas(w, h);
@@ -56,6 +57,54 @@ export function prepareBlobs(detect, grey, p) {
     if (p.minSpatial > 0) for (const b of blobs) b.spatial = contrastOf(grey, b);
     return blobs;
 }
+// the long comparison's settings: long, longSecs, and its options to measure (long…: not in the settings)
+export const longParams = p => ({ ...Object.fromEntries(Object.entries(p).filter(([k]) => k.startsWith('long'))), long: !!p.long,
+    slowBudget: p.slowBudget, slowSparse: p.slowSparse, track: trackParams(p) });
+// The long comparison's pixels (longLane.js addFrame's ops): the running sum of the block being
+// built (32-bit float) and a ring of LONG_RING finished blocks (grey + small copy). Its Mats are
+// made on first use (only while the long comparison is on) and kept until the size changes.
+export function createBlockStore(cv) {
+    let dims = null, acc = null, f32 = null, tmp = null, ring = [];
+    function free() {
+        for (const m of [acc, f32, tmp]) if (m) m.delete();
+        for (const b of ring) { b.grey.delete(); b.small.delete(); }
+        acc = f32 = tmp = null; ring = []; dims = null;
+    }
+    function ensure(geom) {
+        const key = `${geom.w}x${geom.h}/${geom.sw}x${geom.sh}`;
+        if (dims === key) return;
+        free();
+        dims = key;
+        acc = new cv.Mat(geom.h, geom.w, cv.CV_32F);
+        f32 = new cv.Mat(geom.h, geom.w, cv.CV_32F);
+        tmp = new cv.Mat(geom.h, geom.w, cv.CV_32F);
+        for (let i = 0; i < LONG_RING; i++) ring.push({ grey: new cv.Mat(geom.h, geom.w, cv.CV_8UC1), small: new cv.Mat(geom.sh, geom.sw, cv.CV_8UC1) });
+    }
+    // ops on the newest frame's grey Mat; returns the blocks closed: [{ seq, slot }]
+    function apply(ops, grey, geom) {
+        const closed = [];
+        for (const o of ops) {
+            if (o.op === 'start') grey.convertTo(acc, cv.CV_32F);
+            else if (o.op === 'add') {
+                grey.convertTo(f32, cv.CV_32F);
+                const M = cv.matFromArray(3, 3, cv.CV_64F, o.H);
+                // H: anchor → this frame; with WARP_INVERSE_MAP each anchor pixel takes this frame's at H(x)
+                cv.warpPerspective(f32, tmp, M, new cv.Size(geom.w, geom.h), cv.INTER_LINEAR | cv.WARP_INVERSE_MAP, cv.BORDER_REPLICATE, new cv.Scalar(0));
+                M.delete();
+                cv.add(acc, tmp, acc);
+            } else if (o.op === 'close') {
+                const b = ring[o.slot];
+                acc.convertTo(b.grey, cv.CV_8U, 1 / o.n);
+                cv.resize(b.grey, b.small, new cv.Size(geom.sw, geom.sh), 0, 0, cv.INTER_AREA);
+                closed.push({ seq: o.seq, slot: o.slot });
+            }
+        }
+        return closed;
+    }
+    return { ensure, apply, at: slot => ring[slot], dispose: free };
+}
+// a grey Mat as the pure modules take images
+export const plain = m => ({ cols: m.cols, rows: m.rows, data: m.data });
 // the slow lane's tracks joined to the fast lane's in a result: { tracks, confirmed, held }
 export function joinLanes(fast, slow) {
     const tracks = slow.length ? [...(fast || []), ...slow] : fast || [];
@@ -103,6 +152,8 @@ export function createPipeline(cv, params) {
     const tracker = createTracker(trackParams(p));
     const lane = createSlowLane(laneParams(p));
     let slowDet = null;          // the slow lane's detector (made when first needed)
+    const long = createLongLane(longParams(p));
+    let longDet = null, blocks = null;   // the long comparison's detector and block frames (made when first needed)
     let geom = null;             // { srcW, srcH, w, h (processing), scale, sw, sh, kx, ky, stride }
     let slots = [];              // 2s+1: { grey, small, meta, egoIn, view }
     let views = [];              // s+1 colour canvases for display
@@ -117,6 +168,7 @@ export function createPipeline(cv, params) {
     let viewData = null;         // ImageData for grey views
     let stack = null;            // frames t−s, t, t+s and the fits between them, for crops (until the next push)
 
+    const laneCropOf = id => (id >= LONG_ID_BASE ? long.crop(id) : id >= SLOW_ID_BASE ? lane.crop(id) : null);
     const stride = () => Math.min(MAX_STRIDE, Math.max(1, Math.round(Number(p.stride) || 1)));
     // slot holding the frame `back` frames before the newest
     const at = back => slots[(head - back + slots.length * 2) % slots.length];
@@ -156,6 +208,7 @@ export function createPipeline(cv, params) {
         ego.reset();
         tracker.reset();
         lane.reset();
+        long.reset();
     }
 
     function grab(slot, f) {
@@ -209,6 +262,7 @@ export function createPipeline(cv, params) {
             ego.reset();
             tracker.reset();
             lane.reset();
+            long.reset();
         }
         head = (head + 1) % slots.length;
         const slot = slots[head];
@@ -223,6 +277,15 @@ export function createPipeline(cv, params) {
             const e = ego.update(at(1).small, slot.small);
             if (e.H) e.Hfull = jitter(scaleH(e.H, geom.kx, geom.ky), f.seq);
             slot.egoIn = e;
+        }
+        // the long comparison's block frames: the newest frame into the block being built
+        let longOps = null;
+        if (p.long) {
+            blocks ??= createBlockStore(cv);
+            blocks.ensure(geom);
+            const tl = performance.now();
+            blocks.apply(long.addFrame({ e: count >= 2 ? slot.egoIn : null, meta: slot.meta, frames: count >= 2 ? framesOf(at)(0) : 1, geom }), slot.grey, geom);
+            longOps = performance.now() - tl;
         }
         const t2 = performance.now();
         // until frame t+s is in, show the first frame since the reset
@@ -281,12 +344,31 @@ export function createPipeline(cv, params) {
                 d = slowDet.detect({ prev: older.grey, cur: u.grey, next: slot.grey, Hprev: P.Hprev, Hnext: P.Hnext, fitErr: P.fitErr,
                     tracked: P.tracked, near: P.near, small: { prev: older.small, cur: u.small, next: slot.small, Hprev: P.Hs.Hprev, Hnext: P.Hs.Hnext } });
                 lane.step(P, d, d.ok ? prepareBlobs(d, u.grey, p) : null, idx, { time: u.meta.time, frame: u.meta.frame });
+                lane.keepCrops({ prev: plain(older.grey), cur: plain(u.grey), next: plain(slot.grey), Hb: P.Hprev, Hf: P.Hnext });
             }
             slow = lane.shown({ at, idx, count, s, geom, fast: tracks || [], frames: framesOf(at) });
             slowInfo = slowSummary(lane, d, performance.now() - t3);
         }
+        // the long comparison: a pass on block u when one is due, then its tracks on frame t
+        let longT = [], longInfo = null;
+        if (p.long) {
+            const t5 = performance.now();
+            let d = null;
+            const pl = long.plan({ geom, wantTracked: true, nearMargin: p.nearMargin, nearOf: nearList });
+            if (pl.pass) {
+                const P = pl.pass, B = blocks.at;
+                longDet ??= createDetector(cv, longDetectParams(detectParams(p), p));
+                const pr = B(P.slots.prev), u = B(P.slots.cur), nx = B(P.slots.next);
+                d = longDet.detect({ prev: pr.grey, cur: u.grey, next: nx.grey, Hprev: P.Hprev, Hnext: P.Hnext, fitErr: P.fitErr,
+                    tracked: P.tracked, near: P.near, small: { prev: pr.small, cur: u.small, next: nx.small, Hprev: P.Hs.Hprev, Hnext: P.Hs.Hnext } });
+                long.step(P, d, d.ok ? prepareBlobs(d, u.grey, p) : null);
+                long.keepCrops({ prev: plain(pr.grey), cur: plain(u.grey), next: plain(nx.grey), Hb: P.Hprev, Hf: P.Hnext });
+            }
+            longT = long.shown({ s, others: [...(tracks || []), ...slow] });
+            longInfo = slowSummary(long, d, performance.now() - t5 + longOps);
+        }
         const t4 = performance.now();
-        const joined = joinLanes(tracks, slow);
+        const joined = joinLanes(tracks, longT.length ? [...slow, ...longT] : slow);
 
         const result = {
             ...cur.meta,
@@ -301,7 +383,8 @@ export function createPipeline(cv, params) {
             confirmed: joined.confirmed,
             held: joined.held,                                // stopped or lost, kept for a while
             ...(slowInfo ? { slow: slowInfo } : {}),
-            timings: { grab: t1 - t0, ego: t2 - t1, detect: t3 - t2, ...(slowInfo ? { slow: t4 - t3 } : {}), total: t4 - t0 },
+            ...(longInfo ? { long: longInfo } : {}),
+            timings: { grab: t1 - t0, ego: t2 - t1 - (longOps || 0), detect: t3 - t2, ...(slowInfo ? { slow: (slowInfo.ms) } : {}), ...(longInfo ? { long: longInfo.ms } : {}), total: t4 - t0 },
         };
         return { slot: cur, result };
     }
@@ -373,25 +456,32 @@ export function createPipeline(cv, params) {
             detector.setParams(detectParams(p));
             tracker.setParams(trackParams(p));
             lane.setParams(laneParams(p));
+            long.setParams(longParams(p));
             if (slowDet) slowDet.setParams(slowDetectParams(detectParams(p), p));
+            if (longDet) longDet.setParams(longDetectParams(detectParams(p), p));
             if (cause && geom) setup(geom.srcW, geom.srcH, cause);
         },
         // A 32×32 3-frame crop (crops.js) around (cx, cy) in the frame of the last result
         // (processing px), or null before there is one. Valid until the next push.
-        crop(cx, cy, side = CROP) {
+        crop(cx, cy, side = CROP, track = null) {
+            if (track && track.lane) { const c = laneCropOf(track.id); if (c && c.side === side) return c.rgba; }
             if (!stack) return null;
             const g = m => (m ? { cols: m.cols, rows: m.rows, data: m.data } : null);
             return stackCrop({ cur: g(stack.cur), prev: g(stack.prev), next: g(stack.next), Hb: stack.Hb, Hf: stack.Hf }, cx, cy, side);
         },
+        // a slow-lane or long-comparison track's crop from that lane's own frames ({ rgba, side }) or null
+        laneCrop: id => laneCropOf(id),
         // ids of tracks to keep watching (pinned by the user)
-        setPinned(ids) { tracker.setPinned(ids); lane.setPinned(ids); },
-        reset(cause = 'reset') { resetCause = cause; count = 0; idx = -1; stack = null; ego.reset(); tracker.reset(); lane.reset(); },
+        setPinned(ids) { tracker.setPinned(ids); lane.setPinned(ids); long.setPinned(ids); },
+        reset(cause = 'reset') { resetCause = cause; count = 0; idx = -1; stack = null; ego.reset(); tracker.reset(); lane.reset(); long.reset(); },
         dispose() {
             freeAll();
             for (const m of Object.values(scratch)) m.delete();
             ego.dispose();
             detector.dispose();
             if (slowDet) slowDet.dispose();
+            if (longDet) longDet.dispose();
+            if (blocks) blocks.dispose();
         },
     };
 }

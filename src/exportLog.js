@@ -18,13 +18,15 @@ export function createExportLog() {
                 for (const e of t.early || []) {
                     rows.push({ frame: e.frame, time: +e.time.toFixed(4), trackId: t.id, ...(t.objectId !== undefined && t.objectId !== null ? { objectId: t.objectId } : {}),
                         box: [edge(e.box.x), edge(e.box.y), edge(e.box.w), edge(e.box.h)], cx: src(e.box.cx), cy: src(e.box.cy),
-                        area: +(e.box.area / (s * s)).toFixed(1), vx: +(e.vx / s).toFixed(3), vy: +(e.vy / s).toFixed(3), early: true });
+                        area: +(e.box.area / (s * s)).toFixed(1), vx: +(e.vx / s).toFixed(3), vy: +(e.vy / s).toFixed(3), early: true, ...(t.lane ? { lane: t.lane } : {}) });
                 }
                 rows.push({
                     frame: r.frame, time: +r.time.toFixed(4), trackId: t.id, ...(t.objectId !== undefined && t.objectId !== null ? { objectId: t.objectId } : {}),
                     box: [edge(b.x), edge(b.y), edge(b.w), edge(b.h)],
                     cx: src(b.cx), cy: src(b.cy), area: +(b.area / (s * s)).toFixed(1),
                     vx: +(t.vx / s).toFixed(3), vy: +(t.vy / s).toFixed(3),
+                    // found by the slow lane or the long comparison ('slow', 'long'); absent: neighbouring frames
+                    ...(t.lane ? { lane: t.lane } : {}),
                 });
                 ids.add(t.id);
             }

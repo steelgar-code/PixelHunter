@@ -139,7 +139,7 @@ export function createObjects({ kept = 40 } = {}) {
                     const early = (t.early || []).map(e => earlyEntry(e, t.id, s));
                     const first = early.length ? { frame: early[0].frame, time: early[0].time } : { frame: r.frame, time: r.time };
                     objects.set(oid, { id: oid, trackId: t.id, first, confirmedAt: { frame: r.frame, time: r.time }, last: null, frames: 0,
-                        w: box.w, h: box.h, contrast, speed: 0, best: null, label: null, labelId: null, history: early, lost: null });
+                        w: box.w, h: box.h, contrast, speed: 0, best: null, label: null, labelId: null, history: early, lost: null, lane: t.lane || 'fast' });
                     event(objects.get(oid), r, `confirmed (track #${t.id})${early.length ? `, seen ${early.length} times before` : ''}`);
                     created.push(oid);
                 }
@@ -161,6 +161,8 @@ export function createObjects({ kept = 40 } = {}) {
                     o.last = { frame: r.frame, time: r.time };
                     o.frames++;
                     o.w = entry.w; o.h = entry.h; o.contrast = contrast; o.speed = entry.speed;
+                    // which comparison follows it now: 'fast' (neighbouring frames), 'slow' (the slow lane), 'long' (the long comparison)
+                    o.lane = t.lane || 'fast';
                     o.lastPos = [t.box.cx, t.box.cy];
                     // its clearest sighting so far (score, else |contrast| × area): the thumbnail's frame
                     const q = entry.score ?? Math.abs(contrast) * Math.sqrt(t.box.area || 1);
@@ -245,6 +247,9 @@ export function createObjects({ kept = 40 } = {}) {
     };
 }
 
+// what each comparison is called in the list and the exports
+export const LANE_NAMES = { fast: 'neighbouring frames', slow: 'slow lane', long: 'long comparison' };
+
 // An object's history as CSV (one row per frame, events as rows with only `event` filled).
 export function historyCsv(o) {
     const cols = ['frame', 'time', 'track', 'state', 'seen', 'early', 'x', 'y', 'w', 'h', 'contrast', 'speed', 'score', 'weak', 'why', 'event'];
@@ -254,9 +259,9 @@ export function historyCsv(o) {
 
 // The objects as CSV, one row each, with the user's labels (rough ground truth for tuning).
 export function objectsCsv(list) {
-    const cols = ['id', 'label', 'first_frame', 'first_time', 'confirmed_frame', 'confirmed_time', 'last_frame', 'last_time', 'frames', 'w', 'h', 'contrast', 'speed'];
+    const cols = ['id', 'label', 'first_frame', 'first_time', 'confirmed_frame', 'confirmed_time', 'last_frame', 'last_time', 'frames', 'w', 'h', 'contrast', 'speed', 'found_by'];
     const q = v => (v === undefined || v === null ? '' : String(v));
     const rows = list.map(o => [o.id, o.label, o.first.frame, o.first.time?.toFixed(3), o.confirmedAt?.frame, o.confirmedAt?.time?.toFixed(3),
-        o.last?.frame, o.last?.time?.toFixed(3), o.frames, o.w?.toFixed(1), o.h?.toFixed(1), o.contrast?.toFixed(1), o.speed?.toFixed(2)].map(q).join(','));
+        o.last?.frame, o.last?.time?.toFixed(3), o.frames, o.w?.toFixed(1), o.h?.toFixed(1), o.contrast?.toFixed(1), o.speed?.toFixed(2), LANE_NAMES[o.lane || 'fast']].map(q).join(','));
     return [cols.join(','), ...rows].join('\n');
 }
