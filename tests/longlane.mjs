@@ -45,7 +45,7 @@ import { createExportLog } from '../src/exportLog.js';
         L.setParams({ long: true });
         const resume = k;
         const passes = [];
-        for (; k < 260; k++) { feed(k); const pl = L.plan({ geom: gm }); if (pl.pass) { passes.push(pl.pass.meta.frame - pl.pass.m * L.plan.B); L.step(pl.pass, { ok: true, candidates: [] }, []); } }
+        for (; k < 260; k++) { feed(k); const pl = L.plan({ geom: gm }); if (pl.pass) { passes.push(pl.pass.meta.frame - pl.pass.m * 4); L.step(pl.pass, { ok: true, candidates: [] }, []); } }
         ok('off and on again: the lane starts afresh (the first block at the new start), no pass compares blocks from before the gap',
             passes.length > 0 && passes.every(f => f >= resume - 2), { resume, passes });
     }

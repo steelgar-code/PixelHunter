@@ -327,7 +327,6 @@ export function createWorkerPipeline(cv, params) {
         }
         let longPlan = null, longP = null;
         if (p.long) {
-            long.observe({ s, fast: tracks || [], slow, slowPass: p.slow ? lane.passCount : null });
             longPlan = long.plan({ geom, wantTracked: true, nearMargin: p.nearMargin, nearOf: nearList });
             if (longPlan.pass) {
                 const P = longPlan.pass;
@@ -382,6 +381,7 @@ export function createWorkerPipeline(cv, params) {
         if (p.long) {
             const t5 = performance.now();
             let d = null;
+            long.observe({ s, fast: tracks || [], slow, slowPass: p.slow ? lane.passCount : null });
             if (longP) {
                 const P = longPlan.pass;
                 d = await longP;
