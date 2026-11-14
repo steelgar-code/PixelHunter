@@ -8,6 +8,7 @@
 
 import { createEgomotion } from './egomotion.js';
 import { createDetector } from './detect.js';
+import { createBlockStore } from './blockStore.js';
 
 const KEEP = 2 * 12 + 3;         // frames kept for detection (2 × the largest stride, and some)
 let cv = null, role = null, ego = null, det = null;
@@ -15,6 +16,7 @@ let detSlow = null;              // detect: the slow lane's detector, made when 
 let detLong = null;              // … and the long comparison's
 const blocks = new Map();        // detect: the long comparison's block frames, id → { grey, small } Mats
 const KEEP_BLOCKS = 26;
+let store = null, bframe = null;  // blocks: the long comparison's pixel work (blockStore.js) and the frame it is given
 let lastSmall = null;            // ego: the previous small frame
 const ring = new Map();          // detect: seq → { grey, small } Mats
 
@@ -72,6 +74,18 @@ function handle(msg) {
         for (const k of [...blocks.keys()]) if (k <= msg.id - KEEP_BLOCKS || k > msg.id) { const f = blocks.get(k); f.grey.delete(); f.small.delete(); blocks.delete(k); }
         return null;
     }
+    case 'blockops': {
+        store ??= createBlockStore(cv);
+        const geom = { w: msg.w, h: msg.h, sw: msg.sw, sh: msg.sh };
+        store.ensure(geom);
+        if (!bframe || bframe.cols !== msg.w || bframe.rows !== msg.h) { if (bframe) bframe.delete(); bframe = new cv.Mat(msg.h, msg.w, cv.CV_8UC1); }
+        bframe.data.set(msg.grey);
+        const closed = store.apply(msg.ops, bframe, geom).map(c => {
+            const b = store.at(c.slot);
+            return { seq: c.seq, slot: c.slot, grey: b.grey.data.slice(), small: b.small.data.slice() };
+        });
+        return { type: 'blocks', id: msg.id, gen: msg.gen, closed };
+    }
     case 'detect': {
         const src = msg.blocks ? blocks : ring;
         const P = src.get(msg.prev), C = src.get(msg.cur), N = msg.next !== null ? src.get(msg.next) : null;
@@ -90,6 +104,8 @@ function handle(msg) {
         if (lastSmall) lastSmall.delete();
         if (ego) ego.dispose();
         if (det) det.dispose();
+        if (store) store.dispose();
+        if (bframe) bframe.delete();
         if (detSlow) detSlow.dispose();
         if (detLong) detLong.dispose();
         self.close();
@@ -108,7 +124,7 @@ self.onmessage = e => {
                 cv = await loadCv(msg.cvUrl);
                 role = msg.role;
                 if (role === 'ego') ego = createEgomotion(cv, msg.params);
-                else det = createDetector(cv, msg.params);
+                else if (role === 'detect') det = createDetector(cv, msg.params);
                 self.postMessage({ type: 'ready' });
                 return;
             }

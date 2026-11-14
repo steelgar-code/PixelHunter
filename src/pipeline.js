@@ -31,7 +31,9 @@ import { mulberry32 } from './synth.js';
 import { contrastOf } from './objects.js';
 import { stackCrop, CROP } from './crops.js';
 import { createSlowLane, ringFrames, slowDetectParams, SLOW_ID_BASE } from './slowLane.js';
-import { createLongLane, longDetectParams, LONG_RING, LONG_ID_BASE } from './longLane.js';
+import { createLongLane, longDetectParams, LONG_ID_BASE } from './longLane.js';
+import { createBlockStore } from './blockStore.js';
+export { createBlockStore };
 
 export function makeCanvas(w, h) {
     if (typeof OffscreenCanvas !== 'undefined') return new OffscreenCanvas(w, h);
@@ -60,49 +62,6 @@ export function prepareBlobs(detect, grey, p) {
 // the long comparison's settings: long, longSecs, and its options to measure (long…: not in the settings)
 export const longParams = p => ({ ...Object.fromEntries(Object.entries(p).filter(([k]) => k.startsWith('long'))), long: !!p.long,
     slowBudget: p.slowBudget, slowSparse: p.slowSparse, track: trackParams(p) });
-// The long comparison's pixels (longLane.js addFrame's ops): the running sum of the block being
-// built (32-bit float) and a ring of LONG_RING finished blocks (grey + small copy). Its Mats are
-// made on first use (only while the long comparison is on) and kept until the size changes.
-export function createBlockStore(cv) {
-    let dims = null, acc = null, f32 = null, tmp = null, ring = [];
-    function free() {
-        for (const m of [acc, f32, tmp]) if (m) m.delete();
-        for (const b of ring) { b.grey.delete(); b.small.delete(); }
-        acc = f32 = tmp = null; ring = []; dims = null;
-    }
-    function ensure(geom) {
-        const key = `${geom.w}x${geom.h}/${geom.sw}x${geom.sh}`;
-        if (dims === key) return;
-        free();
-        dims = key;
-        acc = new cv.Mat(geom.h, geom.w, cv.CV_32F);
-        f32 = new cv.Mat(geom.h, geom.w, cv.CV_32F);
-        tmp = new cv.Mat(geom.h, geom.w, cv.CV_32F);
-        for (let i = 0; i < LONG_RING; i++) ring.push({ grey: new cv.Mat(geom.h, geom.w, cv.CV_8UC1), small: new cv.Mat(geom.sh, geom.sw, cv.CV_8UC1) });
-    }
-    // ops on the newest frame's grey Mat; returns the blocks closed: [{ seq, slot }]
-    function apply(ops, grey, geom) {
-        const closed = [];
-        for (const o of ops) {
-            if (o.op === 'start') grey.convertTo(acc, cv.CV_32F);
-            else if (o.op === 'add') {
-                grey.convertTo(f32, cv.CV_32F);
-                const M = cv.matFromArray(3, 3, cv.CV_64F, o.H);
-                // H: anchor → this frame; with WARP_INVERSE_MAP each anchor pixel takes this frame's at H(x)
-                cv.warpPerspective(f32, tmp, M, new cv.Size(geom.w, geom.h), cv.INTER_LINEAR | cv.WARP_INVERSE_MAP, cv.BORDER_REPLICATE, new cv.Scalar(0));
-                M.delete();
-                cv.add(acc, tmp, acc);
-            } else if (o.op === 'close') {
-                const b = ring[o.slot];
-                acc.convertTo(b.grey, cv.CV_8U, 1 / o.n);
-                cv.resize(b.grey, b.small, new cv.Size(geom.sw, geom.sh), 0, 0, cv.INTER_AREA);
-                closed.push({ seq: o.seq, slot: o.slot });
-            }
-        }
-        return closed;
-    }
-    return { ensure, apply, at: slot => ring[slot], dispose: free };
-}
 // a grey Mat as the pure modules take images
 export const plain = m => ({ cols: m.cols, rows: m.rows, data: m.data });
 // the slow lane's tracks joined to the fast lane's in a result: { tracks, confirmed, held }

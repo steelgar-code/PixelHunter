@@ -114,6 +114,28 @@ export function createWorkerPipeline(cv, params) {
     const laneCropOf = id => (id >= LONG_ID_BASE ? long.crop(id) : id >= SLOW_ID_BASE ? lane.crop(id) : null);
     const stride = () => Math.min(MAX_STRIDE, Math.max(1, Math.round(Number(p.stride) || 1)));
     const at = back => slots[(head - back + slots.length * 2) % slots.length];
+    // the long comparison's pixel work runs in a worker of its own (made when first needed): the page
+    // sends each frame with its ops, the blocks that close come back and go on to the detection workers
+    let blockW = null, buildGen = 0, buildId = 0;
+    const builds = new Set();
+    function sendOps(ops, slot) {
+        blockW ??= spawn('blocks', {});
+        const gen = buildGen, g = geom, id = buildId++;
+        const grey = slot.grey.data.slice();
+        const pr = blockW.ask({ type: 'blockops', id, gen, grey, w: g.w, h: g.h, sw: g.sw, sh: g.sh, ops }, `d${id}`, [grey.buffer]).then(m => {
+            if (gen !== buildGen || disposed) return;
+            for (const c of m.closed) {
+                blocks.put(c.slot, c.grey, c.small);
+                for (const w of detW) {
+                    const bg = c.grey.slice(), sm = c.small.slice();
+                    w.post({ type: 'block', id: c.seq, grey: bg, small: sm, w: g.w, h: g.h, sw: g.sw, sh: g.sh }, [bg.buffer, sm.buffer]);
+                }
+            }
+        });
+        builds.add(pr);
+        const done = () => builds.delete(pr);
+        pr.then(done, done);
+    }
     const toAll = msg => { egoW.post(msg); for (const w of detW) w.post(msg); };
 
     function freeAll() {
@@ -150,6 +172,7 @@ export function createWorkerPipeline(cv, params) {
         tracker.reset();
         lane.reset();
         long.reset();
+        buildGen++;
         toAll({ type: 'reset' });
     }
 
@@ -280,22 +303,16 @@ export function createWorkerPipeline(cv, params) {
         const { s } = ctx;
         const L = slots.length;
         const at = back => slots[(ctx.head - back + L * 2) % L];
-        if (ctx.jump) { tracker.reset(); lane.reset(); long.reset(); }
+        if (ctx.jump) { tracker.reset(); lane.reset(); long.reset(); buildGen++; }
         const tB = performance.now();
         // the long comparison's block frames: the newest frame into the block being built; a block
         // that closes goes to every detection worker
         let longOps = 0;
         if (p.long) {
-            blocks ??= createBlockStore(cv);
+            blocks ??= createBlockStore(cv, { pixels: false });
             blocks.ensure(geom);
-            const closed = blocks.apply(long.addFrame({ e: ctx.count >= 2 ? ctx.slot.egoIn : null, meta: ctx.slot.meta, frames: ctx.count >= 2 ? framesOf(at)(0) : 1, geom }), ctx.slot.grey, geom);
-            for (const c of closed) {
-                const b = blocks.at(c.slot);
-                for (const w of detW) {
-                    const g = b.grey.data.slice(), sm = b.small.data.slice();
-                    w.post({ type: 'block', id: c.seq, grey: g, small: sm, w: geom.w, h: geom.h, sw: geom.sw, sh: geom.sh }, [g.buffer, sm.buffer]);
-                }
-            }
+            const ops = long.addFrame({ e: ctx.count >= 2 ? ctx.slot.egoIn : null, meta: ctx.slot.meta, frames: ctx.count >= 2 ? framesOf(at)(0) : 1, geom });
+            if (ops.length) sendOps(ops, ctx.slot);
             longOps = performance.now() - tB;
         }
         if (ctx.count < s + 1) return { slot: at(ctx.count - 1), result: null };
@@ -330,8 +347,9 @@ export function createWorkerPipeline(cv, params) {
             longPlan = long.plan({ geom, wantTracked: true, nearMargin: p.nearMargin, nearOf: nearList });
             if (longPlan.pass) {
                 const P = longPlan.pass;
-                longP = detectParts({ prev: P.seqs.prev, cur: P.seqs.cur, next: P.seqs.next, blocks: true, Hprev: P.Hprev, Hnext: P.Hnext,
-                    Hs: P.Hs, fitErr: P.fitErr, tracked: P.tracked, near: P.near, params: longDetectParams(detectParams(p), p) }, 'long')
+                // the blocks the pass reads are in the page's ring and in every worker once the builds are done
+                longP = Promise.all([...builds]).catch(() => {}).then(() => detectParts({ prev: P.seqs.prev, cur: P.seqs.cur, next: P.seqs.next, blocks: true, Hprev: P.Hprev, Hnext: P.Hnext,
+                    Hs: P.Hs, fitErr: P.fitErr, tracked: P.tracked, near: P.near, params: longDetectParams(detectParams(p), p) }, 'long'))
                     .catch(e => ({ ok: false, reason: `detection worker: ${e.message}`, candidates: [] }));
             }
         }
@@ -502,7 +520,7 @@ export function createWorkerPipeline(cv, params) {
         },
         laneCrop: id => laneCropOf(id),
         setPinned(ids) { tracker.setPinned(ids); lane.setPinned(ids); long.setPinned(ids); },
-        reset(cause = 'reset') { resetCause = cause; count = 0; idx = -1; stack = null; tracker.reset(); lane.reset(); long.reset(); egoW.post({ type: 'reset' }); },
+        reset(cause = 'reset') { resetCause = cause; count = 0; idx = -1; stack = null; tracker.reset(); lane.reset(); long.reset(); buildGen++; egoW.post({ type: 'reset' }); },
         dispose() {
             disposed = true;
             Promise.all([chainA, chainB]).then(() => {
@@ -511,6 +529,7 @@ export function createWorkerPipeline(cv, params) {
                 if (blocks) blocks.dispose();
             });
             egoW.terminate();
+            if (blockW) blockW.terminate();
             for (const w of detW) w.terminate();
         },
     };
