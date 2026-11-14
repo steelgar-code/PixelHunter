@@ -25,8 +25,11 @@ const relinkNear = o => Math.max(6, 2 * Math.max(o.w, o.h));
 const relinkWatch = o => Math.max(20, 4 * Math.max(o.w, o.h));
 
 // Mean grey inside a box minus the mean of a 2 px ring around it (grey frame, processing px).
-export function contrastOf(mat, b) {
+// (A slow-lane or long-comparison track's box is carried to the frame shown and lies between
+// pixels: rounded to whole ones. Until 0.15.0 such a box gave NaN.)
+export function contrastOf(mat, box) {
     const W = mat.cols, H = mat.rows, d = mat.data;
+    const b = Number.isInteger(box.x) && Number.isInteger(box.y) ? box : { x: Math.round(box.x), y: Math.round(box.y), w: Math.round(box.w), h: Math.round(box.h) };
     let si = 0, ni = 0, sr = 0, nr = 0;
     for (let y = Math.max(0, b.y - 2); y < Math.min(H, b.y + b.h + 2); y++) {
         for (let x = Math.max(0, b.x - 2); x < Math.min(W, b.x + b.w + 2); x++) {

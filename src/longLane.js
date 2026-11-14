@@ -37,7 +37,11 @@ export const LONG_RING = 25;           // blocks kept (2 · LONG_MAX + 1)
 export const LONG_MAX = 12;            // blocks: the longest comparison either side
 export const LONG_BLOCK = 4;           // frames a block averages (at least)
 export const LONG_MIN = 3;             // blocks: the shortest comparison (shorter ones are the slow lane's)
-export const LONG_TOP = 0.5;           // px a frame: fastest track the lane starts and keeps
+// px a frame: fastest track the lane starts and keeps (faster ones: the slow lane's). The brief's 0.5
+// let it follow the 0.5 px-a-frame objects of far-0.5-crf23, which compression updates late: shown
+// carried ~60 frames on, off the object, 6.8 false tracks a minute (Mid, two seeds); at 0.35 none, and
+// every far scenario's numbers otherwise identical
+export const LONG_TOP = 0.35;
 export const LONG_SECS = 2;            // default length either side, s
 // the user's min travel × this (along the path fitted to the sightings): a 0.05 px-a-frame object
 // needs 60 frames for 3 px. Measured, far-0.05, Mid, two seeds: 1 → median latency 167 frames
