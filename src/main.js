@@ -574,7 +574,8 @@ function afterPush(f, out) {
             tracked: e.tracked, inliers: e.inliers, timings: r.timings,
             detectOk: r.detect.ok, detectReason: r.detect.reason, scale: r.scale, candidates: r.candidates.map(c => [c.cx, c.cy, c.area]), score: r.score ? { tp: r.score.tp, fp: r.score.fp, fn: r.score.fn } : null,
             confirmed: r.confirmed.map(t => [t.id, t.box.cx, t.box.cy]),
-            ...(r.slow ? { slow: { state: r.slow.state, n: r.slow.n ?? null, ...(r.slow.list ? { candidates: r.slow.list.map(c => [c.cx, c.cy, c.area]) } : {}) } } : {}) });
+            ...(r.slow ? { slow: { state: r.slow.state, n: r.slow.n ?? null, ...(r.slow.list ? { candidates: r.slow.list.map(c => [c.cx, c.cy, c.area]) } : {}) } } : {}),
+            ...(r.long ? { long: { state: r.long.state, m: r.long.m ?? null, ...(r.long.list ? { candidates: r.long.list.map(c => [c.cx, c.cy, c.area]) } : {}) } } : {}) });
         if (ph.results.length > FRAME_LOG) ph.results.shift();
     }
     ph.shown = out.slot.meta;

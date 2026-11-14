@@ -214,9 +214,11 @@ export const CONFIGS = {
     // velocity (0.14.0), 1 the velocity of the path fitted to the recent sightings (default since 0.15.0), 2 also its place
     'mid+fit0': { slowFitCarry: 0 }, 'mid+fit1': { slowFitCarry: 1 }, 'mid+fit2': { slowFitCarry: 2 },
     'highest+fit0': { ...PRESETS.highest.values, slowFitCarry: 0 }, 'highest+fit2': { ...PRESETS.highest.values, slowFitCarry: 2 },
-    // the long comparison on averaged frames (batch 3), and without it
+    // the long comparison on averaged frames (batch 3; on by default since 0.15.0: mid+long equals mid), and without it
     'mid+long': { long: true }, 'highest+long': { ...PRESETS.highest.values, long: true },
     'mid-long': { long: false }, 'highest-long': { ...PRESETS.highest.values, long: false },
+    // 0.14.0: without the long comparison, slow-lane tracks carried with the filter's velocity
+    'mid-0.14': { long: false, slowFitCarry: 0 }, 'highest-0.14': { ...PRESETS.highest.values, long: false, slowFitCarry: 0 },
     'highest+slow': { ...PRESETS.highest.values, slow: true },
     // the camera-motion fit as before 0.12.0 (every point that agrees, always the full fit, LK
     // window 21), for comparison: gives the numbers of 0.11.0

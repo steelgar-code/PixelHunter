@@ -82,7 +82,8 @@ try {
     const tripod = { width: 320, height: 180, noise: 2, frames: 110, fps: 25, camera: 'tripod', seed: 31,
         targets: [own(3, 25, 80, 60, 0.3, 0.1), own(3, -25, 240, 120, -0.4, -0.1)] };
 
-    const off = await page.evaluate(([o]) => runSlow(o, { slow: false }, 60), [tripod]);
+    // (the long comparison off as well: since 0.15.0 it finds the 0.3 px-a-frame object on its own)
+    const off = await page.evaluate(([o]) => runSlow(o, { slow: false, long: false }, 60), [tripod]);
     ok('lane off: slow objects not found (as before), ring of 3 frames, no slow stats', off.recall === 0 && off.ring === 3 && Object.keys(off.states).length === 0, { recall: off.recall, ring: off.ring });
     const on = await page.evaluate(([o]) => runSlow(o, { slow: true }, 60), [tripod]);
     // (on by default since 0.14.0; the presets leave it alone)

@@ -90,10 +90,10 @@ try {
 
     const base = await page.evaluate(([o]) => runLong(o, {}, 150), [tripod]);
     const off = await page.evaluate(([o]) => runLong(o, { long: false }, 150), [tripod]);
-    ok('off by default: the same results as with the setting off, no long stats, the frame ring unchanged (25 with the slow lane)', base.sig === off.sig
-        && Object.keys(off.states).length === 0 && off.ring === 25 && off.recall < 0.2, { recall: off.recall, ring: off.ring });
+    ok('off: no long stats, the frame ring unchanged (25 with the slow lane), these objects not found', Object.keys(off.states).length === 0 && off.ring === 25 && off.recall < 0.2, { recall: off.recall, ring: off.ring });
     ok('… and no preset sets it', await page.evaluate(async () => { const { PRESETS } = await import('/src/params.js'); return Object.values(PRESETS).every(p => !('long' in p.values) && !('longSecs' in p.values)); }));
     const on = await page.evaluate(([o]) => runLong(o, { long: true }, 150), [tripod]);
+    ok('on by default (since 0.15.0): the same results as with the setting on', base.sig === on.sig);
     ok('on, tripod: objects at 0.1 px a frame confirmed from frame 150 on', on.recall >= 0.8, { recall: on.recall, passes: on.passes, ms: on.ms });
     ok('… with comparisons of up to 12 blocks, the frame ring unchanged', on.ms.includes(12) && on.ring === 25, { ms: on.ms, ring: on.ring });
     ok('… marked as the long comparison\'s, ids from 2 000 000, no confirmed box away from an object', on.longMarked > 0 && on.ids.every(id => id >= 2000000) && on.falseBoxes === 0, { ids: on.ids, falseBoxes: on.falseBoxes });
