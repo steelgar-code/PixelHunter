@@ -103,6 +103,7 @@ export const TRACK_DEFAULTS = {
     keepMoving: false,     // a confirmed track whose last PATH_POINTS sightings travel under half the min travel stops being shown (the slow lane's)
     maxTrackSpeed: 0,      // px/frame: tracks seen twice or more moving faster than this are dropped (0: off; the slow lane's)
     speedPerSize: 0,       // with maxTrackSpeed: an object may be this × its box length a frame fast, if more (the slow lane's: 0.5)
+    lineFit: false,        // snapshot: also the straight path fitted to the recent sightings (fit: place and velocity; the slow lanes carry their tracks with it)
 };
 
 const CROWD_RADIUS = 40;       // px around a prediction in which blob density is measured
@@ -342,6 +343,22 @@ export function createTracker(options = {}) {
         return Math.hypot(slope(0), slope(1)) * (pts[n - 1][2] - pts[0][2]);
     }
 
+    // The straight constant-velocity path through the recent sightings (least squares over time):
+    // { x, y } on it at the last sighting and { vx, vy } per frame, or null under 3 sightings. Over
+    // the 8 sightings of a slow lane (spread over 30 frames and more) its velocity is far steadier
+    // than the α-β filter's, which follows each sighting's jitter.
+    function lineFit(pts) {
+        const n = pts.length;
+        if (n < 3) return null;
+        let st = 0, stt = 0;
+        for (const q of pts) { st += q[2]; stt += q[2] * q[2]; }
+        const mt = st / n, vt = stt / n - mt * mt;
+        if (!(vt > 1e-9)) return null;
+        const line = axis => { let sv = 0, stv = 0; for (const q of pts) { sv += q[axis]; stv += q[2] * q[axis]; } const slope = (stv / n - mt * (sv / n)) / vt; return [sv / n + slope * (pts[n - 1][2] - mt), slope]; };
+        const [x, vx] = line(0), [y, vy] = line(1);
+        return { x, y, vx, vy, n };
+    }
+
     // (speedPerSize) how fast an object of this size may be: the three-frame comparison shows an
     // object of length L whole only once it has moved L between the frames compared, so the fast
     // lane (1 frame apart) misses large objects slower than about L / 2 a frame
@@ -440,6 +457,7 @@ export function createTracker(options = {}) {
             evidence: t.ev, since: t.t0, progress: progress(t),
             // the sightings before it confirmed, once, on the frame it confirms
             ...(t.justConfirmed ? { early: t.early.slice(0, -1) } : {}),
+            ...(p.lineFit ? { fit: lineFit(t.pts) } : {}),
         }));
     }
 

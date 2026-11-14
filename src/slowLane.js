@@ -42,6 +42,7 @@ export const SLOW_PER_SIZE = 0.5;      // … or half the object's box length a 
 const SLOW_TOP_SLACK = 0;              // … plus this (0.5 let the sky targets of W, 3 px a frame, in at the
                                        // gimbal's turnarounds, shown off target: 5 false tracks a minute; 0: none)
 export const SLOW_TOL_BASE = 0.10;     // detector's tolBase in this lane
+export const SLOW_FIT_CARRY = 1;      // how the lane's tracks are carried to the displayed frame (carryTrack; 0 as until 0.14.0)
 export const SLOW_ID_BASE = 1000000;   // the lane's track ids start here
 export const SLOW_FIXED_MOVE = 3;      // px the background must move for the screen-fixed guard
 // a candidate whose box is at least SPARSE_BOX px² and less than this share filled is a moved edge
@@ -110,21 +111,33 @@ export function chooseN({ at, count, s, max, budget, w, h, lastBack }) {
 }
 
 // A slow track (tracker snapshot in frame u) carried k frames on to the displayed frame with H
-// (u → displayed) and its own velocity.
-function carryShown(t, H, k) {
-    const [x, y] = project(H, t.x, t.y);
-    const [ex, ey] = project(H, t.x + t.vx, t.y + t.vy);
+// (u → displayed) and its own velocity (lane: what it is marked). fitCarry (SLOW_FIT_CARRY): for a track seen on this pass,
+// 1: the velocity of the straight path through its recent sightings (tracker lineFit) instead of
+// the α-β filter's; 2: also its place on that path instead of the last sighting's. (Measured in
+// batch 3 on far-0.5: the filter's velocity of a faint object was off by up to 0.35 px a frame,
+// and carried 11–14 frames that put its box 3–10 px from the object. Confirmed boxes more than 3 px
+// from every object, far-0.5 · far-0.2, Mid, two seeds: 0 → 78 · 10 a minute, 1 → 14 · 0, 2 → 27 · 0;
+// recall the same or 1–3 points higher with 1 and 2.)
+export function carryTrack(t, H, k, fitCarry = 0, lane = 'slow') {
+    const f = fitCarry > 0 && t.matched && t.fit ? t.fit : null;
+    const ox = f && fitCarry > 1 ? f.x : t.x, oy = f && fitCarry > 1 ? f.y : t.y;
+    const [x, y] = project(H, ox, oy);
+    const [ex, ey] = f ? project(H, ox + f.vx, oy + f.vy) : project(H, t.x + t.vx, t.y + t.vy);
     const vx = ex - x, vy = ey - y;
     const mx = t.held ? 0 : vx * k, my = t.held ? 0 : vy * k;
     let box = t.box;
     if (box) {
-        const [bx, by] = project(H, box.cx, box.cy);
+        const [bx, by] = f && fitCarry > 1 ? [x, y] : project(H, box.cx, box.cy);
         box = { ...box, x: box.x + bx + mx - box.cx, y: box.y + by + my - box.cy, cx: bx + mx, cy: by + my };
     }
     const [lx, ly] = project(H, t.lastSeen[0], t.lastSeen[1]);
-    return { ...t, x: x + mx, y: y + my, vx, vy, box, trail: t.trail.map(([a, b]) => project(H, a, b)), lastSeen: [lx, ly],
-        predicted: [x + mx, y + my], lane: 'slow' };
+    const { fit, ...rest } = t;
+    return { ...rest, x: x + mx, y: y + my, vx, vy, box, trail: t.trail.map(([a, b]) => project(H, a, b)), lastSeen: [lx, ly],
+        predicted: [x + mx, y + my], lane };
 }
+// a lane's track q (carried to the displayed frame) follows the same object as the confirmed track f
+export const sameObject = (f, q) => Math.hypot(f.x - q.x, f.y - q.y) <= Math.max(SAME_PLACE, f.gate || 0)
+    && Math.hypot(f.vx - q.vx, f.vy - q.vy) <= Math.max(SAME_SPEED, 0.5 * Math.hypot(f.vx, f.vy));
 
 // source frames from slot `to` (older) to slot `from` (newer)
 const framesIn = (frames, from, to) => { let d = 0; for (let b = from; b < to; b++) d += frames(b); return d; };
@@ -142,7 +155,7 @@ export function createSlowLane(params = {}) {
     function trackerParams(c) {
         return { ...p.track, maxSpeed: p.slowTop ?? SLOW_TOP, holdFrames: Math.ceil((p.track.holdFrames ?? 50) / c),
             confirmSecs: (p.track.confirmSecs ?? 0.2) * c, fixedMinMove: SLOW_FIXED_MOVE, travelFit: p.travelFit ?? true,
-            maxTrackSpeed: (p.slowTop ?? SLOW_TOP) + (p.topSlack ?? SLOW_TOP_SLACK), keepMoving: p.keepMoving ?? true, speedPerSize: p.speedPerSize ?? SLOW_PER_SIZE,
+            lineFit: true, maxTrackSpeed: (p.slowTop ?? SLOW_TOP) + (p.topSlack ?? SLOW_TOP_SLACK), keepMoving: p.keepMoving ?? true, speedPerSize: p.speedPerSize ?? SLOW_PER_SIZE,
             minTravel: (p.track.minTravel ?? 3) * (p.travelFactor ?? 1), pathTolerance: (p.track.pathTolerance ?? 1.5) * (p.pathFactor ?? 1) };
     }
 
@@ -222,10 +235,8 @@ export function createSlowLane(params = {}) {
             const fastConf = fast.filter(f => f.state === 'confirmed');
             const out = [];
             for (const t of snap) {
-                const q = carryShown(t, c.H, kf);
-                const same = fastConf.some(f => Math.hypot(f.x - q.x, f.y - q.y) <= Math.max(SAME_PLACE, f.gate || 0)
-                    && Math.hypot(f.vx - q.vx, f.vy - q.vy) <= Math.max(SAME_SPEED, 0.5 * Math.hypot(f.vx, f.vy)));
-                if (same) continue;
+                const q = carryTrack(t, c.H, kf, p.fitCarry ?? SLOW_FIT_CARRY);
+                if (fastConf.some(f => sameObject(f, q))) continue;
                 if (!fresh) delete q.early;
                 out.push(q);
             }

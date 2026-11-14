@@ -47,7 +47,7 @@ export const egoParams = p => ({ ...pick(EGO_DEFAULTS, p), zones: p.zonesMotion 
     ...(p.precise === false ? { fbRel: 0 } : {}), ...(p.thinFit === false ? { loose: 0 } : {}) });
 export const detectParams = p => ({ ...pick(DETECT_DEFAULTS, p), zones: p.zones || [], include: p.include || [] });
 export const trackParams = p => pick(TRACK_DEFAULTS, p);
-export const laneParams = p => ({ slow: !!p.slow, slowMax: p.slowMax, slowBudget: p.slowBudget, slowTop: p.slowTop, travelFit: p.slowTravelFit, travelFactor: p.slowTravel, sparse: p.slowSparse, pathFactor: p.slowPath, topSlack: p.slowTopSlack, keepMoving: p.slowKeepMoving, speedPerSize: p.slowPerSize, track: trackParams(p) });
+export const laneParams = p => ({ slow: !!p.slow, slowMax: p.slowMax, slowBudget: p.slowBudget, slowTop: p.slowTop, travelFit: p.slowTravelFit, travelFactor: p.slowTravel, sparse: p.slowSparse, pathFactor: p.slowPath, topSlack: p.slowTopSlack, keepMoving: p.slowKeepMoving, speedPerSize: p.slowPerSize, fitCarry: p.slowFitCarry, track: trackParams(p) });
 // a candidate's strength (confirmation by evidence) and, for min contrast to confirm, its contrast
 // against its surroundings in its own frame
 export function prepareBlobs(detect, grey, p) {

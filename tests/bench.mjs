@@ -29,6 +29,8 @@
 //   lane     with the slow lane on: its own raw recall and raw false candidates per pass, against
 //            the truth of the frame it looked at (u, older than the frame shown); raw / rawFP
 //            above are the fast lane's only, confirmed numbers both lanes'
+//   (far scenarios also print "once found": per target, confirmed recall within 3 px counted from
+//   its first confirmed frame on, so a long latency is not counted twice; `foundRecall` in perTarget)
 //   tpt      tracks per target: confirmed track ids that were on a target in most of their
 //            frames, per target seen (1 = one track per object; leading and trailing edges of a
 //            large object give 2). A track is "on" the nearest target within the match radius,
@@ -206,6 +208,10 @@ export const CONFIGS = {
     'mid-0.12': { edgeMargin: false, slow: false },
     'highest-0.12': { ...PRESETS.highest.values, edgeMargin: false, slow: false },
     'mid+slow+edge': { slow: true, edgeMargin: true },
+    // how the slow lane's tracks are carried to the displayed frame (batch 3): 0 the α-β filter's
+    // velocity (0.14.0), 1 the velocity of the path fitted to the recent sightings (default since 0.15.0), 2 also its place
+    'mid+fit0': { slowFitCarry: 0 }, 'mid+fit1': { slowFitCarry: 1 }, 'mid+fit2': { slowFitCarry: 2 },
+    'highest+fit0': { ...PRESETS.highest.values, slowFitCarry: 0 }, 'highest+fit2': { ...PRESETS.highest.values, slowFitCarry: 2 },
     'highest+slow': { ...PRESETS.highest.values, slow: true },
     // the camera-motion fit as before 0.12.0 (every point that agrees, always the full fit, LK
     // window 21), for comparison: gives the numbers of 0.11.0
@@ -359,10 +365,12 @@ async function runInPage({ scene, raw, params, every = 1, ground = false, stops 
         if (matrix) {
             const hit3 = new Set(m.matches.map(x => x.target));
             for (const t of truth) {
-                const e = per[t.id] ??= { n: 0, hit3: 0, hit6: 0, first: r.frame, firstConf: null };
+                const e = per[t.id] ??= { n: 0, hit3: 0, hit6: 0, first: r.frame, firstConf: null, nf: 0, hitF: 0 };
                 e.n++;
                 const near3 = hit3.has(t.id);
                 if (near3) { e.hit3++; e.firstConf ??= r.frame; }
+                // recall once found: from the first confirmed frame on
+                if (e.firstConf !== null) { e.nf++; if (near3) e.hitF++; }
                 if (near3 || r.confirmed.some(c => Math.hypot(c.box.cx - t.cx, c.box.cy - t.cy) <= 6)) e.hit6++;
             }
         }
@@ -452,7 +460,9 @@ for (const [key, runs] of Object.entries(results)) {
             const n = es.reduce((a, e) => a + e.n, 0);
             return { size: t.size, contrast: t.contrast, n, hit3: es.reduce((a, e) => a + e.hit3, 0), hit6: es.reduce((a, e) => a + e.hit6, 0),
                 recall3: n ? es.reduce((a, e) => a + e.hit3, 0) / n : null, recall6: n ? es.reduce((a, e) => a + e.hit6, 0) / n : null,
-                lat: lats.length ? lats[lats.length >> 1] : null, found: lats.length, seeds: es.length };
+                lat: lats.length ? lats[lats.length >> 1] : null, found: lats.length, seeds: es.length,
+                // recall within 3 px from the first confirmed frame on (over the seeds that found it)
+                foundRecall: es.reduce((a, e) => a + (e.nf || 0), 0) ? es.reduce((a, e) => a + (e.hitF || 0), 0) / es.reduce((a, e) => a + (e.nf || 0), 0) : null };
         });
     }
 }
@@ -490,6 +500,10 @@ for (const s of scenes) {
             const cell = e => `${e.n ? Math.round(e.recall3 * 100) : '–'} / ${e.n ? Math.round(e.recall6 * 100) : '–'} (${e.lat === null ? '–' : e.lat})`.padEnd(17);
             console.log(`  ${''.padEnd(14)} contrast   ${FAR_CONTRASTS.map(x => `${x}`.padEnd(17)).join('')}  (recall 3 px / 6 px (latency in frames); sign alternates)`);
             FAR_SIZES.forEach((size, row) => console.log(`  ${''.padEnd(14)} ${`${size} px:`.padEnd(10)} ${r.perTarget.slice(3 * row, 3 * row + 3).map(cell).join('')}`));
+            // recall once found (within 3 px, from the first confirmed frame on): latency not counted twice
+            const fcell = e => `${e.foundRecall === null || e.foundRecall === undefined ? '–' : Math.round(e.foundRecall * 100)}`.padEnd(17);
+            console.log(`  ${''.padEnd(14)} once found ${FAR_CONTRASTS.map(x => `${x}`.padEnd(17)).join('')}  (recall 3 px from the first confirmed frame on, %)`);
+            FAR_SIZES.forEach((size, row) => console.log(`  ${''.padEnd(14)} ${`${size} px:`.padEnd(10)} ${r.perTarget.slice(3 * row, 3 * row + 3).map(fcell).join('')}`));
         }
     }
 }
