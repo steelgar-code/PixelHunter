@@ -162,6 +162,7 @@ export function createSlowLane(params = {}) {
     let lastPass = null;       // … of the newest frame at the last pass
     let lastN = null;
     let snap = [];             // the tracker's tracks after the last pass (frame u)
+    let passes = 0;            // passes made since the reset (changes when there is a new one)
     let fresh = false;         // the last pass's tracks not shown yet (hand `early` out once)
     let stats = { state: 'off' };
     let crops = new Map();     // track id → { rgba, side }: the last pass's crops (laneCrops)
@@ -239,11 +240,13 @@ export function createSlowLane(params = {}) {
             lastU = idx - plan.n;
             lastPass = idx;
             lastN = plan.n;
+            passes++;
             stats = { state: 'pass', n: plan.n, cadence: c, frame: meta.frame, candidates: detect.ok ? detect.candidates.length : null, reason: detect.ok ? null : detect.reason };
         },
 
         // The lane's tracks on the displayed frame (s frames before the newest): carried there,
         // without those a confirmed fast track already follows. fast: the fast lane's tracks.
+        get passCount() { return passes; },
         shown({ at, idx, count, s, geom, fast, frames = () => 1 }) {
             if (!p.slow || lastU === null || !snap.length) return [];
             const lastBack = idx - lastU, k = lastBack - s;

@@ -33,6 +33,22 @@ import { createExportLog } from '../src/exportLog.js';
     const off = createLongLane({ long: false, track: {} });
     ok('off: no work asked for', off.addFrame({ e: fit, meta: { time: 0, frame: 0 }, frames: 1, geom }).length === 0 && off.plan({ geom }).rest === 'off');
     ok('the ring holds 25 blocks', LONG_RING === 25 && I.length === 9);
+    // switched off for some frames and on again: the old history is not continued across the gap
+    {
+        const L = createLongLane({ long: true, longSecs: 2, slowBudget: 6, track: {} });
+        const gm = { w: 320, h: 180, kx: 2 };
+        const feed = k => L.addFrame({ e: k ? fit : null, meta: { time: k / 25, frame: k }, frames: 1, geom: gm });
+        let k = 0;
+        for (; k < 80; k++) feed(k);
+        L.setParams({ long: false });
+        for (; k < 100; k++) feed(k);
+        L.setParams({ long: true });
+        const resume = k;
+        const passes = [];
+        for (; k < 260; k++) { feed(k); const pl = L.plan({ geom: gm }); if (pl.pass) { passes.push(pl.pass.meta.frame - pl.pass.m * L.plan.B); L.step(pl.pass, { ok: true, candidates: [] }, []); } }
+        ok('off and on again: the lane starts afresh (the first block at the new start), no pass compares blocks from before the gap',
+            passes.length > 0 && passes.every(f => f >= resume - 2), { resume, passes });
+    }
     // the lane named in the exports
     const csv = objectsCsv([{ id: 1, label: null, first: { frame: 1, time: 0.04 }, confirmedAt: { frame: 9, time: 0.36 }, last: { frame: 9, time: 0.36 }, frames: 1, w: 2, h: 2, contrast: 20, speed: 0.05, lane: 'long' }]);
     ok('objects CSV: a "found_by" column naming the comparison', /,found_by$/.test(csv.split('\n')[0]) && csv.split('\n')[1].endsWith(`,${LANE_NAMES.long}`), csv);
@@ -101,6 +117,21 @@ try {
     const pan = await page.evaluate(([o]) => runLong({ ...o, camera: 'pan', frames: 80 }, { long: true }), [tripod]);
     ok('panning camera: the long comparison rests', pan.passes === 0 && (pan.states.resting || 0) > 20, pan.states);
     ok('no Mats left behind', (await page.evaluate(() => window.__liveMats())) === 0, await page.evaluate(() => window.__liveMats()));
+    // the setting switched off and on in a run: no Mat left either
+    await page.evaluate(async o => {
+        const { createScene, greyToRgba } = await import('/src/synth.js');
+        const { createPipeline } = await import('/src/pipeline.js');
+        const s = createScene(o);
+        const pipe = createPipeline(cv, { ...window.__ph.params, mode: 'everyFrame', long: true });
+        for (let k = 0; k < 120; k++) {
+            if (k === 40) pipe.setParams({ long: false });
+            if (k === 70) pipe.setParams({ long: true });
+            const f = s.frame(k);
+            pipe.push({ imageData: new ImageData(greyToRgba(f.grey), s.width, s.height), width: s.width, height: s.height, time: k / s.fps, frame: k, seq: k, gap: 0, jump: k === 0, truth: f.truth });
+        }
+        pipe.dispose();
+    }, tripod);
+    ok('long switched off and on in a run: no Mats left', (await page.evaluate(() => window.__liveMats())) === 0, await page.evaluate(() => window.__liveMats()));
 
     // a confirmed box drawn around a 2 px object leaves the object itself uncovered, however far zoomed
     const covered = await page.evaluate(async () => {

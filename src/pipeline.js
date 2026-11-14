@@ -354,6 +354,7 @@ export function createPipeline(cv, params) {
         if (p.long) {
             const t5 = performance.now();
             let d = null;
+            long.observe({ s, fast: tracks || [], slow, slowPass: p.slow ? lane.passCount : null });
             const pl = long.plan({ geom, wantTracked: true, nearMargin: p.nearMargin, nearOf: nearList });
             if (pl.pass) {
                 const P = pl.pass, B = blocks.at;

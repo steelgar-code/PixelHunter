@@ -29,7 +29,7 @@
 // anchor).
 
 import { createTracker } from './tracker.js';
-import { project, mul, normalize, IDENTITY } from './homography.js';
+import { project, mul, inv, normalize, IDENTITY } from './homography.js';
 import { chooseN, laneChain, cadenceOf, ragged, SLOW_SPARSE, SLOW_TOL_BASE, SLOW_SHIFT, carryTrack, sameObject, laneCrops, LANE_TRAIL } from './slowLane.js';
 
 export const LONG_ID_BASE = 2000000;   // the lane's track ids start here
@@ -42,6 +42,12 @@ export const LONG_MIN = 3;             // blocks: the shortest comparison (short
 // carried ~60 frames on, off the object, 6.8 false tracks a minute (Mid, two seeds); at 0.35 none, and
 // every far scenario's numbers otherwise identical
 export const LONG_TOP = 0.35;
+// px: candidates of block u this close to a place where a confirmed fast or slow track (faster than the lane follows) had an actual
+// sighting (not a coasted position) within the comparison's span before u until now are dropped before
+// the lane's tracker: an object that stood still (g-stopgo: 2 s) is present in the blocks inside the stop
+// and absent ±48 frames away, so the comparison saw it at the stop's place and the track stayed there
+// after it left (Mid 3.3, Highest 4.2 false tracks a minute, six seeds; 0 with this)
+export const LONG_GHOST = 6;
 export const LONG_SECS = 2;            // default length either side, s
 // the user's min travel × this (along the path fitted to the sightings): a 0.05 px-a-frame object
 // needs 60 frames for 3 px. Measured, far-0.05, Mid, two seeds: 1 → median latency 167 frames
@@ -87,11 +93,13 @@ export function createLongLane(params = {}) {
     let blocks;         // kept blocks, oldest first: { seq, anchor, meta, offset, n, egoIn: link from the block before }
     let seq;            // blocks closed since the reset
     let lastU, lastPass, lastM, snap, fresh, stats, pending, crops;
+    let seen, epoch, slowPasses, ghosts = 0;   // sightings of confirmed fast / slow tracks: { gi, ep, x, y } in the coordinates of the epoch's first frame
 
     function reset() {
         tracker.reset();
         fits = []; g = -1; fps = null; plan = null; cur = null; link = null; blocks = []; seq = 0;
         lastU = lastPass = lastM = null; snap = []; fresh = false; pending = null; crops = new Map();
+        seen = []; epoch = 0; slowPasses = null; ghosts = 0;
         stats = { state: p.long ? 'waiting' : 'off', reason: 'waiting for frames' };
     }
     reset();
@@ -131,14 +139,31 @@ export function createLongLane(params = {}) {
     }
     const fresh0 = () => ({ ok: true, H: IDENTITY.slice(), Hs: IDENTITY.slice(), misfit: 0, nfits: 0, frames: 0 });
 
+        // blobs of block u without those at a place a confirmed fast or slow track was seen in the span
+    function ghostFree(pl, blobs) {
+            const u = blocks.find(b => b.seq === pl.seqs.cur);
+            const fu = u && fits[u.anchor - (g - fits.length + 1)];
+            const Cinv = fu && inv(fu.C);
+            if (!Cinv || !seen.length) return blobs;
+            const t0 = u.anchor + Math.round(u.offset) - pl.m * plan.B;
+            const near = [];
+            for (const q of seen) if (q.ep === fu.ep && q.gi >= t0) near.push(project(Cinv, q.x, q.y));
+            if (!near.length) return blobs;
+            const R = p.longGhost ?? LONG_GHOST;
+            const keep = blobs.filter(b => !near.some(([x, y]) => Math.hypot(b.cx - x, b.cy - y) <= R));
+            ghosts = blobs.length - keep.length;
+            return keep;
+    }
+
     return {
         get tracker() { return tracker; },
         get stats() { return stats; },
         get plan() { return plan; },
         setParams(next) {
-            const was = longSecsOf(p);
+            const was = longSecsOf(p), wasOn = !!p.long;
             p = { ...p, ...next };
-            if (plan && longSecsOf(p) !== was) reset();
+            // switched off and on again would continue the old history across the gap as if no frames were missing
+            if ((plan && longSecsOf(p) !== was) || !!p.long !== wasOn) reset();
         },
         setPinned(ids) { tracker.setPinned(ids); },
         reset,
@@ -154,8 +179,12 @@ export function createLongLane(params = {}) {
         addFrame({ e, meta, frames = 1, geom }) {
             if (!p.long) { stats = { state: 'off' }; return []; }
             g++;
-            fits.push({ egoIn: g === 0 ? null : e, meta, frames: g === 0 ? 1 : frames });
-            if (fits.length > keep()) fits.shift();
+            // C: this frame's coordinates → the epoch's first frame's (a missing fit starts a new epoch)
+            const prevC = g === 0 ? null : fits[fits.length - 1].C;
+            const okFit = g > 0 && e && e.ok && prevC && inv(e.Hfull);
+            if (!okFit) epoch++;
+            fits.push({ egoIn: g === 0 ? null : e, meta, frames: g === 0 ? 1 : frames, ep: epoch, C: okFit ? mul(prevC, inv(e.Hfull)) : IDENTITY.slice() });
+            if (fits.length > keep()) { fits.shift(); while (seen.length && seen[0].gi < g - fits.length + 1) seen.shift(); }
             if (!knowFps()) return [];
             const ops = [];
             const pts = PTS(geom.w)(geom.h);
@@ -195,6 +224,24 @@ export function createLongLane(params = {}) {
                 pending = null;
             }
             return ops;
+        },
+
+        // The displayed frame's (s frames before the newest) confirmed tracks of the fast lane and the
+        // slow lane: remember where they were actually seen (the fast lane's matched ones; the slow
+        // lane's on the frame its pass is shown first, at their last sighting), for step's ghost filter.
+        // slowPass: the slow lane's count of passes (changes when it has a new pass).
+        observe({ s, fast = [], slow = [], slowPass = null }) {
+            if (!p.long || g < s) return;
+            const f = fits[fits.length - 1 - s];
+            if (!f) return;
+            const gi = g - s;
+            const add = (x, y) => seen.push({ gi, ep: f.ep, ...(([a, b]) => ({ x: a, y: b }))(project(f.C, x, y)) });
+            // only tracks faster than the lane follows: a slow object a slow track follows is the lane's to find
+            // too (first try, any speed: far-0.2's 3 px contrast 12 object 70 → 53 % recall, once found 85 → 64)
+            const top = p.longTop ?? LONG_TOP;
+            const fastEnough = t => Math.hypot(t.vx, t.vy) > top;
+            for (const t of fast) if (t.state === 'confirmed' && t.matched && fastEnough(t)) add(t.x, t.y);
+            if (slowPass !== slowPasses) { slowPasses = slowPass; for (const t of slow) if (t.state === 'confirmed' && t.matched && fastEnough(t)) add(t.lastSeen[0], t.lastSeen[1]); }
         },
 
         // After addFrame: whether to make a pass now, and with what (as slowLane's plan, in blocks):
@@ -243,13 +290,15 @@ export function createLongLane(params = {}) {
             tracker.setParams(trackerParams(cb * plan.B));
             const sparse = p.slowSparse ?? SLOW_SPARSE;
             if (blobs && sparse > 0) blobs = blobs.filter(b => !ragged(b, sparse));
+            ghosts = 0;
+            if (blobs && blobs.length) blobs = ghostFree(pl, blobs);
             snap = detect.ok ? tracker.step(blobs, pl.H, pl.dt, pl.meta) : tracker.step([], null, pl.dt, pl.meta);
             fresh = true;
             lastU = pl.seqs.cur;
             lastPass = pl.seqs.next;
             lastM = pl.m;
             stats = { state: 'pass', m: pl.m, B: plan.B, frames: pl.m * plan.B, secs: pl.m * plan.B / fps, cadence: cb, cadenceFrames: cb * plan.B,
-                frame: pl.meta.frame, tolerance: detect.tolerance ?? null, candidates: detect.ok ? detect.candidates.length : null, reason: detect.ok ? null : detect.reason };
+                frame: pl.meta.frame, tolerance: detect.tolerance ?? null, candidates: detect.ok ? detect.candidates.length : null, ghosts, reason: detect.ok ? null : detect.reason };
         },
 
         // The lane's tracks on the displayed frame (s frames before the newest), carried there, without
